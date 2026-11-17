@@ -52,27 +52,26 @@ Details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 - A Kubernetes cluster ≥ 1.27 (tested on single-node k3s) and `kubectl`.
 - Helm (the chart is apiVersion v2; verified with Helm 4.3).
-- Docker (or another OCI builder) and a clone of this repository: **no
-  container image or chart repository is published yet**, so you build the
-  image yourself.
+- A clone of this repository: the Helm chart is installed from the clone (no
+  chart repository is published yet).
 
-### 1. Build the image
+### 1. Get the chart
 
 ```sh
-docker build -t kamerton:dev .
-# make it visible to the cluster, for example:
-kind load docker-image kamerton:dev                        # kind
-docker save kamerton:dev | sudo k3s ctr images import -    # k3s
+git clone https://github.com/kamerton-labs/kamerton.git
+cd kamerton
 ```
 
-Or push it to your registry and use that name below.
+The container image is published for linux/amd64 and linux/arm64 as
+`ghcr.io/kamerton-labs/kamerton`; the chart uses the tag that matches its
+version. To run your own build instead, see
+[Building the image](#building-the-image).
 
 ### 2. Install with Helm
 
 ```sh
 helm install kamerton ./deploy/helm/kamerton \
   --namespace kamerton --create-namespace --dependency-update \
-  --set image.repository=kamerton --set image.tag=dev \
   --set externalURL=http://localhost:8080
 ```
 
@@ -137,7 +136,6 @@ To skip the bundled Prometheus and use your own from the start:
 
 ```sh
 helm install kamerton ./deploy/helm/kamerton -n kamerton --create-namespace --dependency-update \
-  --set image.repository=kamerton --set image.tag=dev \
   --set kube-prometheus-stack.enabled=false \
   --set bringYourOwn.prometheus.enabled=true \
   --set bringYourOwn.prometheus.url=http://prometheus-operated.monitoring:9090 \
@@ -373,6 +371,18 @@ bin/kamerton generate -f testdata/otel-demo/system.yaml            # rule file t
 bin/kamerton generate -f testdata/otel-demo/system.yaml -o out/    # rules, dashboards, runbooks
 ```
 
+### Building the image
+
+```sh
+docker build -t kamerton:dev .
+# make it visible to the cluster, for example:
+kind load docker-image kamerton:dev                        # kind
+docker save kamerton:dev | sudo k3s ctr images import -    # k3s
+```
+
+Then install with `--set image.repository=kamerton --set image.tag=dev`, or
+push the image to your registry and use that name.
+
 Development, tests and the checks to run before a pull request:
 [CONTRIBUTING.md](CONTRIBUTING.md).
 
@@ -408,7 +418,7 @@ Not done yet, or known limits:
 - One cluster per installation; several clusters are not supported.
 - The UI and notifications come in English and Russian only.
 - Dashboards are basic; notifications are not yet enriched with traces or logs.
-- No published container image or chart repository yet.
+- No chart repository yet: the chart is installed from a clone.
 
 ## Contributing and security
 
