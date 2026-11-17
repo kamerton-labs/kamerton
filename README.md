@@ -37,7 +37,10 @@ rate, requests stopped, slower or CPU far above normal, memory or CPU near the
 limit, OOMKilled, and a queue that nobody reads.
 
 - **Triage**: when an alert fires, Kamerton walks the `dependsOn` graph to find
-  the probable source and shows the chain of affected services.
+  the probable source and shows the chain of affected services. Alerts of
+  services that call a failing dependency are muted, so one message arrives
+  per incident, followed by a short message with what changed and where it
+  fails (see [Incidents](#incidents)).
 - **Discovery**: lists services that already send telemetry (from span metrics
   in Prometheus) so you can add them to the description.
 - **Backtest**: shows how many times a proposed rule would have fired over the
@@ -316,6 +319,52 @@ names an IANA zone (for example `Asia/Almaty`), shown with the offset:
 "09:18 16.11 UTC+5"; it is also set on the canvas under "Where to send
 alerts".
 
+### Incidents
+
+When `payment` goes down, `checkout`, `frontend` and everything above it
+start failing too. Kamerton knows the `dependsOn` graph, so:
+
+- **One message per incident.** The generated AlertmanagerConfig has inhibit
+  rules: while a service has an error, latency or "requests stopped" alert,
+  the same kinds of alerts of the services that call it directly are muted
+  (a muted alert still mutes its own callers, so whole chains collapse to the
+  cause). Memory, CPU, restart, out-of-memory, queue, SLO and custom alerts
+  are never muted. A warning mutes only warnings; services in a dependency
+  cycle do not mute each other. Turn it off with
+  `spec.notifications.groupByCause: false`. The alerts API lists muted alerts
+  and incidents (cause and "also affected").
+- **A follow-up with evidence.** Alertmanager still sends the alert straight
+  to Telegram and email, so it arrives while Kamerton is down. It also calls
+  Kamerton's webhook, and about ten seconds later Kamerton sends one short
+  message to the same chats and addresses, for example:
+
+  ```text
+  🔎 Probable cause · shop (prod)
+  checkout: probable cause is payment (payment: Requests stopped arriving since 09:18 UTC+5).
+  Also affected: frontend, frontend-proxy.
+  What changed in payment in the last 30 min: new version at 09:14 UTC+5 (v1.4.2 -> v1.4.3); container payment restarted 3 times (OOMKilled, exit code 137).
+  Most errors: operation oteldemo.PaymentService/Charge (42 failed calls in 30 min).
+  Log: "card declined: upstream timeout"
+  ```
+
+  Each part appears only when found: the workload changes come from the
+  Kubernetes API (pods, ReplicaSets, StatefulSets, Warning events of the
+  service's `workload`), the operation from the span metrics in the
+  system's Prometheus, the log line from its Loki, and a link to failing
+  traces needs `incidents.grafanaExternalURL`. Nothing is sent when nothing
+  useful is found, and one incident gets one follow-up (Alertmanager's
+  repeats send nothing new). The follow-up goes only through Kamerton's own
+  bot and mail server, only for descriptions in Kamerton's namespace, and
+  only in a cluster. Turn it off per system with
+  `spec.notifications.evidenceFollowUp: false`, or for the installation with
+  `--set incidents.followUp.enabled=false` (no webhook in the routing at
+  all; `incidents.followUp.workloadRead=false` keeps the follow-up but
+  drops the cluster-wide read access).
+
+Grouping needs the Prometheus Operator to leave Kamerton's matchers alone
+(`alertmanagerConfigMatcherStrategy: None`, set by the bundled chart):
+span-metric alerts carry no `namespace` label.
+
 ### Login
 
 When login is on, the core has one shared user name and password, taken from
@@ -417,7 +466,9 @@ Not done yet, or known limits:
   pushing to Prometheus or Grafana HTTP APIs is not implemented.
 - One cluster per installation; several clusters are not supported.
 - The UI and notifications come in English and Russian only.
-- Dashboards are basic; notifications are not yet enriched with traces or logs.
+- Dashboards are basic.
+- The follow-up remembers sent incidents in memory per replica: after a
+  restart, or with several replicas, an incident may get a second follow-up.
 - No chart repository yet: the chart is installed from a clone.
 
 ## Contributing and security

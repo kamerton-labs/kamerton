@@ -31,5 +31,18 @@ Kamerton is at 0.1.x. Fixes go into the latest release only.
   `create`, which Kubernetes cannot restrict by name).
 - Finding installed programs lists Services in all namespaces (read-only);
   turn it off with `stacks.discovery.enabled=false`.
+- `POST /api/v1/hooks/alertmanager` is called by Alertmanager, not by a
+  browser, so it needs no login session and no `X-Requested-With` header.
+  It requires `Authorization: Bearer <token>`; the token is 256 random bits
+  that the core generates into the Secret `kamerton-webhook` (key `token`)
+  in its own namespace, compared in constant time. The generated
+  AlertmanagerConfig references that Secret. The endpoint only starts the
+  follow-up message (it never changes settings); a valid token lets a
+  caller trigger messages to the system's own chats and addresses, at most
+  one per incident. Turn it off with `incidents.followUp.enabled=false`.
+- Follow-up messages read pods, events, ReplicaSets and StatefulSets in all
+  namespaces (get/list, read-only, no Secrets); turn this off with
+  `incidents.followUp.workloadRead=false`. A quoted log line is shortened
+  but not scrubbed: whatever the service logs may appear in the chat.
 
 Known limitations are listed in the README under "Status and limitations".

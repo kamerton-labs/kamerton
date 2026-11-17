@@ -62,12 +62,15 @@ type SystemDescriptionReconciler struct {
 // +kubebuilder:rbac:groups=kamerton.dev,resources=systemdescriptions/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=monitoring.coreos.com,resources=prometheusrules;alertmanagerconfigs,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch;create;update;patch;delete
-// Telegram and email setup (namespaced Role in the chart, Secret restricted by name):
-// +kubebuilder:rbac:groups="",namespace=kamerton,resources=secrets,resourceNames=kamerton-telegram;kamerton-smtp,verbs=get;update;patch;delete
+// Telegram and email setup and the follow-up webhook token (namespaced Role in the chart, Secret restricted by name):
+// +kubebuilder:rbac:groups="",namespace=kamerton,resources=secrets,resourceNames=kamerton-telegram;kamerton-smtp;kamerton-webhook,verbs=get;update;patch;delete
 // +kubebuilder:rbac:groups="",namespace=kamerton,resources=secrets,verbs=create
 // Discovery of programs already running in the cluster (read-only, chart value stacks.discovery.enabled):
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list
 // +kubebuilder:rbac:groups=monitoring.coreos.com,resources=prometheuses;alertmanagers,verbs=get;list
+// Evidence for follow-up messages (read-only, chart value incidents.followUp.workloadRead):
+// +kubebuilder:rbac:groups="",resources=pods;events,verbs=get;list
+// +kubebuilder:rbac:groups=apps,resources=replicasets;statefulsets,verbs=get;list
 
 // Reconcile implements reconcile.Reconciler.
 func (r *SystemDescriptionReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {

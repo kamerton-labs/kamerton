@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"net/http"
 	"path"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -25,6 +26,7 @@ import (
 	"github.com/kamerton-labs/kamerton/internal/descstore"
 	"github.com/kamerton-labs/kamerton/internal/discovery"
 	"github.com/kamerton-labs/kamerton/internal/email"
+	"github.com/kamerton-labs/kamerton/internal/followup"
 	"github.com/kamerton-labs/kamerton/internal/generator"
 	"github.com/kamerton-labs/kamerton/internal/rules"
 	"github.com/kamerton-labs/kamerton/internal/schema"
@@ -78,6 +80,12 @@ type Options struct {
 	Namespace string
 	// Auth enables login; nil leaves the UI and API open (see NewAuth).
 	Auth *Auth
+	// FollowUp handles Alertmanager webhook notifications and sends the
+	// follow-up messages; nil when unavailable (FollowUpUnavailable says
+	// why). WebhookToken is the bearer token Alertmanager must send.
+	FollowUp            *followup.Service
+	WebhookToken        TokenSource
+	FollowUpUnavailable string
 }
 
 // Server holds API state.
@@ -101,6 +109,10 @@ type Server struct {
 	setsMu    sync.Mutex
 	setsCache []stack.Resolved
 	setsAt    time.Time
+
+	hookMu  sync.Mutex
+	hookTok string
+	hookAt  time.Time
 }
 
 // New creates a server.
@@ -121,6 +133,18 @@ func New(opts Options) *Server {
 		s.sets.Store = &stack.MemoryStateStore{}
 	}
 	s.checker = &stack.Checker{HTTP: opts.CheckHTTP}
+	if f := s.opts.FollowUp; f != nil {
+		// Alerts and evidence of a system come from its set of programs.
+		if f.Descriptions == nil {
+			f.Descriptions = s.opts.Descriptions
+		}
+		if f.Alerts == nil {
+			f.Alerts = s.systemAlertsWithMuted
+		}
+		if f.Sources == nil {
+			f.Sources = s.evidenceSources
+		}
+	}
 	return s
 }
 
@@ -186,6 +210,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/v1/backtest", s.backtest)
 	mux.HandleFunc("GET /api/v1/alerts", s.alerts)
 	mux.HandleFunc("GET /api/v1/runbooks/{service}", s.runbook)
+
+	// Alertmanager webhook: bearer token instead of a session (hooks.go).
+	mux.HandleFunc("POST "+AlertmanagerHookPath, s.alertmanagerHook)
 
 	// Telegram: the bot and chats are shared by all systems.
 	mux.HandleFunc("GET /api/v1/telegram", s.telegramStatus)
@@ -449,15 +476,21 @@ type alertView struct {
 	Action string            `json:"action,omitempty"`
 	Labels map[string]string `json:"labels"`
 	Triage *triage.Finding   `json:"triage,omitempty"`
+	// Fingerprint identifies the alert in Alertmanager.
+	Fingerprint string `json:"fingerprint,omitempty"`
+	// Muted is true for alerts an inhibit rule mutes (listed under "muted").
+	Muted bool `json:"muted,omitempty"`
+	// Incident is the ID of the incident the alert belongs to.
+	Incident string `json:"incident,omitempty"`
 }
 
 func (s *Server) alerts(w http.ResponseWriter, r *http.Request) { s.alertsFor(w, r, nil) }
 
-// activeAlerts returns Kamerton's active alerts: of one system from the
-// Alertmanager of its set, or (snap nil) of all systems from every
-// Alertmanager in use, merged without duplicates. configured is false when
-// no Alertmanager is connected; partial lists Alertmanagers that failed
-// while others answered.
+// activeAlerts returns Kamerton's active alerts, including those muted by
+// inhibit rules (Status.InhibitedBy): of one system from the Alertmanager of
+// its set, or (snap nil) of all systems from every Alertmanager in use,
+// merged without duplicates. configured is false when no Alertmanager is
+// connected; partial lists Alertmanagers that failed while others answered.
 func (s *Server) activeAlerts(ctx context.Context, snap *descstore.Snapshot, list []*descstore.Snapshot) (raw []alertmanager.Alert, configured bool, partial []string, err error) {
 	filter := map[string]string{rules.LabelManaged: "true"}
 	var sources []amSource
@@ -490,13 +523,17 @@ func (s *Server) activeAlerts(ctx context.Context, snap *descstore.Snapshot, lis
 	return mergeAlerts(ok...), true, partial, nil
 }
 
+// alertsFor lists active alerts. The response keeps the shape of earlier
+// versions ("alerts": alerts that are delivered) and adds "muted" (alerts
+// muted by the inhibit rules of grouping by cause) and "incidents" (alerts
+// grouped by cause on the dependency graph, see triage.Incidents).
 func (s *Server) alertsFor(w http.ResponseWriter, r *http.Request, snap *descstore.Snapshot) {
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
 	list, _ := s.opts.Descriptions.List(ctx)
 	raw, configured, partial, err := s.activeAlerts(ctx, snap, list)
 	if !configured {
-		writeJSON(w, http.StatusOK, map[string]any{"configured": false, "alerts": []any{}, "message": "Alertmanager URL is not configured"})
+		writeJSON(w, http.StatusOK, map[string]any{"configured": false, "alerts": []any{}, "muted": []any{}, "incidents": []any{}, "message": "Alertmanager URL is not configured"})
 		return
 	}
 	if err != nil {
@@ -510,19 +547,40 @@ func (s *Server) alertsFor(w http.ResponseWriter, r *http.Request, snap *descsto
 		}
 	}
 	unhealthy := map[string]map[string]bool{}
+	bySystem := map[string][]triage.Alert{}
+	var systems []string
 	for _, a := range raw {
 		sys := a.Labels[generator.LabelSystem]
 		if unhealthy[sys] == nil {
 			unhealthy[sys] = map[string]bool{}
+			systems = append(systems, sys)
 		}
 		unhealthy[sys][a.Labels[rules.LabelService]] = true
+		bySystem[sys] = append(bySystem[sys], triageAlert(a))
+	}
+	sort.Strings(systems)
+	incidents := []triage.Incident{}
+	incidentOf := map[string]string{} // system + service -> incident ID
+	for _, sys := range systems {
+		g := graphs[sys]
+		if g == nil {
+			g = triage.NewGraph(&v1alpha1.SystemDescriptionSpec{})
+		}
+		for _, inc := range g.Incidents(sys, bySystem[sys]) {
+			for _, svc := range append(append([]string{}, inc.Roots...), inc.Affected...) {
+				incidentOf[sys+"\x00"+svc] = inc.ID
+			}
+			incidents = append(incidents, inc)
+		}
 	}
 	out := make([]alertView, 0, len(raw))
+	muted := []alertView{}
 	for _, a := range raw {
 		v := alertView{
 			Name: a.Labels["alertname"], System: a.Labels[generator.LabelSystem], Service: a.Labels[rules.LabelService], Severity: a.Labels[rules.LabelSeverity],
 			StartsAt: a.StartsAt, Summary: a.Annotations["summary"], Labels: a.Labels,
 			Title: a.Annotations[rules.AnnotationTitle], Value: a.Annotations[rules.AnnotationValue], Threshold: a.Annotations[rules.AnnotationThreshold],
+			Fingerprint: a.Fingerprint, Muted: a.Inhibited(),
 		}
 		since := a.StartsAt.UTC().Format("15:04 02.01 UTC")
 		fill := func(s string) string { return strings.ReplaceAll(s, "{since}", since) }
@@ -534,13 +592,34 @@ func (s *Server) alertsFor(w http.ResponseWriter, r *http.Request, snap *descsto
 			f := g.ProbableSource(v.Service, unhealthy[v.System])
 			v.Triage = &f
 		}
+		v.Incident = incidentOf[v.System+"\x00"+v.Service]
+		if v.Muted {
+			muted = append(muted, v)
+			continue
+		}
 		out = append(out, v)
 	}
-	resp := map[string]any{"configured": true, "alerts": out}
+	resp := map[string]any{"configured": true, "alerts": out, "muted": muted, "incidents": incidents}
 	if len(partial) > 0 {
 		resp["unreachable"] = partial
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// triageAlert is the part of an Alertmanager alert the incident grouping uses.
+func triageAlert(a alertmanager.Alert) triage.Alert {
+	title := a.Annotations[rules.AnnotationTitle]
+	if t := a.Annotations[generator.AnnotationMessageTitle]; t != "" {
+		title = strings.ReplaceAll(t, "{since}", a.StartsAt.UTC().Format("15:04 02.01 UTC"))
+	}
+	if title == "" {
+		title = a.Annotations["summary"]
+	}
+	return triage.Alert{
+		Fingerprint: a.Fingerprint, Name: a.Labels["alertname"], Service: a.Labels[rules.LabelService],
+		Severity: a.Labels[rules.LabelSeverity], StartsAt: a.StartsAt,
+		Title: title, Value: a.Annotations[rules.AnnotationValue], Muted: a.Inhibited(),
+	}
 }
 
 const uiNotBuilt = `<!doctype html><html lang="en"><meta charset="utf-8"><title>Kamerton</title>

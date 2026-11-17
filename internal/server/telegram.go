@@ -39,6 +39,9 @@ func (s *Server) settings(w http.ResponseWriter, _ *http.Request) {
 		"telegram":     map[string]any{"available": s.opts.Telegram != nil, "reason": reason},
 		"email":        map[string]any{"available": s.opts.Email != nil, "reason": emailReason},
 		"auth":         map[string]any{"enabled": s.opts.Auth != nil},
+		// Grouping by cause works wherever Alertmanager runs the generated
+		// inhibit rules; follow-up messages need the cluster (see hooks.go).
+		"followUp": map[string]any{"available": s.followUpUnavailable() == "", "reason": s.followUpUnavailable()},
 	})
 }
 

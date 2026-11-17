@@ -19,9 +19,10 @@ const nullReceiver = "kamerton-null"
 // referenced by Secret key selectors and never copied into the config.
 //
 // Telegram and email receivers use Kamerton's message templates (message.go).
-//
-// TODO(triage): route notifications through the Kamerton webhook so they can
-// be enriched with the probable source, trace and log links before delivery.
+// They keep receiving notifications straight from Alertmanager, so alerts
+// arrive while Kamerton itself is down. With Options.Webhook set, a child
+// route also sends every group to Kamerton (webhook.go), which follows up
+// with evidence; inhibit rules (inhibit.go) group alerts by cause.
 func (g *gen) alertmanagerConfig() map[string]any {
 	n := g.spec.Notifications
 	if n == nil || len(n.Receivers) == 0 {
@@ -65,6 +66,11 @@ func (g *gen) alertmanagerConfig() map[string]any {
 			routes = append(routes, map[string]any{"receiver": rt.Receiver, "matchers": matchers, "continue": true})
 		}
 	}
+	webhook := g.webhookReceiver()
+	if webhook != nil {
+		// Last and with continue: the routes above deliver exactly as before.
+		routes = append(routes, map[string]any{"receiver": webhookReceiver, "continue": true})
+	}
 	msg := buildMessages(g.language(), g.opts.RunbookBaseURL, newZoneClock(n.TimeZone, g.now()))
 
 	receivers := []any{map[string]any{"name": nullReceiver}}
@@ -99,8 +105,11 @@ func (g *gen) alertmanagerConfig() map[string]any {
 		}
 		receivers = append(receivers, recv)
 	}
+	if webhook != nil {
+		receivers = append(receivers, webhook)
+	}
 
-	return map[string]any{
+	out := map[string]any{
 		"route": map[string]any{
 			"receiver":       nullReceiver,
 			"groupBy":        groupBy,
@@ -115,6 +124,10 @@ func (g *gen) alertmanagerConfig() map[string]any {
 		},
 		"receivers": receivers,
 	}
+	if inhibit := g.inhibitRules(); len(inhibit) > 0 {
+		out["inhibitRules"] = inhibit
+	}
+	return out
 }
 
 func matcher(name, value string) map[string]any {

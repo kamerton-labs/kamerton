@@ -47,6 +47,8 @@ import (
 	"github.com/kamerton-labs/kamerton/internal/description"
 	"github.com/kamerton-labs/kamerton/internal/descstore"
 	"github.com/kamerton-labs/kamerton/internal/email"
+	"github.com/kamerton-labs/kamerton/internal/evidence"
+	"github.com/kamerton-labs/kamerton/internal/followup"
 	"github.com/kamerton-labs/kamerton/internal/generator"
 	"github.com/kamerton-labs/kamerton/internal/schema"
 	"github.com/kamerton-labs/kamerton/internal/server"
@@ -114,6 +116,12 @@ func serve(args []string) error {
 			return fmt.Errorf("--external-url: %s", problem)
 		}
 	}
+	if cfg.GrafanaExternalURL != "" {
+		// The Grafana address goes into links of follow-up messages.
+		if problem := description.CheckLinkURL(cfg.GrafanaExternalURL); problem != "" {
+			return fmt.Errorf("--grafana-external-url: %s", problem)
+		}
+	}
 	log := newLogger(cfg.LogLevel)
 	slog.SetDefault(log)
 	if len(envSet) > 0 {
@@ -150,7 +158,7 @@ func serve(args []string) error {
 	var mgr ctrl.Manager
 	if cfg.EnableController {
 		ns := kamertonNamespace(cfg)
-		m, uncached, err := newManager(cfg, log, sets, ns)
+		m, uncached, reconciler, err := newManager(cfg, log, sets, ns)
 		if err != nil {
 			return err
 		}
@@ -191,6 +199,26 @@ func serve(args []string) error {
 			Namespace:    ns,
 			Logger:       log.With("component", "email"),
 		}
+		if webhook, store, reason := setupWebhook(cfg, log, uncached, ns); webhook != nil {
+			// Set before the manager starts: the controller writes the
+			// webhook into every AlertmanagerConfig of this namespace.
+			opts.Generator.Webhook = webhook
+			reconciler.Options.Webhook = webhook
+			collector := &evidence.Collector{GrafanaURL: cfg.GrafanaExternalURL, Logger: log.With("component", "evidence")}
+			if cfg.WorkloadEvidence {
+				collector.Kube = uncached
+			}
+			opts.FollowUp = &followup.Service{
+				Descriptions: opts.Descriptions,
+				Collector:    collector,
+				Telegram:     tg,
+				Email:        opts.Email,
+				Logger:       log.With("component", "followup"),
+			}
+			opts.WebhookToken = store
+		} else {
+			opts.FollowUpUnavailable = reason
+		}
 	} else {
 		opts.TelegramUnavailable = "Telegram setup from the UI is available only in a cluster: the core runs without the Kubernetes controller, so there is no safe place to keep the bot token."
 		opts.EmailUnavailable = "Email setup from the UI is available only in a cluster: the core runs without the Kubernetes controller, so there is no safe place to keep the SMTP password."
@@ -224,6 +252,7 @@ func serve(args []string) error {
 		} else if cfg.StacksFile != "" {
 			sets.Store = &stack.FileStateStore{Path: cfg.StacksFile}
 		}
+		opts.FollowUpUnavailable = "Follow-up messages work only in a cluster: Kamerton runs without the Kubernetes controller, so Alertmanager has no webhook to call and there is no Secret for its token. Grouping alerts by cause still works wherever the generated AlertmanagerConfig is applied."
 		opts.DiscoveryUnavailable = "Discovery of installed programs works only in a cluster: Kamerton runs without the Kubernetes controller and cannot ask the cluster for its services. Enter the addresses by hand."
 	}
 	server.LogAuthMode(log, opts.Auth)
@@ -293,18 +322,53 @@ func kamertonNamespace(cfg config.Config) string {
 // uncached client is used for the API (descriptions) and for the one Secret
 // and ConfigMap of the Telegram setup: a cached client would start
 // cluster-wide informers for Secrets, which RBAC deliberately does not allow.
-func newManager(cfg config.Config, log *slog.Logger, sets *stack.Sets, ns string) (ctrl.Manager, client.Client, error) {
+// setupWebhook prepares follow-up messages in cluster mode: it makes sure the
+// webhook token Secret exists (creating it with a random token) and returns
+// the generator options of the webhook and the token store. It returns nil
+// and the reason when the webhook is turned off or the Secret cannot be
+// prepared; generated routing then has no webhook, so Alertmanager never
+// calls an endpoint that would reject it.
+func setupWebhook(cfg config.Config, log *slog.Logger, c client.Client, ns string) (*generator.WebhookOptions, *telegram.SecretTokenStore, string) {
+	if cfg.AlertmanagerWebhookURL == "" {
+		return nil, nil, "Follow-up messages are turned off in this installation (Helm: incidents.followUp.enabled=false, flag --alertmanager-webhook-url is empty)."
+	}
+	if problem := description.CheckLinkURL(cfg.AlertmanagerWebhookURL); problem != "" {
+		log.Warn("follow-up messages are off: bad --alertmanager-webhook-url", "problem", problem)
+		return nil, nil, "Follow-up messages are off: the webhook URL of this installation is not valid (" + problem + ")."
+	}
+	store := &telegram.SecretTokenStore{Client: c, Namespace: ns, Name: cfg.WebhookSecretName, Key: followup.TokenKey, Component: "webhook"}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	tok, err := store.Get(ctx)
+	if err == nil && tok == "" {
+		if tok, err = followup.NewToken(); err == nil {
+			err = store.Set(ctx, tok)
+		}
+	}
+	if err != nil {
+		log.Warn("follow-up messages are off: cannot prepare the webhook token Secret", "secret", cfg.WebhookSecretName, "error", err)
+		return nil, nil, "Follow-up messages are off: Kamerton cannot read or create its webhook token Secret " + ns + "/" + cfg.WebhookSecretName + " (" + err.Error() + ")."
+	}
+	log.Info("follow-up messages are on", "webhook", cfg.AlertmanagerWebhookURL, "secret", cfg.WebhookSecretName, "workloadEvidence", cfg.WorkloadEvidence)
+	return &generator.WebhookOptions{
+		URL:       cfg.AlertmanagerWebhookURL,
+		Secret:    v1alpha1.SecretKeyRef{Name: cfg.WebhookSecretName, Key: followup.TokenKey},
+		Namespace: ns,
+	}, store, ""
+}
+
+func newManager(cfg config.Config, log *slog.Logger, sets *stack.Sets, ns string) (ctrl.Manager, client.Client, *controller.SystemDescriptionReconciler, error) {
 	ctrl.SetLogger(logr.FromSlogHandler(log.Handler()))
 	scheme := runtime.NewScheme()
 	if err := clientgoscheme.AddToScheme(scheme); err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	if err := v1alpha1.AddToScheme(scheme); err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	restCfg, err := ctrl.GetConfig()
 	if err != nil {
-		return nil, nil, fmt.Errorf("kubernetes config: %w", err)
+		return nil, nil, nil, fmt.Errorf("kubernetes config: %w", err)
 	}
 	mgrOpts := ctrl.Options{
 		Scheme:                 scheme,
@@ -326,11 +390,11 @@ func newManager(cfg config.Config, log *slog.Logger, sets *stack.Sets, ns string
 	}
 	mgr, err := ctrl.NewManager(restCfg, mgrOpts)
 	if err != nil {
-		return nil, nil, fmt.Errorf("controller manager: %w", err)
+		return nil, nil, nil, fmt.Errorf("controller manager: %w", err)
 	}
 	uncached, err := client.New(restCfg, client.Options{Scheme: scheme})
 	if err != nil {
-		return nil, nil, fmt.Errorf("kubernetes client: %w", err)
+		return nil, nil, nil, fmt.Errorf("kubernetes client: %w", err)
 	}
 	r := &controller.SystemDescriptionReconciler{
 		Client:  mgr.GetClient(),
@@ -339,15 +403,15 @@ func newManager(cfg config.Config, log *slog.Logger, sets *stack.Sets, ns string
 		Sets:    sets, SetsNamespace: ns, SetsConfigMap: cfg.StacksConfigMap,
 	}
 	if err := r.SetupWithManager(mgr); err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	if err := mgr.AddReadyzCheck("readyz", healthz.Ping); err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
-	return mgr, uncached, nil
+	return mgr, uncached, r, nil
 }
 
 func validate(args []string) error {

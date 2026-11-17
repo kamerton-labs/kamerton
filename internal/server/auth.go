@@ -179,6 +179,13 @@ var publicAPI = map[string]bool{
 	"/api/auth/logout":  true,
 }
 
+// machineAPI are API paths called by programs, not browsers: they check
+// their own credentials (the Alertmanager webhook checks a bearer token)
+// and are exempt from the session and the CSRF header.
+var machineAPI = map[string]bool{
+	AlertmanagerHookPath: true,
+}
+
 // csrfHeader must be present on state-changing API requests. Browsers do not
 // let another site send a custom header without a CORS preflight, which this
 // server never approves; the UI always sets it. It is required with login
@@ -202,7 +209,7 @@ func (s *Server) protect(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// The mux routes by the cleaned path, so the checks use it too.
 		p := path.Clean("/" + r.URL.Path)
-		if !strings.HasPrefix(p, "/api/") {
+		if !strings.HasPrefix(p, "/api/") || machineAPI[p] {
 			next.ServeHTTP(w, r)
 			return
 		}

@@ -68,6 +68,9 @@ type Options struct {
 	// Now is the time of generation, used for the daylight-saving changes
 	// of the notification time zone; zero means time.Now().
 	Now time.Time
+	// Webhook, when set, adds a route that also notifies Kamerton about
+	// every group (see WebhookOptions). Nil: no webhook.
+	Webhook *WebhookOptions
 }
 
 // Bundle is everything generated from one description.
@@ -171,6 +174,21 @@ func (g *gen) now() time.Time {
 }
 
 func (g *gen) service(groupName string) *v1alpha1.Service { return g.byName[groupName] }
+
+// SpanTarget returns the span-metric selection the request rules of a
+// service use (metric and label names, excluded operations, rate window),
+// so other code queries exactly what the rules alert on.
+func SpanTarget(sd *v1alpha1.SystemDescription, svc *v1alpha1.Service) rules.SpanTarget {
+	return newGen(sd, Options{}).spanTarget(svc)
+}
+
+// PodTarget returns the pod selection the saturation rules of a service use:
+// the namespace (workload.namespace, else defaults.namespace; empty: any)
+// and the pod name regex (workload.podRegex, else the service name followed
+// by a Deployment or StatefulSet pod suffix).
+func PodTarget(sd *v1alpha1.SystemDescription, svc *v1alpha1.Service) rules.PodTarget {
+	return newGen(sd, Options{}).podTarget(svc)
+}
 
 func (g *gen) defaults() *v1alpha1.Defaults {
 	if g.spec.Defaults == nil {

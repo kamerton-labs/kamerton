@@ -629,6 +629,38 @@ type Notifications struct {
 	// +kubebuilder:validation:MaxLength=64
 	// +optional
 	TimeZone string `json:"timeZone,omitempty"`
+	// One message per incident: while a service that others depend on
+	// (dependsOn) has an error, latency or "requests stopped" alert, the same
+	// kinds of alerts of the services that call it are muted in Alertmanager,
+	// so the cause arrives instead of a pile of follow-on alerts. Memory, CPU,
+	// restart, queue and SLO alerts are never muted. Services in a dependency
+	// cycle do not mute each other. Default: true; set to false to get every
+	// alert separately.
+	// +optional
+	GroupByCause *bool `json:"groupByCause,omitempty"`
+	// Send a second, short message right after a firing notification with
+	// what Kamerton found about the probable cause: the dependency chain,
+	// what changed in the workload in the last 30 minutes (new version,
+	// restarts, pods not ready, warning events), the operation with most
+	// errors, an error log line and a link to failing traces. It goes to the
+	// same Telegram chats and email recipients as the alert, only through the
+	// bot and mail server configured in Kamerton, and only in a cluster.
+	// Nothing is sent when nothing useful was found. Default: true.
+	// +optional
+	EvidenceFollowUp *bool `json:"evidenceFollowUp,omitempty"`
+}
+
+// GroupsByCause reports whether alerts of callers are muted while a
+// dependency has the same kind of problem (spec.notifications.groupByCause,
+// default true).
+func (n *Notifications) GroupsByCause() bool {
+	return n == nil || n.GroupByCause == nil || *n.GroupByCause
+}
+
+// SendsEvidence reports whether the follow-up message with evidence is on
+// (spec.notifications.evidenceFollowUp, default true).
+func (n *Notifications) SendsEvidence() bool {
+	return n == nil || n.EvidenceFollowUp == nil || *n.EvidenceFollowUp
 }
 
 // Receiver is one notification channel. Exactly one of telegram or email must be set.

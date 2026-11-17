@@ -6,6 +6,36 @@ All notable changes to Kamerton are listed here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- One message per incident: generated AlertmanagerConfigs carry inhibit
+  rules built from `dependsOn`. While a service has an error, latency or
+  "requests stopped" alert, the same kinds of alerts of the services that
+  call it are muted (memory, CPU, restart, queue, SLO and custom alerts never
+  are; services in a dependency cycle do not mute each other).
+  `spec.notifications.groupByCause: false` turns it off.
+- Incidents in the alerts API (`GET /api/v1/alerts`,
+  `GET /api/v1/systems/{id}/alerts`): new fields `incidents` (root services,
+  their alerts, affected services and their muted alerts), `muted` (alerts
+  muted by grouping) and, per alert, `fingerprint`, `muted` and `incident`.
+- Follow-up message with evidence: Alertmanager also notifies Kamerton
+  (webhook `POST /api/v1/hooks/alertmanager`, bearer token in the Secret
+  `kamerton-webhook`), and Kamerton sends one short message after the alert
+  to the same chats and addresses: the probable cause by the dependency
+  graph, what changed in the workload in the last 30 minutes (new version
+  with image tags, restarts with reason, pods not ready, Warning events),
+  the operation with most errors, an error log line from Loki and a link to
+  failing traces in Grafana. The alert itself still goes straight from
+  Alertmanager. `spec.notifications.evidenceFollowUp: false` turns it off
+  per system; Helm values `incidents.followUp.enabled`,
+  `incidents.followUp.workloadRead`, `incidents.grafanaExternalURL`.
+
+### Fixed
+
+- The bundled Prometheus accepts samples up to 30 minutes late
+  (`tsdb.outOfOrderTimeWindow`). Before, one late sample made it reject the
+  Collector's whole write request and span metrics stopped arriving.
+
 ## [0.1.0] - 2026-11-17
 
 First public version.

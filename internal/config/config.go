@@ -64,6 +64,17 @@ type Config struct {
 	// Email setup.
 	EmailSecretName string
 
+	// Follow-up messages. AlertmanagerWebhookURL is Kamerton's webhook as
+	// Alertmanager reaches it (empty: no webhook in generated routing);
+	// WebhookSecretName holds its bearer token. WorkloadEvidence lets the
+	// follow-up read pods, ReplicaSets, StatefulSets and events in all
+	// namespaces. GrafanaExternalURL is Grafana as people open it, for trace
+	// links (empty: no link).
+	AlertmanagerWebhookURL string
+	WebhookSecretName      string
+	WorkloadEvidence       bool
+	GrafanaExternalURL     string
+
 	LogLevel string
 }
 
@@ -99,6 +110,10 @@ func (c *Config) Register(fs *flag.FlagSet) {
 	str(&c.TelegramAPIURL, "telegram-api-url", "https://api.telegram.org", "Telegram Bot API base URL")
 	str(&c.TelegramSecretName, "telegram-secret-name", "kamerton-telegram", "Secret (in Kamerton's namespace) holding the bot token under key bot-token")
 	str(&c.EmailSecretName, "email-secret-name", "kamerton-smtp", "Secret (in Kamerton's namespace) holding the SMTP password under key password")
+	str(&c.AlertmanagerWebhookURL, "alertmanager-webhook-url", "", "URL of Kamerton's webhook as Alertmanager reaches it, for example http://kamerton.kamerton.svc:8080/api/v1/hooks/alertmanager; empty: no follow-up messages (cluster mode)")
+	str(&c.WebhookSecretName, "webhook-secret-name", "kamerton-webhook", "Secret (in Kamerton's namespace) holding the webhook bearer token under key token; created when missing")
+	boolean(&c.WorkloadEvidence, "workload-evidence", true, "let follow-up messages read pods, ReplicaSets, StatefulSets and events of the root service (cluster mode)")
+	str(&c.GrafanaExternalURL, "grafana-external-url", "", "Grafana as people open it, for links to failing traces in follow-up messages; empty: no link")
 	str(&c.LogLevel, "log-level", "info", "log level: debug, info, warn, error")
 }
 

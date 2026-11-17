@@ -2,10 +2,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 // Package triage finds the probable source of an incident by walking the
-// dependency graph from the alerting service.
-//
-// TODO: enrich a finding with links to an example failing trace (Tempo) and
-// to the logs of the probable source (Loki) around the alert start.
+// dependency graph from the alerting service (ProbableSource), and groups
+// the active alerts of a system into incidents by cause (incidents.go).
+// Evidence about a cause (workload changes, failing operations, logs,
+// traces) is collected by package evidence.
 package triage
 
 import (

@@ -64,6 +64,39 @@ email:
   secretName: kamerton-smtp
 logLevel: info
 
+# Incidents. Grouping alerts by cause needs nothing here: it is generated
+# into each system's AlertmanagerConfig (spec.notifications.groupByCause,
+# on by default). The settings below are for the follow-up message.
+incidents:
+  followUp:
+    # Alertmanager also sends every group of a system to Kamerton
+    # (webhook POST /api/v1/hooks/alertmanager on the kamerton Service, next
+    # to the Telegram and email receivers, which keep working without
+    # Kamerton). Kamerton then sends one short message with what it found
+    # about the probable cause to the same chats and addresses
+    # (spec.notifications.evidenceFollowUp turns it off per system).
+    # Set to false to leave the webhook out of generated routing entirely.
+    # Needs controller.enabled; only descriptions in the release namespace
+    # get the webhook (an AlertmanagerConfig can read Secrets only in its
+    # own namespace).
+    enabled: true
+    # Secret in the release namespace holding the bearer token Alertmanager
+    # sends, under key "token". Kamerton creates it with a random token when
+    # it is missing (namespaced Role, this name only); the generated
+    # AlertmanagerConfig references it.
+    secretName: kamerton-webhook
+    # Let the follow-up read what changed in the workload of the root
+    # service (new ReplicaSet, restarts, pods not ready, Warning events):
+    # read-only ClusterRole rules pods/events get/list and
+    # replicasets/statefulsets get/list in all namespaces, because systems
+    # run in many namespaces. Set to false to drop these permissions; the
+    # follow-up then has no "what changed" part.
+    workloadRead: true
+  # Grafana as people open it (ingress or port-forward address), for the
+  # "failing traces" link (Grafana Explore with the Tempo data source, UID
+  # "tempo" as in grafana.datasources below). Empty: no link.
+  grafanaExternalURL: ""
+
 # Sets of programs. The addresses under
 # endpoints / bringYourOwn below form the built-in set; in the UI each of its
 # addresses can be overridden (and reset), and more sets can be added, for
@@ -186,6 +219,11 @@ kube-prometheus-stack:
       ruleNamespaceSelector: {}
       # The OpenTelemetry Collector writes span metrics via remote write.
       enableRemoteWriteReceiver: true
+      # Accept samples that arrive up to 30 minutes late. Without it one late
+      # sample makes Prometheus reject the Collector's whole write request, and
+      # span metrics stop arriving (seen after a clock jump on the node).
+      tsdb:
+        outOfOrderTimeWindow: 30m
       # Rules are evaluated often so that an alert fires soon after the condition holds.
       evaluationInterval: 15s
       retention: 15d

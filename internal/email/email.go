@@ -722,3 +722,46 @@ func sortedCopy(in []string) []string {
 	sort.Strings(out)
 	return out
 }
+
+// ErrNotKamertonServer is returned for a receiver that does not send through
+// the mail server configured in Kamerton.
+var ErrNotKamertonServer = errors.New("the receiver does not use the mail server configured in Kamerton")
+
+// SendFollowUp sends a message to the addresses of an email receiver,
+// through the mail server configured in Kamerton only: the receiver must
+// name that server and login, and its password Secret (if any) must be
+// Kamerton's. The HTML body is used when the sender can send HTML.
+func (s *Service) SendFollowUp(ctx context.Context, rcv *v1alpha1.EmailReceiver, subject, text, htmlBody string) error {
+	s.init()
+	st, err := s.State.Get(ctx)
+	if err != nil {
+		return err
+	}
+	srv := st.Server
+	if srv == nil {
+		return ErrNoServer
+	}
+	if rcv == nil || rcv.Smarthost != srv.Smarthost || rcv.AuthUsername != srv.Username {
+		return ErrNotKamertonServer
+	}
+	password := ""
+	if rcv.AuthPasswordSecret != nil {
+		name, key := s.Passwords.Ref()
+		if rcv.AuthPasswordSecret.Name != name || rcv.AuthPasswordSecret.Key != key {
+			return ErrNotKamertonServer
+		}
+		if password, err = s.Passwords.Get(ctx); err != nil {
+			return err
+		}
+	} else if srv.Username != "" {
+		return ErrNotKamertonServer
+	}
+	cfg := *srv
+	if rcv.From != "" {
+		cfg.From = rcv.From
+	}
+	if hs, ok := s.Sender.(HTMLSender); ok && htmlBody != "" {
+		return scrub(hs.SendHTML(ctx, cfg, password, rcv.To, subject, text, htmlBody), password)
+	}
+	return scrub(s.Sender.Send(ctx, cfg, password, rcv.To, subject, text), password)
+}
