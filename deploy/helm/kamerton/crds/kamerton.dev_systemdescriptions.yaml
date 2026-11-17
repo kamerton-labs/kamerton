@@ -541,6 +541,15 @@ spec:
               notifications:
                 description: Notification receivers and routing.
                 properties:
+                  askWhatHelped:
+                    description: |-
+                      After an incident that had a follow-up in Telegram ends (and lasted at
+                      least 2 minutes), send one short message to the same chats: the
+                      incident is over, how long it lasted, and a request to reply with what
+                      helped. The reply is kept with the incident and shown the next time the
+                      same thing happens. Email gets no such message. Default: true when the
+                      follow-up is on.
+                    type: boolean
                   evidenceFollowUp:
                     description: |-
                       Send a second, short message about 45 seconds after a firing

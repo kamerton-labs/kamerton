@@ -76,13 +76,13 @@ type defaultMessage struct{ text, action string }
 var (
 	systemNoDataMessage = map[string]defaultMessage{
 		rules.LanguageEnglish: {
-			text: "Kamerton cannot see this system: none of its services has sent span metrics for {after}. " +
+			text: "Kamerton cannot see this system: none of its services has sent span metrics for {after}, at an hour when it normally has traffic. " +
 				"Until data returns no other alert of this system can fire, so silence does not mean that all is well.",
 			action: "Check the OpenTelemetry Collector (logs, exporter errors), its remote write to Prometheus " +
 				"(rejected writes, out of order sample), Prometheus itself and the clocks of the nodes.",
 		},
 		rules.LanguageRussian: {
-			text: "Kamerton не видит эту систему: ни один её сервис не присылает span-метрики дольше {after}. " +
+			text: "Kamerton не видит эту систему: ни один её сервис не присылает span-метрики дольше {after}, хотя в это время у неё обычно есть трафик. " +
 				"Пока данные не вернутся, другие оповещения этой системы сработать не могут, и тишина не значит, что всё в порядке.",
 			action: "Проверьте OpenTelemetry Collector (логи, ошибки экспортёра), его remote write в Prometheus " +
 				"(отклонённые записи, out of order sample), сам Prometheus и часы на узлах.",
@@ -90,13 +90,13 @@ var (
 	}
 	serviceNoDataMessage = map[string]defaultMessage{
 		rules.LanguageEnglish: {
-			text: "Kamerton cannot see this service: it sent span metrics in the last day but none for {after}, " +
+			text: "Kamerton cannot see this service: it normally has traffic at this hour but has sent no span metrics for {after}, " +
 				"while other services still do. Its other alerts cannot fire until data returns.",
 			action: "Check that its pods run, the OpenTelemetry exporter of the service (endpoint, errors in its log) and the Collector it sends to.",
 		},
 		rules.LanguageRussian: {
-			text: "Kamerton не видит этот сервис: за последние сутки он присылал span-метрики, но уже {after} не присылает, " +
-				"хотя другие сервисы присылают. Другие его оповещения не сработают, пока данные не вернутся.",
+			text: "Kamerton не видит этот сервис: в это время у него обычно есть трафик, но span-метрик нет уже {after}, " +
+				"хотя другие сервисы их присылают. Другие его оповещения не сработают, пока данные не вернутся.",
 			action: "Проверьте, что его поды работают, экспортёр OpenTelemetry в сервисе (адрес, ошибки в логе) и Collector, в который он отправляет данные.",
 		},
 	}

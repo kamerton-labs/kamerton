@@ -15,6 +15,7 @@ import (
 
 	"github.com/kamerton-labs/kamerton/internal/descstore"
 	"github.com/kamerton-labs/kamerton/internal/generator"
+	"github.com/kamerton-labs/kamerton/internal/history"
 	"github.com/kamerton-labs/kamerton/internal/rules"
 	"github.com/kamerton-labs/kamerton/internal/telegram"
 )
@@ -88,12 +89,12 @@ func (s *Server) runbook(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "unknown_service", "service "+name+" is not in any system")
 		return
 	}
-	s.runbookFor(w, match, name)
+	s.runbookFor(r.Context(), w, match, name)
 }
 
 // runbookFor serves the runbook of a service, or with generator.SystemRunbook
 // the one of the alerts about the whole system (service: {name, system: true}).
-func (s *Server) runbookFor(w http.ResponseWriter, snap *descstore.Snapshot, name string) {
+func (s *Server) runbookFor(ctx context.Context, w http.ResponseWriter, snap *descstore.Snapshot, name string) {
 	found := name == generator.SystemRunbook
 	var svcView map[string]any
 	if found {
@@ -141,8 +142,14 @@ func (s *Server) runbookFor(w http.ResponseWriter, snap *descstore.Snapshot, nam
 			})
 		}
 	}
+	experience, err := s.history.Experience(ctx, snap.SD.Name, name)
+	if err != nil {
+		s.log.Warn("incident history unavailable", "system", snap.ID, "error", err)
+		experience = []history.Experience{}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"system": snap.SD.Name, "systemID": snap.ID, "service": svcView, "alerts": alerts, "markdown": b.Runbooks[name+".md"],
+		"experience": experience,
 	})
 }
 

@@ -223,8 +223,8 @@ default:
 | CPU far above normal (`KamertonCPUAboveNormal`) | no `saturation.cpuCores`: above 0.5 cores and 3× the previous hour; `saturation.cpuAboveNormalFactor` |
 | Out of memory (`KamertonOOMKilled`) | the last termination was OOMKilled and the container restarted in the last 10 min; fires at once; `saturation.oomKilledEnabled: false` |
 | No ready pods (`KamertonNoReadyPods`) | pods of the service (found by `workload`) exist and none is ready, or the last one is gone (then only within an hour of the last ready pod: a deliberate scale to zero cannot be told from a failure); pending 30s; a cause for the grouping below; `noReadyPods.enabled: false`, `noReadyPods.for`; metric `telemetry.containers.readyMetric` (kube-state-metrics `kube_pod_status_ready`) |
-| No data from the service (`KamertonServiceTelemetryMissing`) | http/grpc services: the service sent span metrics in the last day, none for 3 min, and other services of the system still send; pending 1m; severity of its "requests stopped" rule where that is on, else warning; `noData.enabled`, `noData.after`, `noData.severity` |
-| Kamerton cannot see the system (`KamertonTelemetryMissing`) | none of the system's services has sent span metrics for 3 min although some did in the last day (Collector, remote write or Prometheus broken); pending 1m, critical; the message says that no other alert can fire until data returns; mutes the per-service "no data" alerts; `spec.noData.enabled`, `spec.noData.after` |
+| No data from the service (`KamertonServiceTelemetryMissing`) | http/grpc services: the service normally has traffic at this hour (see below), sent span metrics in the last day, none for 3 min, and other services of the system still send; silent while its "requests stopped" rule covers the stop; pending 1m; severity of its "requests stopped" rule where that is on, else warning; `noData.enabled`, `noData.after`, `noData.severity`; the traffic floor is `trafficDrop.minRequestsPerSecond` |
+| Kamerton cannot see the system (`KamertonTelemetryMissing`) | the system normally has traffic at this hour, and none of its services has sent span metrics for 3 min although some did in the last day (Collector, remote write or Prometheus broken); pending 1m, critical; the message says that no other alert can fire until data returns; mutes the per-service "no data" alerts; `spec.noData.enabled`, `spec.noData.after`; floor `defaults.trafficDrop.minRequestsPerSecond` |
 | Nobody reads the queue (`KamertonQueueConsumerStopped`) | services with `queue`: a consumer group of the topic has had no members for 1 min, or its lag stayed above 0 for 3 min while its committed offset did not move; pending 1m; same severity as the lag rule; `queue.consumerStoppedEnabled: false`; metrics `telemetry.queues.membersMetric` / `offsetMetric` |
 
 The service latency rule needs at least 3 calls in the window instead of a
@@ -237,12 +237,27 @@ returns nothing: if the Collector stops writing to Prometheus, those rules go
 quiet. The two "no data" rules catch that, and they never page for what never
 sent data: a service counts only if it sent span metrics for about a quarter
 of an hour within the last day. A service gone for a day (renamed, removed)
-stops alerting by itself. "Requests stopped arriving" and the per-service "no
-data" rule split the work: calls far below normal while series still exist,
-or no series at all. With 3 minutes and the 1-minute pending period, the
-person on call hears about missing data about 5 minutes after the last
+stops alerting by itself. With 3 minutes and the 1-minute pending period,
+the person on call hears about missing data about 5 minutes after the last
 sample. If Prometheus loses its storage, "before" is lost with it and the
 rules arm again once data arrives.
+
+In span metrics "idle" and "broken" look the same, so a service (or system)
+is expected to have traffic now only if, in the two hours around this time a
+week ago, it had calls in every 10 minutes, averaging above
+`trafficDrop.minRequestsPerSecond` (default 0.02/s). In its first week, when
+it has no data from a week ago, yesterday decides. An idle test cluster at
+night, a batch service or an internal tool on a weekend therefore never
+reports missing data, and nothing fires in the first day of a new service.
+The price: a day-time service is not reported for the hour after its usual
+start and the hour before its usual end, and an alert about a service that
+stays down resolves an hour before its usual end of day (it fires again the
+next morning). "Requests stopped arriving" counts no calls at all under the
+same condition. It keeps firing when the series vanish, and the per-service
+"no data" alert stays silent while it does: a critical service that stops
+completely gets one notification, about 4 minutes after its last call. "No
+data" speaks for services without that rule, and when fewer than half of the
+system's services send (part of the pipeline is down).
 
 The per-service "no data" rule needs the series of a silent service to
 disappear. The spanmetrics connector keeps exporting them as flat counters
@@ -250,12 +265,9 @@ forever unless `metrics_expiration` is set; the bundled Collector sets
 `metrics_expiration: 2m`. **If you bring your own Collector, set it too**,
 or `KamertonServiceTelemetryMissing` can never fire. With it, a service is
 reported about 6 minutes after its last span (2 minutes of expiration, the
-3-minute window, 1 minute pending). Two consequences: a critical service
-that stops completely first gets "requests stopped" (its series still
-exist, flat), which resolves when the series expire and is followed by "no
-data"; and a service, or a whole system, with no calls at all for that long
-(an idle test cluster at night) is reported as sending no data, because
-"idle" and "broken" look the same in span metrics.
+3-minute window, 1 minute pending). If Prometheus keeps less than about a
+day of data, nothing is ever expected and neither "no data" alert, nor the
+complete-stop case of "requests stopped", can fire.
 
 ## Services without OpenTelemetry
 
@@ -547,6 +559,41 @@ start failing too. Kamerton knows the `dependsOn` graph, so:
   `--set incidents.followUp.enabled=false` (no webhook in the routing at
   all; `incidents.followUp.workloadRead=false` keeps the follow-up but
   drops the cluster-wide read access).
+
+- **What helped last time.** Kamerton keeps a history of incidents: system,
+  root services and alerts, affected services, start, end, duration and the
+  evidence of the follow-up (the current incident is listed too, as open).
+  People add two short notes to each: the cause (at most 200 characters)
+  and what helped (at most 500), in the UI or in Telegram. When an incident
+  with a Telegram follow-up ends after lasting at least 2 minutes, the same
+  chats get one short message:
+
+  ```text
+  ✅ Incident over · shop: payment (No ready pods), lasted 12 min.
+  What helped? Reply to this message, and Kamerton will remind you the next time.
+  ```
+
+  A reply to that message becomes the "what helped" note (Kamerton puts 👍
+  on it; a later reply replaces it); replies count only from chats that get
+  the system's alerts through Kamerton's bot. Email gets no such message,
+  because a reply to an email does not come back to Kamerton: write the
+  note in the UI. Turn the message off with
+  `spec.notifications.askWhatHelped: false`. When the same root service
+  fails again (preferably with the same kind of alert), the follow-up
+  reminds of the last time, and a note alone is reason enough to send it:
+
+  ```text
+  🕘 Happened before: 14:02 27.10 UTC+5, lasted 1 h 12 min.
+  Cause: payment pods OOMKilled after a release
+  What helped: rolled back to v1.4.2 and raised the memory limit
+  Times in the last 30 days: 4.
+  ```
+
+  The alerts API shows the same as `previous` on each incident, and the
+  runbook page of a service lists the last notes about it. At most 300
+  incidents of the last 180 days are kept, in the ConfigMap
+  `kamerton-incident-history` (in memory without a cluster), with no names
+  of people.
 
 Grouping needs the Prometheus Operator to leave Kamerton's matchers alone
 (`alertmanagerConfigMatcherStrategy: None`, set by the bundled chart):

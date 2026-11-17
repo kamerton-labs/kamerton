@@ -50,6 +50,13 @@ func (r *recordingTelegram) SendFollowUp(_ context.Context, _ v1alpha1.SecretKey
 	return nil
 }
 
+func (r *recordingTelegram) SendTracked(_ context.Context, _ v1alpha1.SecretKeyRef, _ int64, html string) (int64, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.sent = append(r.sent, html)
+	return int64(len(r.sent)), nil
+}
+
 const hookShopYAML = `apiVersion: kamerton.dev/v1alpha1
 kind: SystemDescription
 metadata:

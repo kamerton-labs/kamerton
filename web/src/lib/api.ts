@@ -333,6 +333,16 @@ export interface Runbook {
   }
   alerts: RunbookAlert[]
   markdown: string
+  /** Notes of earlier incidents of the service, most recent first. */
+  experience?: RunbookExperience[]
+}
+
+export interface RunbookExperience {
+  id?: string
+  startedAt?: string
+  durationSeconds?: number
+  cause?: string
+  fix?: string
 }
 
 export interface Issue {
@@ -526,6 +536,62 @@ export interface Incident {
   affectedAlerts: IncidentAlert[]
   startsAt: string
   evidence?: IncidentEvidence
+  /** The last recorded occurrence of the same failure. */
+  previous?: PreviousIncident
+  /** ID of this incident's record in the history, for a note while it is fresh. */
+  historyId?: string
+}
+
+export interface PreviousIncident {
+  id?: string
+  startedAt?: string
+  durationSeconds?: number
+  cause?: string
+  fix?: string
+  /** Earlier closed incidents like this one in the last 30 days, the previous one included and the live one not (internal/history Recall). */
+  count30d?: number
+  /** The cause or fix was written by a person; otherwise cause is what Kamerton collected. */
+  noted?: boolean
+}
+
+export interface IncidentNote {
+  cause?: string
+  fix?: string
+  updatedAt?: string
+  source?: 'ui' | 'telegram' | string
+}
+
+export interface HistoryAlert {
+  name?: string
+  service?: string
+  title?: string
+  severity?: string
+}
+
+/** history.View (internal/history/history.go); system is the system's name. Every field may be absent. */
+export interface HistoryIncident {
+  id?: string
+  system?: string
+  roots?: string[]
+  rootAlerts?: HistoryAlert[]
+  affected?: string[]
+  startedAt?: string
+  endedAt?: string
+  durationSeconds?: number
+  /** The end is the last time the incident was seen, not a resolve. */
+  endEstimated?: boolean
+  open?: boolean
+  evidence?: IncidentEvidence
+  note?: IncidentNote
+}
+
+export interface HistoryResponse {
+  incidents?: HistoryIncident[]
+}
+
+export interface NoteInput {
+  cause: string
+  fix: string
 }
 
 export interface AlertsResponse {
@@ -592,6 +658,47 @@ export const useRunbook = (service: string, system?: string) =>
   })
 
 const sys = (id: string) => `/systems/${encodeURIComponent(id)}`
+
+export const HISTORY_LIMIT = 50
+
+/** null when the core is older than the incident history (404): the UI then shows nothing. */
+export async function fetchIncidentHistory(system: string, service: string): Promise<HistoryResponse | null> {
+  const q = new URLSearchParams({ limit: String(HISTORY_LIMIT) })
+  if (system) q.set('system', system)
+  if (service) q.set('service', service)
+  try {
+    return (await request<HistoryResponse>(`/incidents/history?${q}`)) ?? {}
+  } catch (e) {
+    if (e instanceof ApiError && e.status === 404) return null
+    throw e
+  }
+}
+
+export const useIncidentHistory = (system: string, service: string) =>
+  useQuery({
+    queryKey: ['incidents', 'history', system, service],
+    queryFn: () => fetchIncidentHistory(system, service),
+    retry: false,
+    refetchInterval: 60_000,
+  })
+
+export const withNote = (data: HistoryResponse | null | undefined, rec: HistoryIncident) =>
+  data?.incidents ? { ...data, incidents: data.incidents.map((i) => (i.id === rec.id ? { ...i, ...rec } : i)) } : data
+
+export const useSaveIncidentNote = () => {
+  const qc = useQueryClient()
+  return useMutation({
+    // The core answers with the whole record; its note is absent once both fields are empty.
+    mutationFn: (v: { id: string } & NoteInput) => send<HistoryIncident>('PUT', `/incidents/history/${encodeURIComponent(v.id)}/note`, { cause: v.cause, fix: v.fix }),
+    onSuccess: (rec) => {
+      if (rec?.id) qc.setQueriesData<HistoryResponse | null>({ queryKey: ['incidents', 'history'] }, (d) => withNote(d, rec))
+      void qc.invalidateQueries({ queryKey: ['incidents', 'history'] })
+      // The note shows up as "Last time" on live incidents and in runbooks.
+      void qc.invalidateQueries({ queryKey: ['alerts'] })
+      void qc.invalidateQueries({ queryKey: ['runbook'] })
+    },
+  })
+}
 
 export const useSystems = () =>
   useQuery({ queryKey: ['systems'], queryFn: () => request<SystemsResponse>('/systems'), refetchInterval: 30_000 })

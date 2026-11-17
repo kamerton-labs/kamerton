@@ -8,8 +8,10 @@
 import { useMemo } from 'react'
 import { ChevronRight } from 'lucide-react'
 import { Link, useSearchParams } from 'react-router'
+import { cn } from 'cn'
 import FeedbackButtons from '@/components/alerts/FeedbackButtons'
 import IncidentBlock from '@/components/alerts/IncidentBlock'
+import IncidentHistory from '@/components/alerts/IncidentHistory'
 import { Page, SeverityBadge } from '@/components/common'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
@@ -91,8 +93,74 @@ function AlertCard({ a }: { a: ActiveAlert }) {
   )
 }
 
+// ?view=history lists past incidents with the same system and service
+// filters; ?incident=<id> opens one record (lib/incidents historyHref).
+type View = 'live' | 'history'
+
+function viewHref(params: URLSearchParams, view: View) {
+  const q = new URLSearchParams()
+  if (view === 'history') q.set('view', 'history')
+  for (const k of view === 'history' ? ['system', 'service'] : ['system', 'service', 'alertname']) {
+    const v = params.get(k)
+    if (v) q.set(k, v)
+  }
+  const s = q.toString()
+  return s ? `/alerts?${s}` : '/alerts'
+}
+
+function ViewSwitch({ params, view }: { params: URLSearchParams; view: View }) {
+  const { t } = useT()
+  return (
+    <nav aria-label={t('alerts.view.aria')} className="flex w-full gap-0.5 rounded-lg bg-muted p-0.5 sm:w-auto" data-testid="alerts-view">
+      {(['live', 'history'] as const).map((v) => (
+        <Link
+          key={v}
+          to={viewHref(params, v)}
+          replace
+          aria-current={view === v ? 'page' : undefined}
+          className={cn('flex flex-1 items-center justify-center rounded-md px-3 py-1 text-sm', view === v ? 'bg-background font-medium shadow-sm' : 'text-muted-foreground hover:text-foreground')}
+          data-testid={`alerts-view-${v}`}
+        >
+          {t(v === 'live' ? 'alerts.view.live' : 'alerts.view.history')}
+        </Link>
+      ))}
+    </nav>
+  )
+}
+
 export default function AlertsPage() {
-  const [params] = useSearchParams()
+  const [params, setParams] = useSearchParams()
+  const view: View = params.get('view') === 'history' ? 'history' : 'live'
+  if (view === 'history') return <HistoryView params={params} setSystem={(s) => setParams((p) => (s ? p.set('system', s) : p.delete('system'), p.delete('incident'), p), { replace: true })} />
+  return <LiveView params={params} />
+}
+
+function HistoryView({ params, setSystem }: { params: URLSearchParams; setSystem: (s: string) => void }) {
+  const service = params.get('service') ?? ''
+  const system = params.get('system') ?? ''
+  const { t } = useT()
+  const filtered = Boolean(service || system)
+  return (
+    <Page
+      title={t('alerts.title')}
+      description={filtered ? t('alerts.filtered', { what: [system, service].filter(Boolean).join(' · ') }) : t('history.description')}
+      actions={
+        <>
+          <ViewSwitch params={params} view="history" />
+          {filtered && (
+            <Button variant="ghost" size="sm" asChild>
+              <Link to="/alerts?view=history">{t('alerts.showAll')}</Link>
+            </Button>
+          )}
+        </>
+      }
+    >
+      <IncidentHistory system={system} service={service} selected={params.get('incident') ?? ''} onSystem={setSystem} />
+    </Page>
+  )
+}
+
+function LiveView({ params }: { params: URLSearchParams }) {
   const alertname = params.get('alertname') ?? ''
   const service = params.get('service') ?? ''
   const system = params.get('system') ?? ''
@@ -112,6 +180,7 @@ export default function AlertsPage() {
       }
       actions={
         <>
+          <ViewSwitch params={params} view="live" />
           {runbook && (
             <Button variant="outline" size="sm" asChild>
               <Link to={runbook}>{t('alerts.runbook')}</Link>

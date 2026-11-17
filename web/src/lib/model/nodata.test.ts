@@ -3,7 +3,7 @@
 
 import { readFileSync } from 'node:fs'
 import { afterEach, describe, expect, it } from 'vitest'
-import { setLang } from '@/i18n'
+import { setLang, tl, type MsgKey } from '@/i18n'
 import { defaultMessage, getMessage, promDuration, setMessage } from './message'
 import { addRule, addableKinds, deriveRules, generatedCount, removeRule, setRule, SYSTEM_RULES } from './rules'
 import type { Description, Service } from './types'
@@ -42,7 +42,7 @@ describe('system no-data rule', () => {
   it('is the first rule, belongs to no service and is always critical', () => {
     const [first] = deriveRules(example())
     expect(first).toMatchObject({ id: `${SYSTEM_RULES}/systemNoData`, service: '', system: true, severity: 'critical', severityFixed: true, for: '3m', alert: 'KamertonTelemetryMissing' })
-    expect(first.sentence).toBe('No span metrics from any service for over 3 min: other alerts of the system cannot fire')
+    expect(first.sentence).toBe('No span metrics from any service for over 3 min at an hour that normally has traffic: other alerts of the system cannot fire')
   })
 
   it('turns off, edits after and keeps its message in spec.noData', () => {
@@ -79,9 +79,9 @@ describe('per-service no-data rule', () => {
     expect(deriveRules(shop([{ name: 'api', type: 'http' }, { name: 'api-v2', type: 'http', telemetryName: 'api' }])).some((r) => r.kind === 'noData')).toBe(false)
   })
 
-  it('says on the requests-stopped card that a silent service is covered by it', () => {
+  it('says on the requests-stopped card that it reports a complete stop while no-data stays silent', () => {
     const d = shop([{ name: 'api', type: 'http', critical: true }, { name: 'web', type: 'http' }])
-    expect(find(d, 'api/traffic')?.note).toBe('A service that sends no data at all is covered by the "No data" rule (after 3 min).')
+    expect(find(d, 'api/traffic')?.note).toBe('A complete stop is reported here even after the series vanish; the "No data" rule stays silent meanwhile.')
     expect(find(setRule(d, 'api/noData', { enabled: false }), 'api/traffic')?.note).toBeUndefined()
   })
 
@@ -109,7 +109,7 @@ describe('per-service no-data rule', () => {
     const rule = find(setRule(example(), 'cart/noData', { for: '180s' }), 'cart/noData')!
     expect(promDuration('180s')).toBe('3m')
     expect(promDuration('90m')).toBe('1h30m')
-    expect(defaultMessage(rule, 'en')?.text).toContain('but none for 3m, while other services still do')
+    expect(defaultMessage(rule, 'en')?.text).toContain('it normally has traffic at this hour but has sent no span metrics for 3m, while other services still do')
     expect(defaultMessage(rule, 'ru')?.action).toContain('экспортёр OpenTelemetry')
   })
 })
@@ -135,5 +135,34 @@ describe('no-ready-pods rule', () => {
     d.spec.defaults = { ...d.spec.defaults, noReadyPods: { enabled: false } }
     expect(deriveRules(d).filter((r) => r.kind === 'noReadyPods' && r.enabled)).toHaveLength(0)
     expect(setRule(d, 'cart/noReadyPods', { enabled: true }).spec.services.find((s) => s.name === 'cart')?.noReadyPods).toEqual({ enabled: true })
+  })
+})
+
+// Go string literals joined across "..." + "..." lines, with \" unescaped.
+const goText = (rel: string) =>
+  readFileSync(new URL(`../../../../internal/${rel}`, import.meta.url), 'utf8')
+    .replace(/"\s*\+\s*\n\s*"/g, '')
+    .replace(/\\"/g, '"')
+
+describe('texts mirrored from the core', () => {
+  const messages = goText('generator/rulemessage.go')
+  const hints = goText('generator/runbook.go')
+
+  it('match the default no-data messages of internal/generator/rulemessage.go', () => {
+    for (const lang of ['en', 'ru'] as const)
+      for (const key of ['msg.default.noData.text', 'msg.default.systemNoData.text'] as const satisfies MsgKey[]) expect(messages).toContain(`text: "${tl(lang, key)}"`)
+  })
+
+  it('match the no-data runbook advice of internal/generator/runbook.go', () => {
+    for (const lang of ['en', 'ru'] as const)
+      for (const key of ['runbook.adviceAlert.telemetryMissing', 'runbook.adviceAlert.serviceTelemetryMissing'] as const satisfies MsgKey[])
+        expect(hints).toContain(`: "${tl(lang, key).replace(/\n/g, ' ')}"`)
+  })
+
+  it('say that no data counts only at hours with traffic, and that requests stopped covers a complete stop', () => {
+    expect(tl('en', 'rule.hint.noData')).toContain('normally has traffic at this hour')
+    expect(tl('en', 'rule.hint.traffic')).toContain('also after the series vanish')
+    expect(tl('ru', 'rule.note.trafficNoData')).toContain('«Нет данных» в это время молчит')
+    expect(tl('en', 'rule.note.trafficNoData')).not.toContain('{after}')
   })
 })

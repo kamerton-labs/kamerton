@@ -141,14 +141,14 @@ func runbookAlerts(b *strings.Builder, w runbookWords, rs []rulefmt.Rule) {
 
 // runbookHints: the UI runbook page shows the same advice.
 var runbookHints = map[string]string{
-	rules.AlertTelemetryMissing: "Kamerton receives no span metrics from any service of the system, so no other alert of the system can fire. What to check: " +
+	rules.AlertTelemetryMissing: "Kamerton receives no span metrics from any service of the system at an hour when the system normally has traffic, so no other alert of the system can fire. What to check: " +
 		"the OpenTelemetry Collector pods and their logs (exporter errors, a full sending queue, dropped data); errors of its remote write to Prometheus " +
 		"(HTTP 4xx/5xx, `prometheus_remote_storage` and `otelcol_exporter_send_failed_metric_points` counters); Prometheus logs for `out of order sample`, " +
 		"`out of bounds` or `too old sample` (the Collector's clock and the node clocks must agree: check NTP and clock skew on the nodes) and whether the " +
 		"remote write receiver is on; finally that the services still send traces to the Collector. The alert resolves by itself when data returns, " +
 		"or a day after the last data.",
-	rules.AlertServiceTelemetryMissing: "This service sent span metrics in the last day but sends none now, while other services of the system do: " +
-		"its own telemetry stopped, not the pipeline. What to check: whether its pods run (see the no-ready-pods alert), the OpenTelemetry SDK exporter " +
+	rules.AlertServiceTelemetryMissing: "This service normally has traffic at this hour but sends no span metrics now, while other services of the system do: " +
+		"its own telemetry stopped, not the pipeline. Where its \"requests stopped\" rule is on, that rule reports a complete stop instead. What to check: whether its pods run (see the no-ready-pods alert), the OpenTelemetry SDK exporter " +
 		"of the service (endpoint, errors in the service log), the Collector it sends to (agent or gateway on its node, its logs and remote write errors), " +
 		"clock skew on its node, and Prometheus logs for `out of order sample`. A service renamed or removed stops alerting a day after its last data; " +
 		"change the description instead.",
@@ -176,14 +176,14 @@ var runbookHints = map[string]string{
 }
 
 var runbookHintsRussian = map[string]string{
-	rules.AlertTelemetryMissing: "Kamerton не получает span-метрики ни от одного сервиса системы, поэтому другие оповещения системы сработать не могут. Что проверить: " +
+	rules.AlertTelemetryMissing: "Kamerton не получает span-метрики ни от одного сервиса системы в час, когда у системы обычно есть трафик, поэтому другие оповещения системы сработать не могут. Что проверить: " +
 		"поды OpenTelemetry Collector и их логи (ошибки экспортёра, переполненная очередь отправки, отброшенные данные); ошибки его remote write в Prometheus " +
 		"(HTTP 4xx/5xx, счётчики `prometheus_remote_storage` и `otelcol_exporter_send_failed_metric_points`); логи Prometheus на `out of order sample`, " +
 		"`out of bounds` или `too old sample` (часы Collector и узлов должны совпадать: проверьте NTP и расхождение часов на узлах) и включён ли приём " +
 		"remote write; наконец, что сервисы по-прежнему отправляют трассы в Collector. Оповещение решается само, когда данные вернутся, " +
 		"или через сутки после последних данных.",
-	rules.AlertServiceTelemetryMissing: "Сервис присылал span-метрики за последние сутки, а сейчас не присылает, хотя другие сервисы системы присылают: " +
-		"остановилась его собственная телеметрия, а не весь конвейер. Что проверить: работают ли его поды (см. оповещение о готовых подах), экспортёр " +
+	rules.AlertServiceTelemetryMissing: "В это время у сервиса обычно есть трафик, но span-метрик от него нет, хотя другие сервисы системы присылают: " +
+		"остановилась его собственная телеметрия, а не весь конвейер. Где включено правило «запросы перестали поступать», полную остановку сообщает оно. Что проверить: работают ли его поды (см. оповещение о готовых подах), экспортёр " +
 		"OpenTelemetry SDK в сервисе (адрес, ошибки в логе сервиса), Collector, в который он отправляет данные (агент или шлюз на его узле, логи, ошибки " +
 		"remote write), расхождение часов на его узле и логи Prometheus на `out of order sample`. Переименованный или удалённый сервис перестаёт " +
 		"оповещать через сутки после последних данных; лучше исправьте описание.",

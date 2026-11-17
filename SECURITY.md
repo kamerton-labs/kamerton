@@ -44,6 +44,14 @@ Kamerton is at 0.1.x. Fixes go into the latest release only.
   namespaces (get/list, read-only, no Secrets); turn this off with
   `incidents.followUp.workloadRead=false`. A quoted log line is shortened
   but not scrubbed: whatever the service logs may appear in the chat.
+- Incident history (ConfigMap `kamerton-incident-history`) keeps service
+  and alert names, times, the follow-up's evidence (including a log line),
+  the notes people write and, for matching replies, the IDs of the chats
+  and messages of the "incident is over" messages; no user IDs or names.
+  The bot's polling reads the text of a message only when it replies to
+  such a message, from a chat that gets the system's alerts; other
+  messages only reveal chats, as before. A note is stored as written and
+  escaped wherever it is shown.
 - eBPF auto-instrumentation (`autoInstrument.enabled`, off by default)
   installs OpenTelemetry eBPF Instrumentation as a DaemonSet in Kamerton's
   namespace. By default each pod is a **privileged container** with

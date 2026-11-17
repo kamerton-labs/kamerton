@@ -33,6 +33,8 @@ type FollowUp struct {
 	// roots turn out to cause; ExplainsSince is when the earliest one started.
 	Explains      []string
 	ExplainsSince time.Time
+	// Previous is the earlier incident of the same root; nil when none.
+	Previous *Recall
 }
 
 type LikelyCause struct {
@@ -116,7 +118,7 @@ func (f *FollowUp) Worth() bool {
 	if f == nil {
 		return false
 	}
-	if len(f.Affected) > 0 || len(f.Alerting) > 0 || len(f.Likely) > 0 || len(f.Explains) > 0 {
+	if len(f.Affected) > 0 || len(f.Alerting) > 0 || len(f.Likely) > 0 || len(f.Explains) > 0 || (f.Previous != nil && f.Previous.Noted) {
 		return true
 	}
 	for _, r := range f.Roots {
@@ -317,6 +319,7 @@ func followUpBody(f *FollowUp, w followUpWords, lang string, loc *time.Location,
 			}
 		}
 	}
+	t.WriteString(recallBlock(f.Previous, lang, loc, esc, b))
 	return t.String()
 }
 

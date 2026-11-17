@@ -740,6 +740,14 @@ type Notifications struct {
 	// Nothing is sent when nothing useful was found within a few minutes. Default: true.
 	// +optional
 	EvidenceFollowUp *bool `json:"evidenceFollowUp,omitempty"`
+	// After an incident that had a follow-up in Telegram ends (and lasted at
+	// least 2 minutes), send one short message to the same chats: the
+	// incident is over, how long it lasted, and a request to reply with what
+	// helped. The reply is kept with the incident and shown the next time the
+	// same thing happens. Email gets no such message. Default: true when the
+	// follow-up is on.
+	// +optional
+	AskWhatHelped *bool `json:"askWhatHelped,omitempty"`
 }
 
 // GroupsByCause reports whether alerts of callers are muted while a
@@ -753,6 +761,12 @@ func (n *Notifications) GroupsByCause() bool {
 // (spec.notifications.evidenceFollowUp, default true).
 func (n *Notifications) SendsEvidence() bool {
 	return n == nil || n.EvidenceFollowUp == nil || *n.EvidenceFollowUp
+}
+
+// AsksWhatHelped reports whether the "incident is over" message is on
+// (spec.notifications.askWhatHelped, default true; never without the follow-up).
+func (n *Notifications) AsksWhatHelped() bool {
+	return n.SendsEvidence() && (n == nil || n.AskWhatHelped == nil || *n.AskWhatHelped)
 }
 
 // Receiver is one notification channel. Exactly one of telegram or email must be set.

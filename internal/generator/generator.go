@@ -340,25 +340,29 @@ func (g *gen) serviceRules(svc *v1alpha1.Service) ([]rulefmt.Rule, error) {
 	nd := mergeNoData(svc, d.NoData, svc.NoData)
 	others := g.otherTelemetryNames(svc)
 	noDataOn := nd.enabled && spansOn && len(others) > 0
+	tparams := rules.TrafficParams{
+		Meta: g.metaSev(svc, tp.forD, tp.severity), Target: g.spanTarget(svc),
+		Threshold: tp.threshold, MinRequestsPerSecond: tp.minRPS, SystemServices: g.telemetryNames(),
+	}
 	if trafficOn {
-		p := rules.TrafficParams{
-			Meta: g.metaSev(svc, tp.forD, tp.severity), Target: g.spanTarget(svc),
-			Threshold: tp.threshold, MinRequestsPerSecond: tp.minRPS, SystemServices: g.telemetryNames(),
-		}
-		if noDataOn {
-			p.PresentWithin = nd.after
-		}
-		out = append(out, g.withMessage(rules.TrafficStopped(p), svc, tp.message, ""))
+		out = append(out, g.withMessage(rules.TrafficStopped(tparams), svc, tp.message, ""))
 	}
 	if noDataOn {
 		sev := nd.severity
 		if sev == "" && trafficOn {
-			sev = v1alpha1.Severity(g.metaSev(svc, 0, tp.severity).Severity)
+			sev = v1alpha1.Severity(tparams.Severity)
 		}
 		if sev == "" {
 			sev = v1alpha1.SeverityWarning
 		}
-		r := rules.ServiceNoData(rules.ServiceNoDataParams{Meta: g.metaSev(svc, 0, sev), Target: g.spanTarget(svc), After: nd.after, Others: others})
+		// The floor is trafficDrop's even where that rule is off.
+		np := rules.ServiceNoDataParams{
+			Meta: g.metaSev(svc, 0, sev), Target: g.spanTarget(svc), After: nd.after, Others: others, MinRequestsPerSecond: tp.minRPS,
+		}
+		if trafficOn {
+			np.Traffic = &tparams
+		}
+		r := rules.ServiceNoData(np)
 		out = append(out, g.withMessage(g.withDefaultMessage(r, serviceNoDataMessage, nd.after), svc, nd.message, ""))
 	}
 
@@ -482,7 +486,10 @@ func (g *gen) systemRules() []rulefmt.Rule {
 	if m.RunbookPerAlert {
 		m.RunbookURL = fmt.Sprintf("%s/systems/%s/runbooks/%s", strings.TrimRight(g.opts.RunbookBaseURL, "/"), g.sd.Name, SystemRunbook)
 	}
-	r := rules.SystemNoData(rules.SystemNoDataParams{Meta: m, Target: g.spanTarget(&v1alpha1.Service{}), After: after, Services: g.telemetryNames()})
+	r := rules.SystemNoData(rules.SystemNoDataParams{
+		Meta: m, Target: g.spanTarget(&v1alpha1.Service{}), After: after, Services: g.telemetryNames(),
+		MinRequestsPerSecond: mergeTraffic(&v1alpha1.Service{}, g.defaults().TrafficDrop).minRPS,
+	})
 	return []rulefmt.Rule{g.withMessage(g.withDefaultMessage(r, systemNoDataMessage, after), &v1alpha1.Service{}, msg, "")}
 }
 

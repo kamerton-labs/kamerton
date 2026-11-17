@@ -8,6 +8,20 @@ All notable changes to Kamerton are listed here. The format follows
 
 ### Added
 
+- Incident history and what helped. Every incident (root services and
+  alerts, affected services, start, end, duration, the follow-up's
+  evidence) is kept in the ConfigMap `kamerton-incident-history` (at most
+  300 incidents, 180 days; memory without a cluster); open incidents are
+  listed too. People add a cause and what helped
+  (`PUT /api/v1/incidents/history/{id}/note`, or a reply in Telegram to
+  the new "incident is over" message, sent after an incident with a
+  Telegram follow-up that lasted at least 2 minutes; off with
+  `spec.notifications.askWhatHelped: false`). The follow-up of the next
+  incident of the same root service reminds of the last one (when, how
+  long, cause, what helped, how many times in 30 days), and a note alone
+  is worth a follow-up. `GET /api/v1/incidents/history`, `previous` and
+  `historyId` on live incidents in the alerts API, and `experience` in a
+  service's runbook data.
 - Quieter rules. `GET /api/v1/systems/{id}/noise?window=7d` (1d, 3d, 7d)
   returns, per rule, how often it fired in the window, how many firings
   cleared within 5 minutes, the longest firing, when it last fired, the
@@ -136,6 +150,20 @@ All notable changes to Kamerton are listed here. The format follows
   which resolves when its series expire and is followed by "no data"; a
   service or system with no calls at all for that long is reported as
   sending no data.
+- "No data" means "this normally has traffic now, and nothing arrives".
+  Both "no data" alerts fire only at hours when the service (the system,
+  for `KamertonTelemetryMissing`) had calls in every 10 minutes of the two
+  hours around the same time a week ago, averaging above
+  `trafficDrop.minRequestsPerSecond` (a day ago while it has no data from
+  a week ago). An idle test cluster at night, a batch service or a tool
+  idle on weekends no longer reports missing data, and nothing fires in the
+  first day after a service starts sending. "Requests stopped arriving"
+  counts no calls at all (a flat counter or a vanished series) under the
+  same condition and keeps firing when the series vanish, and the
+  per-service "no data" alert stays silent while that rule covers the stop:
+  a critical service that stops completely gets one notification. The
+  first-day exception: a drop to a few percent of normal still fires after
+  an hour of history; a complete stop needs a day.
 
 ## [0.1.0] - 2026-11-17
 

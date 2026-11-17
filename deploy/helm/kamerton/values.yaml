@@ -408,8 +408,9 @@ opentelemetry-collector:
         metrics_flush_interval: 15s
         # Stop exporting a source (resource: service, pod) 2 minutes after its
         # last span. Without it a silent service keeps flat series forever and
-        # the per-service "no data" alert can never fire. A source that comes
-        # back restarts its counters from zero, which rate() reads as a reset.
+        # the per-service "no data" alert can never fire. The rules tell idle
+        # from broken by the traffic of the same hours a week ago. A source that
+        # comes back restarts its counters from zero, which rate() reads as a reset.
         metrics_expiration: 2m
     exporters:
       otlp/tempo:

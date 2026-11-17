@@ -460,7 +460,7 @@ func (s *Server) runbookSystem(w http.ResponseWriter, r *http.Request) {
 	if snap == nil {
 		return
 	}
-	s.runbookFor(w, snap, r.PathValue("service"))
+	s.runbookFor(r.Context(), w, snap, r.PathValue("service"))
 }
 
 func (s *Server) telegramStatusSystem(w http.ResponseWriter, r *http.Request) {

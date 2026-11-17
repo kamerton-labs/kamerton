@@ -85,7 +85,9 @@ func TestServiceNoDataRulesOfTheDemo(t *testing.T) {
 		}
 	}
 	r := got["checkout"]
-	if strings.Contains(r.Expr, `"checkout|`) || strings.Contains(r.Expr, `|checkout|`) || !strings.Contains(r.Expr, `service_name=~"frontend-proxy|frontend|payment|`) {
+	others := r.Expr[strings.Index(r.Expr, "group(present_over_time("):]
+	others = others[:strings.Index(others, "\n")]
+	if strings.Contains(others, `"checkout|`) || strings.Contains(others, `|checkout|`) || !strings.Contains(others, `service_name=~"frontend-proxy|frontend|payment|`) {
 		t.Errorf("others must leave out the service itself:\n%s", r.Expr)
 	}
 	if r.Annotations["runbook_url"] != "http://kamerton.local/runbooks/checkout/KamertonServiceTelemetryMissing" ||
@@ -95,9 +97,16 @@ func TestServiceNoDataRulesOfTheDemo(t *testing.T) {
 	if md := b.Runbooks["checkout.md"]; !strings.Contains(md, "### KamertonServiceTelemetryMissing") || !strings.Contains(md, "### KamertonNoReadyPods") {
 		t.Errorf("service runbook lacks the new alerts:\n%s", md)
 	}
-	// The traffic rule leaves services without data to the no-data rule.
-	if tr := trafficRules(b)["checkout"]; !strings.Contains(tr.Expr, "and on (service_name)\n  group by (service_name) (present_over_time(traces_span_metrics_calls_total{service_name=\"checkout\"}[3m]))") {
-		t.Errorf("traffic rule without the presence condition:\n%s", tr.Expr)
+	// A stop the traffic rule reports is left to it; it counts a vanished series
+	// as no calls at hours that normally have traffic.
+	if tr := trafficRules(b)["checkout"]; strings.Contains(tr.Expr, "present_over_time") || !strings.Contains(tr.Expr, "[2h:10m] offset 23h") {
+		t.Errorf("traffic rule:\n%s", tr.Expr)
+	}
+	if !strings.Contains(r.Expr, "\nunless on (service_name)\n(\n  (\n    avg_over_time(") || !strings.Contains(r.Expr, ") > 0.02\nor on (service_name)") {
+		t.Errorf("no-data rule of a service with the traffic rule:\n%s", r.Expr)
+	}
+	if e := got["currency"].Expr; strings.Contains(e, "\nunless on (service_name)\n(\n") || !strings.Contains(e, "offset 6d23h") {
+		t.Errorf("no-data rule of a service without the traffic rule:\n%s", e)
 	}
 }
 
@@ -107,6 +116,7 @@ metadata: {name: shop}
 spec:
   defaults:
     noData: {after: 5m}
+    trafficDrop: {minRequestsPerSecond: 0.5}
   noData:
     after: 4m
     message: {title: "Pipeline down"}
@@ -120,6 +130,7 @@ spec:
     - name: worker
       type: grpc
       noData: {severity: critical}
+      trafficDrop: {enabled: false, minRequestsPerSecond: 1}
       noReadyPods: {for: 2m, severity: warning, message: {text: "Поды {service} не готовы"}}
     - name: db
       type: database
@@ -146,9 +157,10 @@ func TestNoDataAndNoReadyPodsSettings(t *testing.T) {
 	if r, ok := nd["db"]; !ok || r.Labels[rules.LabelSeverity] != "warning" {
 		t.Errorf("db: noData set on a database turns it on: %v", r.Labels)
 	}
-	// With its no-data alert off, the traffic rule of api counts vanished series as zero again.
-	if tr := trafficRules(b)["api"]; strings.Contains(tr.Expr, "present_over_time") {
-		t.Errorf("api traffic rule keeps the presence condition:\n%s", tr.Expr)
+	// Expected traffic uses trafficDrop.minRequestsPerSecond, even where that rule is off.
+	if !strings.Contains(sys.Expr, ") > 0.5\nor on ()") || !strings.Contains(nd["worker"].Expr, ") > 1\nor on (service_name)") ||
+		!strings.Contains(nd["db"].Expr, ") > 0.5\nor on (service_name)") {
+		t.Errorf("floors:\n%s\n%s\n%s", sys.Expr, nd["worker"].Expr, nd["db"].Expr)
 	}
 
 	pods := byService(b, rules.AlertNoReadyPods)
