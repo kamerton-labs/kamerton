@@ -153,7 +153,7 @@ pre-wired to the bundled Prometheus (`opentelemetry-collector.config.exporters.p
 ### Try it with the OpenTelemetry Demo
 
 [kamerton-labs/examples](https://github.com/kamerton-labs/examples/tree/main/otel-demo) holds the setup used for testing:
-`values-kamerton.yaml` (Kamerton with a locally built image),
+`values-kamerton.yaml` (Kamerton settings for a small cluster),
 `values-demo.yaml` (the demo with its own backends off, sending everything to
 Kamerton's Collector) and `system.yaml` (a description of the demo's
 services). The commands are in the comments at the top of each file. Replace

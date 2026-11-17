@@ -15,7 +15,7 @@ nameOverride: ""
 fullnameOverride: ""
 
 # Published for linux/amd64 and linux/arm64. To run your own build, use
-# `make docker` and point repository/tag at it.
+# `docker build -t kamerton:dev .` and set repository/tag to that name.
 image:
   repository: ghcr.io/kamerton-labs/kamerton
   # Defaults to the chart appVersion.
