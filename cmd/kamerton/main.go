@@ -43,6 +43,7 @@ import (
 	"github.com/kamerton-labs/kamerton/internal/evidence"
 	"github.com/kamerton-labs/kamerton/internal/followup"
 	"github.com/kamerton-labs/kamerton/internal/generator"
+	"github.com/kamerton-labs/kamerton/internal/noise"
 	"github.com/kamerton-labs/kamerton/internal/schema"
 	"github.com/kamerton-labs/kamerton/internal/server"
 	"github.com/kamerton-labs/kamerton/internal/stack"
@@ -182,6 +183,13 @@ func serve(args []string) error {
 			return err
 		}
 		opts.Telegram = tg
+		opts.Feedback = &noise.Feedback{
+			State:        &noise.ConfigMapStateStore{Client: uncached, Namespace: ns, Name: "kamerton-noise-state"},
+			Descriptions: opts.Descriptions,
+			Receiver:     tg.IsReceiver,
+			Logger:       log.With("component", "noise"),
+		}
+		tg.Callbacks = opts.Feedback
 		opts.Email = &email.Service{
 			Passwords:    &telegram.SecretTokenStore{Client: uncached, Namespace: ns, Name: cfg.EmailSecretName, Key: email.DefaultSecretKey, Component: "email"},
 			State:        &email.ConfigMapStateStore{Client: uncached, Namespace: ns, Name: "kamerton-email-state"},
@@ -205,6 +213,7 @@ func serve(args []string) error {
 				State:        &followup.ConfigMapStateStore{Client: uncached, Namespace: ns, Name: "kamerton-followup-state"},
 				Telegram:     tg,
 				Email:        opts.Email,
+				Feedback:     opts.Feedback,
 				Logger:       log.With("component", "followup"),
 			}
 			opts.WebhookToken = store

@@ -28,6 +28,7 @@ import (
 	"github.com/kamerton-labs/kamerton/internal/email"
 	"github.com/kamerton-labs/kamerton/internal/followup"
 	"github.com/kamerton-labs/kamerton/internal/generator"
+	"github.com/kamerton-labs/kamerton/internal/noise"
 	"github.com/kamerton-labs/kamerton/internal/rules"
 	"github.com/kamerton-labs/kamerton/internal/schema"
 	"github.com/kamerton-labs/kamerton/internal/stack"
@@ -70,6 +71,8 @@ type Options struct {
 	FollowUp            *followup.Service
 	WebhookToken        TokenSource
 	FollowUpUnavailable string
+	// Feedback keeps "useful / noise" verdicts; nil: in memory.
+	Feedback *noise.Feedback
 }
 
 type Server struct {
@@ -96,6 +99,8 @@ type Server struct {
 	hookMu  sync.Mutex
 	hookTok string
 	hookAt  time.Time
+
+	feedback *noise.Feedback
 }
 
 func New(opts Options) *Server {
@@ -115,6 +120,13 @@ func New(opts Options) *Server {
 		s.sets.Store = &stack.MemoryStateStore{}
 	}
 	s.checker = &stack.Checker{HTTP: opts.CheckHTTP}
+	s.feedback = opts.Feedback
+	if s.feedback == nil {
+		s.feedback = &noise.Feedback{Logger: s.log}
+	}
+	if s.feedback.Descriptions == nil {
+		s.feedback.Descriptions = s.opts.Descriptions
+	}
 	if f := s.opts.FollowUp; f != nil {
 		if f.Descriptions == nil {
 			f.Descriptions = s.opts.Descriptions
@@ -170,6 +182,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/v1/systems/{id}/backtest", s.backtestSystem)
 	mux.HandleFunc("GET /api/v1/systems/{id}/runbooks/{service}", s.runbookSystem)
 	mux.HandleFunc("GET /api/v1/systems/{id}/alerts", s.alertsSystem)
+	mux.HandleFunc("GET /api/v1/systems/{id}/noise", s.noiseSystem)
+	mux.HandleFunc("POST /api/v1/systems/{id}/noise/feedback", s.noiseFeedback)
 	mux.HandleFunc("GET /api/v1/systems/{id}/telegram", s.telegramStatusSystem)
 	mux.HandleFunc("PUT /api/v1/systems/{id}/telegram/routing", s.telegramRoutingSystem)
 

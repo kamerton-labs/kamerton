@@ -13,6 +13,7 @@ const state: { data?: AlertsResponse } = {}
 
 vi.mock('@/lib/api', () => ({
   useAlerts: () => ({ isLoading: false, isError: false, data: state.data }),
+  useNoiseFeedback: () => ({ mutate: () => {}, isPending: false, isError: false, error: null }),
 }))
 
 const { default: AlertsPage } = await import('./AlertsPage')
@@ -153,6 +154,22 @@ describe('Alerts page with incidents', () => {
     expect(other).toContain('href="/systems/shop?service=cart"')
     expect(other).toContain('href="/systems/shop/runbooks/cart/KamertonMemoryHigh"')
     expect(other).not.toContain('Requests stopped arriving')
+  })
+
+  it('offers "Useful" and "Noise" on incident roots and lone alerts, not on muted ones', () => {
+    state.data = response([incident()], [active({ title: 'Memory above limit' })])
+    const html = render()
+    const root = between(html, 'incident-root-alert')
+    expect(root.slice(0, root.indexOf('</li>'))).toContain('data-testid="noise-feedback-useful"')
+    const muted = between(html, 'incident-muted')
+    expect(muted.slice(0, muted.indexOf('data-testid="alerts-other"'))).not.toContain('noise-feedback')
+    const card = between(html, 'alert-card')
+    expect(card).toContain('data-testid="noise-feedback-noise"')
+    expect(card).toContain('>Useful<')
+    setLang('ru', false)
+    const ru = render()
+    expect(ru).toContain('>По делу<')
+    expect(ru).toContain('>Шум<')
   })
 
   it('keeps the empty state', () => {

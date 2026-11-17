@@ -19,6 +19,7 @@ type Alert struct {
 	Fingerprint string    `json:"fingerprint,omitempty"`
 	Name        string    `json:"name"`
 	Service     string    `json:"service"`
+	Operation   string    `json:"operation,omitempty"`
 	Severity    string    `json:"severity"`
 	StartsAt    time.Time `json:"startsAt"`
 	Title       string    `json:"title,omitempty"`

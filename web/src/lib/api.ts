@@ -4,7 +4,7 @@
 // Typed client for the core API (/api/v1). When a backend dependency is not
 // configured the API says so and the UI shows an empty state.
 
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { keepPreviousData, useMutation, useQuery, useQueryClient, type QueryClient, type QueryKey } from '@tanstack/react-query'
 import { CSRF_HEADER, CSRF_VALUE, fetchSession, notifyUnauthorized } from '@/lib/auth'
 
 export class ApiError extends Error {
@@ -123,6 +123,68 @@ export interface RuleBacktestRequest {
 
 export interface RuleBacktestResult extends BacktestResult {
   rule: { expr: string; for: string; title: string; threshold: string }
+}
+
+export type NoiseWindow = '1d' | '3d' | '7d'
+
+export type NoiseVerdict = 'useful' | 'noise'
+
+/** Mirrors noise.Suggestion (internal/noise/noise.go): values are in the form of the description field at path, see format. */
+export interface NoiseSuggestion {
+  field?: string
+  current?: string
+  suggested?: string
+  unit?: string
+  wouldFire?: number
+  wouldMiss?: number
+  wouldShort?: number
+  /** How much later a real failure would be reported; 0 for a threshold. */
+  delaySeconds?: number
+  /** Relative to the service, e.g. "operations[PlaceOrder].latency.thresholdMs" (internal/generator/tunable.go). */
+  path?: string
+  /** share | number | integer | quantity | duration. */
+  format?: string
+}
+
+/** Rules that never fired in the window are absent. */
+export interface NoiseRule {
+  alert?: string
+  service?: string
+  operation?: string
+  fired?: number
+  short?: number
+  /** Firings muted while a dependency failed: nobody received them, and they are not in fired or short. */
+  consequences?: number
+  longestSeconds?: number
+  lastFiredAt?: string
+  feedback?: { useful?: number; noise?: number }
+  noisy?: boolean
+  suggestion?: NoiseSuggestion
+}
+
+export interface NoiseResponse {
+  window?: string
+  available?: boolean
+  reason?: string
+  shortUnder?: string
+  longFrom?: string
+  rules?: NoiseRule[]
+}
+
+/** operation only for a rule of one operation; the aggregated per-operation rules are keyed with "". */
+export interface NoiseFeedback {
+  alert: string
+  service: string
+  operation?: string
+  verdict: NoiseVerdict
+}
+
+export interface NoiseFeedbackResult {
+  recorded?: boolean
+  alert?: string
+  service?: string
+  operation?: string
+  feedback?: { useful?: number; noise?: number }
 }
 
 export interface Settings {
@@ -542,6 +604,53 @@ export const useSystemDiscovery = (id: string) =>
 
 export const useRuleStates = (id: string) =>
   useQuery({ queryKey: ['system', id, 'states'], queryFn: () => request<RuleStatesResponse>(`${sys(id)}/rules/state`), refetchInterval: 30_000 })
+
+export const useNoise = (id: string, window: NoiseWindow) =>
+  useQuery({
+    queryKey: ['system', id, 'noise', window],
+    queryFn: () => request<NoiseResponse>(`${sys(id)}/noise?window=${window}`),
+    retry: false,
+    staleTime: 5 * 60_000,
+    placeholderData: keepPreviousData,
+  })
+
+const sameRule = (r: NoiseRule, k: { alert?: string; service?: string; operation?: string }) =>
+  (r.alert ?? '') === (k.alert ?? '') && (r.service ?? '') === (k.service ?? '') && (r.operation ?? '') === (k.operation ?? '')
+
+function mapRules(data: NoiseResponse | undefined, k: { alert?: string; service?: string; operation?: string }, fn: (fb: NoiseRule['feedback']) => NoiseRule['feedback']) {
+  if (!data?.rules) return data
+  return { ...data, rules: data.rules.map((r) => (sameRule(r, k) ? { ...r, feedback: fn(r.feedback) } : r)) }
+}
+
+export const withFeedback = (data: NoiseResponse | undefined, v: NoiseFeedback) => mapRules(data, v, (fb) => ({ ...fb, [v.verdict]: (fb?.[v.verdict] ?? 0) + 1 }))
+
+export function noiseFeedbackOptions(qc: QueryClient, id: string) {
+  const key = ['system', id, 'noise']
+  return {
+    mutationFn: (v: NoiseFeedback) => postJSON<NoiseFeedbackResult>(`${sys(id)}/noise/feedback`, v.operation ? v : { alert: v.alert, service: v.service, verdict: v.verdict }),
+    onMutate: async (v: NoiseFeedback) => {
+      await qc.cancelQueries({ queryKey: key })
+      const before = qc.getQueriesData<NoiseResponse>({ queryKey: key })
+      qc.setQueriesData<NoiseResponse>({ queryKey: key }, (d) => withFeedback(d, v))
+      return { before }
+    },
+    onSuccess: (res: NoiseFeedbackResult | undefined, v: NoiseFeedback) => {
+      // The core answers with the rule it counted (an aggregated rule loses the operation) and the totals.
+      const fb = res?.feedback
+      if (fb) qc.setQueriesData<NoiseResponse>({ queryKey: key }, (d) => mapRules(d, res.alert === undefined ? v : res, () => fb))
+      // Verdicts can change the noisy flag, which only the core decides.
+      void qc.invalidateQueries({ queryKey: key })
+    },
+    onError: (_e: Error, _v: NoiseFeedback, ctx?: { before: [QueryKey, NoiseResponse | undefined][] }) => {
+      for (const [k, d] of ctx?.before ?? []) qc.setQueryData(k, d)
+    },
+  }
+}
+
+export const useNoiseFeedback = (id: string) => {
+  const qc = useQueryClient()
+  return useMutation(noiseFeedbackOptions(qc, id))
+}
 
 export const validateSystem = (id: string, yaml: string) => postYAML<ValidationResult>(`${sys(id)}/validate`, yaml)
 

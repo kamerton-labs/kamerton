@@ -12,15 +12,11 @@ import { ApiError, backtestRule, type RuleBacktestResult } from '@/lib/api'
 import { useDebounced, useEditor } from '@/lib/editor'
 import { useT } from '@/i18n'
 import { cssColor } from '@/lib/format'
+import { RANGES, type Range } from '@/lib/model/noise'
 import { setRule, type RuleItem } from '@/lib/model/rules'
 import { writeDescriptionYaml } from '@/lib/model/yaml'
 import type { Description } from '@/lib/model/types'
-
-const RANGES = [
-  { v: '1d', label: 'backtest.range.1d' },
-  { v: '3d', label: 'backtest.range.3d' },
-  { v: '7d', label: 'backtest.range.7d' },
-] as const
+import RangeSwitch from './RangeSwitch'
 
 interface Props {
   rule: RuleItem
@@ -30,7 +26,7 @@ interface Props {
 
 export default function RuleBacktest({ rule, desc: override }: Props) {
   const { systemId, draft, desc } = useEditor()
-  const [range, setRange] = useState<(typeof RANGES)[number]['v']>('3d')
+  const [range, setRange] = useState<Range>('3d')
   const { t } = useT()
   const base = override ?? desc
   // The rule is tested as if it were on, so a person can try a threshold
@@ -60,19 +56,7 @@ export default function RuleBacktest({ rule, desc: override }: Props) {
         <div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
           <History className="size-3.5" /> {t('backtest.title')}
         </div>
-        <div className="flex gap-0.5 rounded-md bg-muted p-0.5" role="group" aria-label={t('backtest.period')}>
-          {RANGES.map((r) => (
-            <button
-              key={r.v}
-              type="button"
-              aria-pressed={range === r.v}
-              onClick={() => setRange(r.v)}
-              className={`rounded px-1.5 py-0.5 text-[11px] ${range === r.v ? 'bg-background font-medium shadow-sm' : 'text-muted-foreground'}`}
-            >
-              {t(r.label)}
-            </button>
-          ))}
-        </div>
+        <RangeSwitch value={range} onChange={setRange} label={t('backtest.period')} />
       </div>
       <Body q={q} rangeLabel={rangeLabel} />
     </div>

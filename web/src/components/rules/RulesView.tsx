@@ -2,15 +2,18 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 import { Fragment, useMemo, useState } from 'react'
-import { ChevronDown, Plus } from 'lucide-react'
+import { ChevronDown, Loader2, Plus } from 'lucide-react'
+import { Link, useSearchParams } from 'react-router'
 import { cn } from 'cn'
 import { SeverityBadge, StateDot } from '@/components/common'
 import { Button } from '@/components/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
+import { useNoise } from '@/lib/api'
 import { destinationName, useEditor } from '@/lib/editor'
 import { useT } from '@/i18n'
-import { deriveRules, generatedCount, kindLabel, ruleState, setRule, stateLabel, type RuleKind, type RuleState } from '@/lib/model/rules'
+import { deriveRules, formatDuration, generatedCount, kindLabel, ruleState, setRule, stateLabel, type RuleKind, type RuleState } from '@/lib/model/rules'
+import { NOISY_RANGE, noisyRules } from '@/lib/model/noise'
 import { receiversFor } from '@/lib/model/routing'
 import AddRuleDialog from './AddRuleDialog'
 import { RuleEditor } from './RuleCard'
@@ -18,17 +21,26 @@ import { RuleEditor } from './RuleCard'
 type StateFilter = 'all' | RuleState | 'off'
 
 export default function RulesView() {
-  const { desc, edit, readOnly, states, destinations, telegram, email } = useEditor()
+  const { systemId, desc, edit, readOnly, states, destinations, telegram, email } = useEditor()
   const [service, setService] = useState('all')
   const [kind, setKind] = useState<'all' | RuleKind>('all')
   const [state, setState] = useState<StateFilter>('all')
   const [open, setOpen] = useState<string | null>(null)
   const [creating, setCreating] = useState(false)
+  const [params, setParams] = useSearchParams()
+  const noisyOnly = params.get('noisy') === '1'
+  const noise = useNoise(systemId, NOISY_RANGE)
+  const noiseLoading = noise.isPending
   const { t, tn, lang } = useT()
   // eslint-disable-next-line react-hooks/exhaustive-deps -- sentences use the interface language, so recompute on a switch
   const all = useMemo(() => deriveRules(desc), [desc, lang])
   const kinds = useMemo(() => [...new Set(all.map((r) => r.kind))], [all])
+  const noisyIds = useMemo(() => new Set(noisyRules(all, noise.data?.available === false ? undefined : noise.data?.rules).map((r) => r.id)), [all, noise.data])
+  const setNoisy = (on: boolean) => setParams((p) => (on ? p.set('noisy', '1') : p.delete('noisy'), p), { replace: true })
+  const noisyLink = new URLSearchParams(params)
+  noisyLink.set('noisy', '1')
   const rows = all.filter((r) => {
+    if (noisyOnly && !noisyIds.has(r.id)) return false
     if (service !== 'all' && (r.system || r.service !== service)) return false
     if (kind !== 'all' && r.kind !== kind) return false
     if (state === 'off') return !r.enabled
@@ -47,6 +59,11 @@ export default function RulesView() {
             {tn('rules.enabledOf', generatedCount(all), { total: all.reduce((n, r) => n + r.alerts.length, 0) })}
             {states ? (firing ? ` · ${t('rules.firing', { n: firing })}` : ` · ${t('rules.nothingFiring')}`) : ` · ${t('rules.stateUnknown')}`}
           </p>
+          {noisyIds.size > 0 && !noisyOnly && (
+            <Link to={{ search: noisyLink.toString() }} replace className="text-sm text-muted-foreground underline-offset-2 hover:text-foreground hover:underline" data-testid="rules-noisy-summary">
+              {tn('rules.noisySummary', noisyIds.size)}
+            </Link>
+          )}
         </div>
         <Button onClick={() => setCreating(true)} disabled={readOnly}>
           <Plus /> {t('rules.create')}
@@ -92,8 +109,18 @@ export default function RulesView() {
             <SelectItem value="off">{t('rules.filter.off')}</SelectItem>
           </SelectContent>
         </Select>
-        {(service !== 'all' || kind !== 'all' || state !== 'all') && (
-          <Button variant="ghost" size="sm" onClick={() => (setService('all'), setKind('all'), setState('all'))}>
+        {(noisyIds.size > 0 || noisyOnly) && (
+          <Button variant="outline" size="sm" aria-pressed={noisyOnly} className="aria-pressed:bg-muted" onClick={() => setNoisy(!noisyOnly)} data-testid="rules-filter-noisy">
+            {t('rules.filter.noisy')}{' '}
+            {noiseLoading ? (
+              <Loader2 className="size-3 animate-spin text-muted-foreground" aria-label={t('noise.loading')} data-testid="rules-filter-noisy-loading" />
+            ) : (
+              <span className="text-muted-foreground tabular-nums">{noisyIds.size}</span>
+            )}
+          </Button>
+        )}
+        {(service !== 'all' || kind !== 'all' || state !== 'all' || noisyOnly) && (
+          <Button variant="ghost" size="sm" onClick={() => (setService('all'), setKind('all'), setState('all'), setNoisy(false))}>
             {t('rules.reset')}
           </Button>
         )}
@@ -109,7 +136,14 @@ export default function RulesView() {
           <span>{t('rules.col.to')}</span>
           <span />
         </div>
-        {rows.length === 0 && <p className="px-3 py-6 text-center text-sm text-muted-foreground">{t('rules.noneMatch')}</p>}
+        {rows.length === 0 &&
+          (noisyOnly && noiseLoading ? (
+            <p className="flex items-center justify-center gap-2 px-3 py-6 text-sm text-muted-foreground" data-testid="rules-noisy-loading">
+              <Loader2 className="size-4 animate-spin" /> {t('noise.loading')}
+            </p>
+          ) : (
+            <p className="px-3 py-6 text-center text-sm text-muted-foreground">{t('rules.noneMatch')}</p>
+          ))}
         {rows.map((r) => {
           const st = ruleState(r, states)
           const to = receiversFor(destinations, r.service, r.severity).map((d) => destinationName(d, telegram, email))
@@ -136,7 +170,15 @@ export default function RulesView() {
                     <span className="block truncate text-sm font-medium lg:text-foreground">{r.service}</span>
                   )}
                   <span className="block min-w-0">
-                    <span className="block text-xs text-muted-foreground">{kindLabel(r.kind)}</span>
+                    <span className="block text-xs text-muted-foreground">
+                      {kindLabel(r.kind)}
+                      {noisyIds.has(r.id) && (
+                        <span title={t('rules.noisyHint', { d: formatDuration(noise.data?.shortUnder ?? '5m') })} data-testid="rule-noisy">
+                          {' '}
+                          · {t('rules.noisy')}
+                        </span>
+                      )}
+                    </span>
                     <span className={cn('block text-sm', !r.enabled && 'line-through decoration-muted-foreground/40')}>{r.sentence}</span>
                   </span>
                   <span className="mt-1 flex flex-wrap items-center gap-2 lg:mt-0 lg:contents">

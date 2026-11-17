@@ -22,6 +22,7 @@ import (
 	"github.com/kamerton-labs/kamerton/internal/evidence"
 	"github.com/kamerton-labs/kamerton/internal/generator"
 	"github.com/kamerton-labs/kamerton/internal/rules"
+	"github.com/kamerton-labs/kamerton/internal/telegram"
 	"github.com/kamerton-labs/kamerton/internal/triage"
 )
 
@@ -49,7 +50,13 @@ const (
 )
 
 type TelegramSender interface {
-	SendFollowUp(ctx context.Context, ref v1alpha1.SecretKeyRef, chatID int64, html string) error
+	SendFollowUp(ctx context.Context, ref v1alpha1.SecretKeyRef, chatID int64, html string, kb telegram.Keyboard) error
+}
+
+// Feedback gives the "useful / noise" buttons of a follow-up about the given
+// root alerts; nil when there are none.
+type Feedback interface {
+	Buttons(ctx context.Context, sd *v1alpha1.SystemDescription, roots []triage.Alert) telegram.Keyboard
 }
 
 type EmailSender interface {
@@ -66,6 +73,8 @@ type Service struct {
 	// Telegram and Email are nil when that channel is unavailable.
 	Telegram TelegramSender
 	Email    EmailSender
+	// Feedback nil: follow-ups go without buttons.
+	Feedback Feedback
 	// State remembers incidents across restarts and replicas; nil: memory.
 	State StateStore
 	Delay time.Duration
@@ -426,13 +435,17 @@ func (s *Service) send(ctx context.Context, sd *v1alpha1.SystemDescription, inc 
 		return res
 	}
 	msg := generator.RenderFollowUp(f, lang, tz)
+	var kb telegram.Keyboard
+	if s.Feedback != nil && s.Telegram != nil && hasTelegram(recipients) {
+		kb = s.Feedback.Buttons(ctx, sd, inc.RootAlerts)
+	}
 	seenChat := map[int64]bool{}
 	for i := range recipients {
 		r := &recipients[i]
 		switch {
 		case r.Telegram != nil && s.Telegram != nil && !seenChat[r.Telegram.ChatID]:
 			seenChat[r.Telegram.ChatID] = true
-			if err := s.Telegram.SendFollowUp(ctx, r.Telegram.BotTokenSecret, r.Telegram.ChatID, msg.TelegramHTML); err != nil {
+			if err := s.Telegram.SendFollowUp(ctx, r.Telegram.BotTokenSecret, r.Telegram.ChatID, msg.TelegramHTML, kb); err != nil {
 				s.log().Warn("follow-up to Telegram failed", "system", sd.Name, "receiver", r.Name, "error", err)
 				continue
 			}
@@ -454,6 +467,15 @@ func (s *Service) send(ctx context.Context, sd *v1alpha1.SystemDescription, inc 
 	}
 	s.log().Info("follow-up sent", "system", sd.Name, "incident", inc.ID, "telegram", res.Telegram, "email", res.Email)
 	return res
+}
+
+func hasTelegram(recipients []v1alpha1.Receiver) bool {
+	for _, r := range recipients {
+		if r.Telegram != nil {
+			return true
+		}
+	}
+	return false
 }
 
 // explains finds earlier follow-ups whose roots this incident now explains:
@@ -776,7 +798,7 @@ func toTriage(fp string, labels, ann map[string]string, starts time.Time, muted 
 		title = ann["summary"]
 	}
 	return triage.Alert{
-		Fingerprint: fp, Name: labels["alertname"], Service: labels[rules.LabelService], Severity: labels[rules.LabelSeverity],
+		Fingerprint: fp, Name: labels["alertname"], Service: labels[rules.LabelService], Operation: labels[rules.LabelOperation], Severity: labels[rules.LabelSeverity],
 		StartsAt: starts, Title: title, Value: ann[rules.AnnotationValue], Muted: muted,
 	}
 }

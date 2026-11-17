@@ -41,6 +41,8 @@ type Service struct {
 	// PollTimeout is the getUpdates long-poll timeout. Default 25s.
 	PollTimeout time.Duration
 	Now         func() time.Time
+	// Callbacks handles presses of inline buttons; nil answers them with no text.
+	Callbacks CallbackHandler
 
 	once sync.Once
 	wake chan struct{}
@@ -917,7 +919,7 @@ func (s *Service) Start(ctx context.Context) error {
 			continue
 		}
 		lastHeartbeat = s.Now()
-		if err := s.process(ctx, ups, botID); err != nil {
+		if err := s.process(ctx, token, ups, botID); err != nil {
 			s.Logger.Warn("telegram: cannot store updates", "error", err)
 			s.sleep(ctx, backoff)
 		}
@@ -947,7 +949,7 @@ func (s *Service) recordPollError(ctx context.Context, err error) {
 
 type Migration struct{ From, To int64 }
 
-func (s *Service) process(ctx context.Context, ups []Update, botID int64) error {
+func (s *Service) process(ctx context.Context, token string, ups []Update, botID int64) error {
 	var migs []Migration
 	_, err := s.State.Update(ctx, func(st *State) error {
 		migs = migs[:0]
@@ -968,7 +970,56 @@ func (s *Service) process(ctx context.Context, ups []Update, botID int64) error 
 			s.Logger.Warn("telegram: cannot update description after chat migration", "from", m.From, "to", m.To, "error", err)
 		}
 	}
+	// After the offset is stored: a failed store re-reads the same updates,
+	// and a press must not count twice.
+	for _, u := range ups {
+		if u.CallbackQuery != nil {
+			s.handleCallback(ctx, token, u.CallbackQuery)
+		}
+	}
 	return nil
+}
+
+type CallbackHandler interface {
+	HandleCallback(ctx context.Context, chatID int64, data string) CallbackResult
+}
+
+type CallbackResult struct {
+	Text string
+	// Keyboard replaces the buttons of the message; nil leaves them.
+	Keyboard Keyboard
+}
+
+func (s *Service) handleCallback(ctx context.Context, token string, q *CallbackQuery) {
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	var res CallbackResult
+	if q.Message != nil && s.Callbacks != nil {
+		res = s.Callbacks.HandleCallback(ctx, q.Message.Chat.ID, q.Data)
+	}
+	if err := s.API.AnswerCallbackQuery(ctx, token, q.ID, res.Text); err != nil {
+		// Telegram rejects answers to presses older than about 15 seconds.
+		s.Logger.Debug("telegram: cannot answer a button press", "error", describeErr(err))
+	}
+	if res.Keyboard != nil && q.Message != nil {
+		if err := s.API.EditMessageKeyboard(ctx, token, q.Message.Chat.ID, q.Message.MessageID, res.Keyboard); err != nil {
+			s.Logger.Warn("telegram: cannot update the buttons of a message", "error", describeErr(err))
+		}
+	}
+}
+
+// IsReceiver reports whether the chat gets the alerts of sd through Kamerton's bot.
+func (s *Service) IsReceiver(sd *v1alpha1.SystemDescription, chatID int64) bool {
+	if sd == nil || sd.Spec.Notifications == nil {
+		return false
+	}
+	for i := range sd.Spec.Notifications.Receivers {
+		r := &sd.Spec.Notifications.Receivers[i]
+		if s.managed(r) && r.Telegram.ChatID == chatID {
+			return true
+		}
+	}
+	return false
 }
 
 // ApplyUpdate is exported for tests.
@@ -1214,7 +1265,7 @@ func uniqueSorted(in []string) []string {
 var ErrNotKamertonBot = errors.New("the receiver uses a bot token Secret Kamerton does not manage")
 
 // SendFollowUp uses only Kamerton's own token Secret, never another Secret named by ref.
-func (s *Service) SendFollowUp(ctx context.Context, ref v1alpha1.SecretKeyRef, chatID int64, htmlText string) error {
+func (s *Service) SendFollowUp(ctx context.Context, ref v1alpha1.SecretKeyRef, chatID int64, htmlText string, kb Keyboard) error {
 	s.init()
 	name, key := s.Tokens.Ref()
 	if ref.Name != name || ref.Key != key {
@@ -1224,5 +1275,5 @@ func (s *Service) SendFollowUp(ctx context.Context, ref v1alpha1.SecretKeyRef, c
 	if err != nil {
 		return err
 	}
-	return s.API.SendMessage(ctx, token, chatID, htmlText)
+	return s.API.SendMessageWithKeyboard(ctx, token, chatID, htmlText, kb)
 }

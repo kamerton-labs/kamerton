@@ -401,6 +401,51 @@ Grouping needs the Prometheus Operator to leave Kamerton's matchers alone
 (`alertmanagerConfigMatcherStrategy: None`, set by the bundled chart):
 span-metric alerts carry no `namespace` label.
 
+### Quieter rules
+
+A rule that fires forty times a week and clears by itself each time teaches
+people to ignore it. Kamerton counts this from the alert history in the
+system's Prometheus (`ALERTS`, `ALERTS_FOR_STATE`) and, for such a rule,
+suggests a change; nothing is changed until someone applies it.
+
+- **How often and how long.** For each rule over the last 1, 3 or 7 days:
+  how many times it fired, how many firings cleared within 5 minutes
+  ("short"), the longest firing and when it last fired.
+- **Consequences are not noise.** When `payment` is down, the error alerts
+  of `checkout` and `frontend` fire too, and Alertmanager mutes them by the
+  dependency grouping. Kamerton replays that muting on the history: such
+  firings (and per-service "no data" during the system-wide one) are
+  counted as `consequences` and take no part in what follows.
+- **Noisy.** Without verdicts: at least 10 firings in the window and at
+  least 3 a day on average, with three quarters of them short. A few short
+  real outages on a bad day are not noise; a rule flapping tens of times a
+  week is. Or at least 2 people said "noise" and they outnumber "useful";
+  the same number of "useful" outnumbering "noise" makes a rule not noisy
+  whatever its history.
+- **A suggestion.** For a noisy rule with a threshold or a pending period
+  (`for`), Kamerton runs the backtest with a few changes: first a threshold
+  at most 1.5 times higher (it adds no delay), then a longer `for` (1m, 2m,
+  3m, 5m, 10m; at most 3m for a critical rule, so it still pages within
+  about five minutes), then a threshold 2 or 3 times higher (lower for a
+  custom "less than" rule). It suggests the first change that would have
+  removed at least 80% of the short firings and still caught every firing
+  that lasted 10 minutes or more. A change that would never have fired is
+  offered only for a rule that fired at least 20 times; otherwise it just
+  switches the rule off. A longer `for` comes with its cost
+  (`delaySeconds`: how much later a real failure would be reported). The
+  value is written as the description field takes it
+  (`errorRate.threshold: 0.063`, `latency.for: 3m`,
+  `saturation.memory: 768Mi`), so applying it is an ordinary edit of the
+  description.
+- **Useful or noise.** The follow-up message in Telegram has two buttons,
+  "Useful" and "Noise" ("По делу" and "Шум" in Russian). A press counts for
+  the rules of the incident's root alerts; pressing the other button
+  changes the verdict. Presses count only from chats that get the system's
+  alerts through Kamerton's bot. The UI sends the same verdict through the
+  API. Kamerton keeps counters only, nothing about who pressed, in the
+  ConfigMap `kamerton-noise-state` (in memory without a cluster). The
+  alert message itself comes from Alertmanager and cannot have buttons.
+
 ### Login
 
 When login is on, the core has one shared user name and password, taken from

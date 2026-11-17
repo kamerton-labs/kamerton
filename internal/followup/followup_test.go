@@ -19,6 +19,8 @@ import (
 	"github.com/kamerton-labs/kamerton/internal/descstore"
 	"github.com/kamerton-labs/kamerton/internal/evidence"
 	"github.com/kamerton-labs/kamerton/internal/rules"
+	"github.com/kamerton-labs/kamerton/internal/telegram"
+	"github.com/kamerton-labs/kamerton/internal/triage"
 )
 
 var t0 = time.Date(2026, 11, 16, 4, 18, 0, 0, time.UTC)
@@ -27,6 +29,7 @@ type sentTelegram struct {
 	ref    v1alpha1.SecretKeyRef
 	chatID int64
 	html   string
+	kb     telegram.Keyboard
 }
 
 type fakeTelegram struct {
@@ -35,13 +38,13 @@ type fakeTelegram struct {
 	err  error
 }
 
-func (f *fakeTelegram) SendFollowUp(_ context.Context, ref v1alpha1.SecretKeyRef, chatID int64, html string) error {
+func (f *fakeTelegram) SendFollowUp(_ context.Context, ref v1alpha1.SecretKeyRef, chatID int64, html string, kb telegram.Keyboard) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.err != nil {
 		return f.err
 	}
-	f.sent = append(f.sent, sentTelegram{ref, chatID, html})
+	f.sent = append(f.sent, sentTelegram{ref, chatID, html, kb})
 	return nil
 }
 
@@ -346,5 +349,31 @@ func TestNewToken(t *testing.T) {
 	b, _ := NewToken()
 	if err != nil || len(a) != 64 || a == b {
 		t.Errorf("tokens %q %q %v", a, b, err)
+	}
+}
+
+type fakeFeedback struct{ roots []triage.Alert }
+
+func (f *fakeFeedback) Buttons(_ context.Context, _ *v1alpha1.SystemDescription, roots []triage.Alert) telegram.Keyboard {
+	f.roots = roots
+	return telegram.Keyboard{{{Text: "Useful", CallbackData: "kn:u-:abcdefghijklmnop"}, {Text: "Noise", CallbackData: "kn:n-:abcdefghijklmnop"}}}
+}
+
+func TestFollowUpCarriesFeedbackButtons(t *testing.T) {
+	h := newHarness(description("", nil))
+	fb := &fakeFeedback{}
+	h.svc.Feedback = fb
+	root := amAlert("payment", rules.AlertOperationErrorRate, 0, false)
+	root.Labels[rules.LabelOperation] = "Charge"
+	h.active = []alertmanager.Alert{root, amAlert("checkout", rules.AlertErrorRate, 1, true)}
+	res := h.svc.Process(context.Background(), hookFor(h.active[0]), t0.Add(5*time.Minute))
+	if len(res) != 1 || res[0].Telegram != 1 {
+		t.Fatalf("result = %+v", res)
+	}
+	if len(h.tg.sent) != 1 || len(h.tg.sent[0].kb) != 1 || h.tg.sent[0].kb[0][1].Text != "Noise" {
+		t.Errorf("telegram = %+v", h.tg.sent)
+	}
+	if len(fb.roots) != 1 || fb.roots[0].Name != rules.AlertOperationErrorRate || fb.roots[0].Service != "payment" || fb.roots[0].Operation != "Charge" {
+		t.Errorf("buttons asked about %+v", fb.roots)
 	}
 }
