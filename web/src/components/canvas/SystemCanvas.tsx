@@ -1,10 +1,8 @@
 // Copyright 2026 The Kamerton Authors
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// The system as a picture: services are nodes, "depends on" is an arrow
-// from the caller to the service it calls. Drag from the right edge of a
-// card to another card to add a dependency; drag cards to arrange them;
-// click a card to open its settings. The same picture shows live state.
+// The system as a picture: services are nodes, "depends on" is an arrow from
+// the caller to the service it calls. The same picture shows live state.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
@@ -174,7 +172,6 @@ function Canvas({ selected, onSelect }: Props) {
 
   return (
     <div className="relative flex h-full min-h-0">
-      {/* Palette */}
       <aside className={cn('hidden shrink-0 border-r bg-sidebar/60 transition-[width] md:block', paletteOpen ? 'w-64' : 'w-10')}>
         <div className="flex items-center justify-between px-2 py-2">
           {paletteOpen && <span className="pl-1 text-sm font-medium">{t('canvas.panel')}</span>}
@@ -245,7 +242,7 @@ function Canvas({ selected, onSelect }: Props) {
         )}
       </div>
 
-      {/* Service panel: a side panel on wide screens, a sheet over the canvas on narrow ones. */}
+      {/* A side panel on wide screens, a sheet over the canvas on narrow ones. */}
       {selected && (
         <aside className="absolute inset-y-0 right-0 z-20 w-full max-w-[400px] border-l bg-background shadow-lg">
           <ServicePanel key={selected} name={selected} onClose={() => onSelect(null)} onRenamed={(n) => onSelect(n)} />

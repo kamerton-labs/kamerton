@@ -98,7 +98,6 @@ func TestAuthEnabled(t *testing.T) {
 	const pass = "s3cret-pass"
 	srv := newAuthServer(t, NewAuth("admin", pass, ""))
 
-	// Without a session: API closed, probes and UI open.
 	resp, body := call(t, "GET", srv.URL+"/api/v1/systems", "")
 	if resp.StatusCode != 401 || !strings.Contains(body, `"code":"unauthorized"`) || !strings.HasPrefix(resp.Header.Get("Content-Type"), "application/json") {
 		t.Fatalf("systems without cookie: %d %s", resp.StatusCode, body)
@@ -118,7 +117,6 @@ func TestAuthEnabled(t *testing.T) {
 		t.Errorf("session before login: %s", body)
 	}
 
-	// Wrong credentials.
 	if resp, body := login(t, srv, "admin", "wrong"); resp.StatusCode != 401 || sessionCookie(resp) != nil || !strings.Contains(body, "invalid_credentials") {
 		t.Fatalf("wrong password: %d %s", resp.StatusCode, body)
 	}
@@ -126,13 +124,11 @@ func TestAuthEnabled(t *testing.T) {
 		t.Fatalf("wrong user: %d", resp.StatusCode)
 	}
 
-	// Login without the CSRF header is refused.
 	b, _ := json.Marshal(loginRequest{Username: "admin", Password: pass})
 	if resp, _ := call(t, "POST", srv.URL+"/api/auth/login", string(b)); resp.StatusCode != 403 {
 		t.Fatalf("login without X-Requested-With: %d", resp.StatusCode)
 	}
 
-	// Correct credentials.
 	resp, body = login(t, srv, "admin", pass)
 	c := sessionCookie(resp)
 	if resp.StatusCode != 200 || c == nil {
@@ -154,7 +150,6 @@ func TestAuthEnabled(t *testing.T) {
 		t.Errorf("settings: %s", body)
 	}
 
-	// CSRF: a state-changing request with a valid cookie but no header is refused.
 	if resp, _ := call(t, "POST", srv.URL+"/api/v1/description/validate", "x: 1", withCookie(c)); resp.StatusCode != 403 {
 		t.Errorf("mutation without X-Requested-With: %d", resp.StatusCode)
 	}
@@ -162,7 +157,6 @@ func TestAuthEnabled(t *testing.T) {
 		t.Errorf("mutation with X-Requested-With: %d", resp.StatusCode)
 	}
 
-	// Tampered cookies.
 	payload, sig, _ := strings.Cut(c.Value, ".")
 	for name, v := range map[string]string{
 		"bad signature": payload + "." + strings.Repeat("A", len(sig)),
@@ -174,7 +168,6 @@ func TestAuthEnabled(t *testing.T) {
 		}
 	}
 
-	// Logout clears the cookie.
 	resp, _ = call(t, "POST", srv.URL+"/api/auth/logout", "", withCookie(c), xrw)
 	if lc := sessionCookie(resp); resp.StatusCode != 200 || lc == nil || lc.MaxAge >= 0 || lc.Value != "" {
 		t.Errorf("logout: %d %+v", resp.StatusCode, lc)
@@ -198,13 +191,11 @@ func TestSessionToken(t *testing.T) {
 	if _, ok := a.verify(tok); ok {
 		t.Error("token accepted after 12h")
 	}
-	// The same secret on another replica accepts the token; another password does not change that.
 	b := NewAuth("admin", "changed", "explicit-secret")
 	b.now = a.now
 	if _, ok := b.verify(a.issue(now.Add(time.Hour))); !ok {
 		t.Error("token from a replica with the same secret rejected")
 	}
-	// Derived keys: same password → same key (restarts, replicas); changed password → sessions end.
 	d1, d2, d3 := NewAuth("admin", "pw", ""), NewAuth("admin", "pw", ""), NewAuth("admin", "pw2", "")
 	tok = d1.issue(time.Now().Add(time.Hour))
 	if _, ok := d2.verify(tok); !ok {
@@ -213,7 +204,6 @@ func TestSessionToken(t *testing.T) {
 	if _, ok := d3.verify(tok); ok {
 		t.Error("token valid after password change")
 	}
-	// A token for another user name, signed with the right key, is refused.
 	other := NewAuth("intruder", "pw", "explicit-secret")
 	other.now = a.now
 	if _, ok := a.verify(other.issue(now.Add(time.Hour))); ok {

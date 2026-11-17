@@ -56,8 +56,6 @@ func TestValidateExpr(t *testing.T) {
 	}
 }
 
-// Custom rules carry the same labels and plain-words annotations as
-// library rules and pass Prometheus' rule file validation.
 func TestCustomRule(t *testing.T) {
 	meta := Meta{Service: "checkout", Severity: "critical", For: 5 * time.Minute, RunbookURL: "http://k/runbooks/checkout", RunbookPerAlert: true,
 		Labels: map[string]string{"kamerton_system": "shop"}, Language: LanguageRussian}

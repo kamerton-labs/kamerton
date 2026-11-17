@@ -14,15 +14,8 @@ import (
 // nullReceiver swallows alerts that match no severity route.
 const nullReceiver = "kamerton-null"
 
-// alertmanagerConfig renders the spec of a prometheus-operator
-// AlertmanagerConfig (monitoring.coreos.com/v1alpha1). Credentials are
-// referenced by Secret key selectors and never copied into the config.
-//
-// Telegram and email receivers use Kamerton's message templates (message.go).
-// They keep receiving notifications straight from Alertmanager, so alerts
-// arrive while Kamerton itself is down. With Options.Webhook set, a child
-// route also sends every group to Kamerton (webhook.go), which follows up
-// with evidence; inhibit rules (inhibit.go) group alerts by cause.
+// alertmanagerConfig references credentials only through Secret key selectors, never copies
+// them. Receivers get alerts straight from Alertmanager, so alerts arrive while Kamerton is down.
 func (g *gen) alertmanagerConfig() map[string]any {
 	n := g.spec.Notifications
 	if n == nil || len(n.Receivers) == 0 {
@@ -68,7 +61,7 @@ func (g *gen) alertmanagerConfig() map[string]any {
 	}
 	webhook := g.webhookReceiver()
 	if webhook != nil {
-		// Last and with continue: the routes above deliver exactly as before.
+		// Last and with continue, so it does not change delivery by the routes above.
 		routes = append(routes, map[string]any{"receiver": webhookReceiver, "continue": true})
 	}
 	msg := buildMessages(g.language(), g.opts.RunbookBaseURL, newZoneClock(n.TimeZone, g.now()))
@@ -134,7 +127,6 @@ func matcher(name, value string) map[string]any {
 	return map[string]any{"name": name, "value": value, "matchType": "="}
 }
 
-// regexMatcher matches any of the exact values.
 func regexMatcher(name string, values []string) map[string]any {
 	quoted := make([]string, len(values))
 	for i, v := range values {

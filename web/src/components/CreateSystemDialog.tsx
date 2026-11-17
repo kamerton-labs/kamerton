@@ -1,10 +1,6 @@
 // Copyright 2026 The Kamerton Authors
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// "Add system": a name, an optional description, and services to
-// start with (from telemetry when Prometheus is connected). Rules for them
-// are created by Kamerton's defaults; the person tunes them on the canvas.
-
 import { useState } from 'react'
 import { useNavigate } from 'react-router'
 import { stringify } from 'yaml'

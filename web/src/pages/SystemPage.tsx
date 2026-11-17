@@ -1,9 +1,8 @@
 // Copyright 2026 The Kamerton Authors
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// One system: the schema (canvas), the list of rules and the YAML text, all
-// editing the same draft. YAML stays the stored truth: the canvas and the
-// rule editors write their changes into it; "Save" stores it.
+// One system: canvas, rules and YAML all edit the same draft. YAML is the
+// stored truth; the visual editors write their changes into it.
 
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
@@ -160,7 +159,6 @@ function Editor({ data }: { data: SystemResponse }) {
 
   return (
     <div className="flex h-[calc(100svh-3.5rem)] min-h-0 flex-col md:h-svh">
-      {/* Header */}
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b px-3 py-2 md:px-4">
         <Button variant="ghost" size="icon-sm" asChild aria-label={t('system.backToList')}>
           <Link to="/">
@@ -227,7 +225,6 @@ function Editor({ data }: { data: SystemResponse }) {
         </div>
       </div>
 
-      {/* Notices */}
       {(syntaxError || issues.length > 0 || saveError || !data.writable || del.isError || missingStack) && (
         <div className="space-y-2 border-b bg-muted/20 px-3 py-2 md:px-4">
           {syntaxError && (
@@ -267,7 +264,6 @@ function Editor({ data }: { data: SystemResponse }) {
         </div>
       )}
 
-      {/* Body */}
       <div className="min-h-0 flex-1 overflow-hidden">
         {!ctx ? (
           view === 'yaml' ? null : (

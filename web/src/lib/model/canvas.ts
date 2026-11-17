@@ -2,11 +2,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 // Description <-> canvas. Services are nodes, dependsOn entries are edges
-// (caller -> dependency). Node positions are kept in the annotation
-// kamerton.dev/layout of the description's metadata: the layout is part of
-// the stored document (so it survives restarts and is shared by everyone who
-// opens the system) but stays out of spec, so it never changes what is
-// generated and a hand-written description without it still works.
+// (caller -> dependency). Positions live in the metadata annotation
+// kamerton.dev/layout: stored with the document but outside spec, so they
+// never change what is generated.
 
 import { clone, type Description, type Service } from './types'
 
@@ -67,11 +65,7 @@ export function writeLayout(desc: Description, positions: Positions): Descriptio
   return next
 }
 
-/**
- * Layered arrangement: callers on the left, their dependencies to the
- * right (column = longest call chain leading to the service), rows sorted
- * so that services with the same callers stay close.
- */
+/** Layered layout: column is the longest call chain leading to the service. */
 export function autoArrange(services: Service[]): Positions {
   const names = new Set(services.map((s) => s.name))
   const callers = new Map<string, string[]>()
@@ -120,11 +114,7 @@ export function autoArrange(services: Service[]): Positions {
   return out
 }
 
-/**
- * Positions of all services: stored ones from the layout; when nothing is
- * stored, an automatic arrangement; services added without a position go
- * in a row under the others.
- */
+/** Stored positions, or an automatic layout when none are stored. Services without a position go in a row below. */
 export function positionsOf(desc: Description): Positions {
   const stored = readLayout(desc)
   const services = desc.spec.services
@@ -143,7 +133,6 @@ export function positionsOf(desc: Description): Positions {
 
 export const edgeId = (from: string, to: string) => `${from}->${to}`
 
-/** Converts a description to canvas nodes and edges. */
 export function toCanvas(desc: Description): { nodes: CanvasNode[]; edges: CanvasEdge[] } {
   const pos = positionsOf(desc)
   const names = new Set(desc.spec.services.map((s) => s.name))
@@ -154,12 +143,7 @@ export function toCanvas(desc: Description): { nodes: CanvasNode[]; edges: Canva
   return { nodes, edges }
 }
 
-/**
- * Applies the canvas back to the description: the set of services (nodes;
- * a node unknown to base brings its service), dependencies (edges, keeping
- * the order of existing ones) and positions (layout annotation). Everything
- * else in the description is kept as is.
- */
+/** Applies nodes, edges and positions back to base. Everything else in the description is kept. */
 export function fromCanvas(base: Description, nodes: CanvasNode[], edges: CanvasEdge[]): Description {
   const next = clone(base)
   const ids = new Set(nodes.map((n) => n.id))
@@ -202,8 +186,6 @@ function pruneRemoved(next: Description, base: Description): Description {
   }
   return next
 }
-
-// ---- Operations used by the editor ----
 
 export function addService(desc: Description, service: Service, at?: Point): Description {
   const next = clone(desc)

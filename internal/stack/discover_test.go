@@ -26,8 +26,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 )
 
-// Fake programs: each answers its own health and identity endpoints the way
-// the real program does.
 func fakeProgram(kind string, ready bool) http.Handler {
 	mux := http.NewServeMux()
 	status := func(w http.ResponseWriter) {
@@ -77,8 +75,8 @@ func fakeProgram(kind string, ready bool) http.Handler {
 	return mux
 }
 
-// routedClient sends requests for in-cluster names to the fake servers;
-// unknown hosts fail to connect, like a service with nothing behind it.
+// routedClient fails to connect to unknown hosts, like a service with nothing
+// behind it.
 func routedClient(t *testing.T, routes map[string]http.Handler) *http.Client {
 	t.Helper()
 	addrs := map[string]string{}
@@ -117,7 +115,6 @@ func TestCheck(t *testing.T) {
 		if r.State != StateNotReady || !r.Identified || r.Healthy {
 			t.Errorf("%s not ready: %+v", k, r)
 		}
-		// Every other program is "not this one".
 		for _, other := range Kinds {
 			if other == k {
 				continue
@@ -316,7 +313,6 @@ func TestDiscover(t *testing.T) {
 		t.Errorf("found must be ordered by kind: %+v", res.Found)
 	}
 
-	// Operator resources: selectors turned into labels.
 	if !res.Operator.Available || len(res.Operator.Prometheuses) != 3 || len(res.Operator.Alertmanagers) != 1 {
 		t.Fatalf("operator: %+v", res.Operator)
 	}
@@ -335,7 +331,6 @@ func TestDiscover(t *testing.T) {
 		t.Errorf("two Prometheus selecting everything must be warned about: %v", res.Warnings)
 	}
 
-	// Per-set warnings.
 	set := &Resolved{ID: "team-a", Programs: []Program{{Kind: KindPrometheus, URL: "http://prometheus-operated.team-a.svc:9090"}, {Kind: KindAlertmanager, URL: "http://alertmanager-operated.monitoring:9093"}},
 		RuleLabels: map[string]string{"team": "a"}}
 	w := SetWarnings(set, &res.Operator)
@@ -356,8 +351,7 @@ func TestDiscoverDegrades(t *testing.T) {
 	ctx := context.Background()
 	httpc := routedClient(t, discoveryRoutes())
 
-	// No Prometheus Operator CRDs (the API server's REST mapper knows no
-	// such kind): services are still found.
+	// The REST mapper knows no Prometheus Operator kinds: services are still found.
 	noCRD := interceptor.Funcs{List: func(ctx context.Context, cl client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
 		if u, ok := list.(*unstructured.UnstructuredList); ok {
 			gvk := u.GroupVersionKind()
@@ -379,7 +373,6 @@ func TestDiscoverDegrades(t *testing.T) {
 		}
 	}
 
-	// No permission to read the CRs.
 	forbidCR := interceptor.Funcs{List: func(ctx context.Context, cl client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
 		if _, ok := list.(*unstructured.UnstructuredList); ok {
 			return apierrors.NewForbidden(schema.GroupResource{Group: "monitoring.coreos.com", Resource: "prometheuses"}, "", nil)
@@ -395,7 +388,6 @@ func TestDiscoverDegrades(t *testing.T) {
 		t.Errorf("forbidden CRs: %+v", res.Operator)
 	}
 
-	// No permission to list services: a plain-words error.
 	forbidSvc := interceptor.Funcs{List: func(ctx context.Context, cl client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
 		return apierrors.NewForbidden(schema.GroupResource{Resource: "services"}, "", nil)
 	}}

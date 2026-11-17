@@ -1,11 +1,7 @@
 // Copyright 2026 The Kamerton Authors
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// Package schema holds the JSON Schema of the system description and validates
-// documents against it.
-//
-// The schema file is generated (make generate) from the CRD, which in turn is
-// generated from the Go types in api/v1alpha1. Do not edit it by hand.
+// Package schema holds the description's JSON Schema, generated from the CRD by make generate.
 package schema
 
 //go:generate go run ../../hack/schemagen -crd ../../deploy/helm/kamerton/crds/kamerton.dev_systemdescriptions.yaml -out systemdescription.schema.json
@@ -24,14 +20,11 @@ import (
 //go:embed systemdescription.schema.json
 var schemaJSON []byte
 
-// JSON returns the JSON Schema document.
 func JSON() []byte { return schemaJSON }
 
-// Violation is a single schema validation failure.
 type Violation struct {
 	// Path is a JSON pointer into the document, for example /spec/services/0/type.
-	Path string `json:"path"`
-	// Message is a human-readable description of the problem.
+	Path    string `json:"path"`
 	Message string `json:"message"`
 }
 
@@ -58,9 +51,6 @@ func compiledSchema() (*jsonschema.Schema, error) {
 	return compiled, compileErr
 }
 
-// Validate checks a decoded JSON document (as produced by
-// jsonschema.UnmarshalJSON or encoding/json into any) against the schema.
-// It returns nil when the document is valid.
 func Validate(instance any) ([]Violation, error) {
 	sch, err := compiledSchema()
 	if err != nil {

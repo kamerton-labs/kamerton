@@ -14,17 +14,14 @@ import (
 	"github.com/kamerton-labs/kamerton/internal/description"
 )
 
-// TraceQuery is the TraceQL query of failing traces of a service: spans of
-// the service (OpenTelemetry resource attribute service.name, the name the
-// span metrics carry) with status error.
+// TraceQuery selects error spans by resource attribute service.name, the name the
+// span metrics carry.
 func TraceQuery(svc *v1alpha1.Service) string {
 	return `{resource.service.name=` + strconv.Quote(description.TelemetryName(svc)) + ` && status=error}`
 }
 
-// TraceURL links to failing traces of a service in Grafana Explore with the
-// Tempo data source, from shortly before since to now. Empty without a
-// Grafana address people can open (Collector.GrafanaURL) or when span
-// metrics are turned off for the system.
+// TraceURL links to failing traces in Grafana Explore. It is empty without a
+// GrafanaURL or when span metrics are turned off.
 func (c *Collector) TraceURL(sd *v1alpha1.SystemDescription, svc *v1alpha1.Service, since, now time.Time) string {
 	base := strings.TrimRight(strings.TrimSpace(c.GrafanaURL), "/")
 	if base == "" {

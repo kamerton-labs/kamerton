@@ -1,9 +1,6 @@
 // Copyright 2026 The Kamerton Authors
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// Login with the shared user name and password set on the core
-// (KAMERTON_AUTH_USER / KAMERTON_AUTH_PASSWORD).
-
 import { useState, type FormEvent } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { CircleAlert, LogIn } from 'lucide-react'

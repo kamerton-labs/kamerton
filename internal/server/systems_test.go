@@ -93,9 +93,6 @@ type systemList struct {
 	} `json:"systems"`
 }
 
-// TestSystemsFileMode walks the system-scoped API over a directory of
-// description files: list, create, read, save, validate, preview,
-// backtest, rule states, discovery, runbooks, alerts and delete.
 func TestSystemsFileMode(t *testing.T) {
 	dir := t.TempDir()
 	example, err := os.ReadFile("../../testdata/otel-demo/system.yaml")
@@ -126,7 +123,6 @@ func TestSystemsFileMode(t *testing.T) {
 		t.Errorf("otel-demo summary: %+v", s)
 	}
 
-	// Create.
 	if code, body := do(t, "POST", api+"/systems", shopYAML); code != http.StatusCreated {
 		t.Fatalf("create: %d %s", code, body)
 	}
@@ -147,7 +143,6 @@ func TestSystemsFileMode(t *testing.T) {
 		}
 	}
 
-	// Read and save: the text (comments, layout annotation) is stored as sent.
 	code, body := get(t, api+"/systems/shop")
 	if code != 200 || !strings.Contains(body, "comment kept verbatim") || !strings.Contains(body, `"valid":true`) {
 		t.Errorf("get: %d %s", code, body)
@@ -169,7 +164,6 @@ func TestSystemsFileMode(t *testing.T) {
 		t.Errorf("invalid save: %d %s", code, body)
 	}
 
-	// The broken file can be read (for YAML mode) and fixed.
 	code, body = get(t, api+"/systems/broken")
 	if code != 200 || !strings.Contains(body, `"valid":false`) || !strings.Contains(body, "/spec/services") {
 		t.Errorf("broken get: %d %s", code, body)
@@ -179,19 +173,16 @@ func TestSystemsFileMode(t *testing.T) {
 		t.Errorf("fix broken: %d %s", code, body)
 	}
 
-	// Validate a draft; renaming is an error.
 	_, body = do(t, "POST", api+"/systems/shop/validate", strings.Replace(shopYAML, "name: shop", "name: x", 1))
 	if !strings.Contains(body, `"valid":false`) || !strings.Contains(body, "/metadata/name") {
 		t.Errorf("validate rename: %s", body)
 	}
 
-	// Preview of the stored description (empty body) and of a draft.
 	_, body = do(t, "POST", api+"/systems/shop/rules/preview", "")
 	if !strings.Contains(body, "KamertonErrorRateHigh") {
 		t.Errorf("preview stored: %.300s", body)
 	}
 
-	// Backtest of a rule of a draft with a changed threshold.
 	draftYAML := strings.Replace(shopYAML, "critical: true", "critical: true\n      errorRate: {threshold: 0.1, for: 10m}", 1)
 	req, _ := json.Marshal(map[string]any{"yaml": draftYAML, "service": "api", "alert": "KamertonErrorRateHigh", "range": "1d"})
 	code, body = do(t, "POST", api+"/systems/shop/backtest", string(req))
@@ -210,13 +201,11 @@ func TestSystemsFileMode(t *testing.T) {
 		t.Errorf("backtest of a rule that does not exist: %d", code)
 	}
 
-	// Rule states from ALERTS.
 	_, body = get(t, api+"/systems/shop/rules/state")
 	if !strings.Contains(body, `"reachable":true`) || !strings.Contains(body, `"state":"firing"`) {
 		t.Errorf("rule states: %s", body)
 	}
 
-	// Discovery is relative to the system.
 	_, body = get(t, api+"/systems/shop/discovery")
 	var disc struct {
 		Services []struct {
@@ -235,7 +224,6 @@ func TestSystemsFileMode(t *testing.T) {
 		}
 	}
 
-	// Runbooks: system-scoped, and the old link without a system finds it.
 	if code, body := get(t, api+"/systems/otel-demo/runbooks/checkout"); code != 200 || !strings.Contains(body, `"systemID":"otel-demo"`) {
 		t.Errorf("system runbook: %d %.200s", code, body)
 	}
@@ -243,18 +231,15 @@ func TestSystemsFileMode(t *testing.T) {
 		t.Errorf("legacy runbook lookup: %d %.200s", code, body)
 	}
 
-	// Alerts carry the plain-words annotations.
 	_, body = get(t, api+"/systems/shop/alerts")
 	if !strings.Contains(body, `"title":"Много ошибочных запросов"`) || !strings.Contains(body, `"system":"shop"`) || !strings.Contains(body, `"threshold":"5%"`) {
 		t.Errorf("alerts: %s", body)
 	}
 
-	// The legacy endpoint keeps working on the default system.
 	if _, body := get(t, api+"/description"); !strings.Contains(body, `"isTemplate":false`) {
 		t.Errorf("legacy description: %.200s", body)
 	}
 
-	// Delete.
 	if code, body := do(t, "DELETE", api+"/systems/shop", ""); code != 200 {
 		t.Fatalf("delete: %d %s", code, body)
 	}
@@ -266,8 +251,6 @@ func TestSystemsFileMode(t *testing.T) {
 	}
 }
 
-// Several files given explicitly (no directory) also work; new systems go
-// next to the first file.
 func TestSystemsSeveralFiles(t *testing.T) {
 	dir := t.TempDir()
 	a := filepath.Join(dir, "a.yaml")
@@ -299,9 +282,6 @@ func TestSystemsSeveralFiles(t *testing.T) {
 	}
 }
 
-// Custom rules go through the API like any other part of the description:
-// saved, generated next to library rules, and rejected with the parser's
-// error at the right path when the expression is wrong.
 func TestCustomRuleThroughAPI(t *testing.T) {
 	dir := t.TempDir()
 	_ = os.WriteFile(filepath.Join(dir, "shop.yaml"), []byte(shopYAML), 0o600)
@@ -344,8 +324,6 @@ func TestCustomRuleThroughAPI(t *testing.T) {
 	}
 }
 
-// In a cluster every SystemDescription is a system; saving keeps
-// Kamerton's annotations (layout) and leaves other metadata alone.
 func TestSystemsClusterMode(t *testing.T) {
 	otel, _, err := description.LoadFile("../../testdata/otel-demo/system.yaml")
 	if err != nil {
@@ -369,7 +347,6 @@ func TestSystemsClusterMode(t *testing.T) {
 		t.Fatalf("list: %s", body)
 	}
 
-	// Create in Kamerton's namespace.
 	if code, body := do(t, "POST", api+"/systems", shopYAML); code != http.StatusCreated {
 		t.Fatalf("create: %d %s", code, body)
 	}
@@ -405,7 +382,6 @@ func TestSystemsClusterMode(t *testing.T) {
 		t.Error("the description with the same name in another namespace was changed")
 	}
 
-	// Removing the layout from the document removes the annotation.
 	noLayout := strings.Replace(changed, "    kamerton.dev/layout: '{\"frontend\":[1,2]}'\n", "", 1)
 	if code, body := do(t, "PUT", api+"/systems/otel-demo~kamerton", noLayout); code != 200 {
 		t.Fatalf("put: %d %s", code, body)
@@ -415,7 +391,6 @@ func TestSystemsClusterMode(t *testing.T) {
 		t.Errorf("layout not removed: %v", otel2.Annotations)
 	}
 
-	// Delete.
 	if code, body := do(t, "DELETE", api+"/systems/shop", ""); code != 200 {
 		t.Fatalf("delete: %d %s", code, body)
 	}

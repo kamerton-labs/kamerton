@@ -16,11 +16,8 @@ import (
 	"github.com/kamerton-labs/kamerton/internal/email"
 )
 
-// ---- Email ----
-//
-// No handler here ever writes the SMTP password to a response or a log. It
-// arrives only in PUT /email/server and goes to the SMTP check and the
-// password store (a Kubernetes Secret).
+// No handler here writes the SMTP password to a response or a log. It arrives
+// only in PUT /email/server and goes to the SMTP check and the password store.
 
 func (s *Server) emailReady(w http.ResponseWriter) bool {
 	if s.opts.Email == nil {

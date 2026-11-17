@@ -42,9 +42,8 @@ func TestZoneClockSegments(t *testing.T) {
 	}
 }
 
-// shown is a Telegram or email HTML message as the reader sees it:
-// html/template writes "+" as the numeric entity &#43;, which Telegram's
-// HTML parse mode and mail clients display as "+".
+// shown is a message as the reader sees it: html/template writes "+" as &#43;,
+// which Telegram and mail clients display as "+".
 func shown(t *testing.T, tpl string, d amData) string {
 	t.Helper()
 	out := execHTML(t, tpl, d)
@@ -52,7 +51,6 @@ func shown(t *testing.T, tpl string, d amData) string {
 	return html.UnescapeString(out)
 }
 
-// zoneData is one firing alert per start time, with the team's text using {since}.
 func zoneData(status string, starts ...time.Time) amData {
 	d := sampleData(len(starts), status)
 	for i, s := range starts {
@@ -76,14 +74,12 @@ func TestNotificationTimesInNamedZone(t *testing.T) {
 	if strings.Contains(tg, "14:03") {
 		t.Errorf("UTC time left in the message:\n%s", tg)
 	}
-	// The email bodies use the same clock.
 	if txt := execText(t, m.EmailText, d); !strings.Contains(txt, "с 19:03 15.11 UTC+5") || !strings.Contains(txt, "Началось в 19:03 15.11 UTC+5") {
 		t.Errorf("email text:\n%s", txt)
 	}
 	if h := html.UnescapeString(execHTML(t, m.EmailHTML, d)); !strings.Contains(h, "19:03 15.11 UTC+5") {
 		t.Errorf("email html:\n%s", h)
 	}
-	// Resolved: start and end.
 	r := shown(t, m.TelegramHTML, sampleData(1, "resolved"))
 	if !strings.Contains(r, "с 19:03 15.11 UTC+5 до 19:13 15.11 UTC+5") {
 		t.Errorf("resolved:\n%s", r)
@@ -110,7 +106,6 @@ func TestNotificationTimesAcrossDaylightSaving(t *testing.T) {
 		time.Date(2028, 10, 29, 0, 59, 0, 0, time.UTC), // just before the autumn change of 2028
 		time.Date(2028, 10, 29, 1, 0, 0, 0, time.UTC),  // at it
 	}
-	// A grouped message (several alerts) lists each with its own offset.
 	out := shown(t, m.TelegramHTML, zoneData("firing", starts...))
 	for _, want := range []string{
 		"с 01:30 29.03 UTC+1",
@@ -124,11 +119,9 @@ func TestNotificationTimesAcrossDaylightSaving(t *testing.T) {
 			t.Errorf("lacks %q:\n%s", want, out)
 		}
 	}
-	// The grouped message stays compact: no team's text, title and value only.
 	if strings.Count(out, "Много ошибочных запросов") != len(starts) {
 		t.Errorf("grouped message:\n%s", out)
 	}
-	// Resolved across the change: the end has the new offset.
 	r := execText(t, m.EmailText, zoneData("resolved", time.Date(2026, 10, 25, 0, 55, 0, 0, time.UTC)))
 	if !strings.Contains(r, "с 02:55 25.10 UTC+2 до 02:05 25.10 UTC+1") {
 		t.Errorf("resolved across the autumn change:\n%s", r)

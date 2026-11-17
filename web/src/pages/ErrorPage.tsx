@@ -1,8 +1,7 @@
 // Copyright 2026 The Kamerton Authors
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// Shown instead of a screen that failed to render or to load (for example a
-// code chunk of an older build after Kamerton was updated).
+// Also shown when a code chunk of an older build fails to load after an update.
 
 import { useRouteError } from 'react-router'
 import { Button } from '@/components/ui/button'

@@ -11,58 +11,37 @@ import (
 	"github.com/kamerton-labs/kamerton/internal/rules"
 )
 
-// Incidents group the active alerts of one system by cause.
-//
-// A symptom alert (rules.IsSymptom) of a service that calls a dependency
-// with a symptom alert of its own is a consequence: the generated
-// Alertmanager inhibit rules mute it, and here it is listed as "also
-// affected" under the dependency. Following such links down to services
-// whose dependencies have no symptom alerts gives the roots. Both use the
-// same links (MutingEdges), so what the UI calls "also affected" is exactly
-// what Alertmanager mutes when grouping by cause is on.
-//
-// Roots that share an affected service form one incident (checkout fails
-// because both cart and payment are down). Alerts that are not symptoms stay
-// with their service: in the incident where the service is a root or
-// affected, or in an incident of their own.
+// A symptom alert of a service whose dependency also has one is a consequence:
+// inhibit rules mute it and it is listed as affected. Both use MutingEdges, so
+// "also affected" in the UI is exactly what Alertmanager mutes.
 
-// Alert is one active alert of a system, as Alertmanager reports it.
 type Alert struct {
 	Fingerprint string    `json:"fingerprint,omitempty"`
 	Name        string    `json:"name"`
 	Service     string    `json:"service"`
 	Severity    string    `json:"severity"`
 	StartsAt    time.Time `json:"startsAt"`
-	// Title and Value are the plain-words annotations of the rule.
-	Title string `json:"title,omitempty"`
-	Value string `json:"value,omitempty"`
-	// Muted is true when Alertmanager inhibits the alert (it is not
-	// delivered while the cause is firing).
+	Title       string    `json:"title,omitempty"`
+	Value       string    `json:"value,omitempty"`
+	// Muted means Alertmanager inhibits the alert while its cause fires.
 	Muted bool `json:"muted"`
 }
 
-// Incident is one cause and its consequences.
 type Incident struct {
-	// ID is stable while the roots stay the same: system and roots.
-	ID     string `json:"id"`
-	System string `json:"system"`
-	// Roots are the services where the problem probably starts.
-	Roots []string `json:"roots"`
-	// RootAlerts are the alerts of the roots.
-	RootAlerts []Alert `json:"rootAlerts"`
-	// Affected are the services whose symptom alerts follow from the roots
-	// (muted in Alertmanager when grouping by cause is on).
-	Affected []string `json:"affected"`
-	// AffectedAlerts are the alerts of the affected services.
-	AffectedAlerts []Alert `json:"affectedAlerts"`
-	// StartsAt is the start of the earliest root alert.
-	StartsAt time.Time `json:"startsAt"`
+	// ID is system plus roots, so it is stable while the roots stay the same.
+	ID         string   `json:"id"`
+	System     string   `json:"system"`
+	Roots      []string `json:"roots"`
+	RootAlerts []Alert  `json:"rootAlerts"`
+	// Affected services' symptom alerts are muted in Alertmanager when grouping by cause is on.
+	Affected       []string  `json:"affected"`
+	AffectedAlerts []Alert   `json:"affectedAlerts"`
+	StartsAt       time.Time `json:"startsAt"`
 }
 
-// MutingEdges maps a service to the services that call it directly
-// (dependsOn), the callers whose symptom alerts it mutes. Links inside a
-// dependency cycle are left out: two services that call each other would
-// otherwise mute each other and nobody would be told. Lists are sorted.
+// MutingEdges maps a service to its direct callers, whose symptom alerts it mutes.
+// Links inside a dependency cycle are left out: two services calling each other
+// would mute each other and nobody would be told. Lists are sorted.
 func (g *Graph) MutingEdges() map[string][]string {
 	comp := g.components()
 	out := map[string][]string{}
@@ -89,9 +68,8 @@ func appendUnique(list []string, v string) []string {
 	return append(list, v)
 }
 
-// components numbers the strongly connected components of the declared
-// graph (Tarjan's algorithm, iterative so a long chain cannot overflow the
-// stack). Services in one cycle share a number.
+// components numbers strongly connected components (iterative Tarjan, so a long
+// chain cannot overflow the stack). Services in one cycle share a number.
 func (g *Graph) components() map[string]int {
 	names := make([]string, 0, len(g.deps))
 	for n := range g.deps {
@@ -161,8 +139,7 @@ func (g *Graph) components() map[string]int {
 	return comp
 }
 
-// Incidents groups the alerts of one system (muted ones included) by cause.
-// The result is sorted by start time, then ID.
+// Incidents groups alerts, muted ones included, by cause, sorted by start time, then ID.
 func (g *Graph) Incidents(system string, alerts []Alert) []Incident {
 	callers := g.MutingEdges()
 	// deps restricted to muting links: service -> dependencies it is muted by.
@@ -197,7 +174,6 @@ func (g *Graph) Incidents(system string, alerts []Alert) []Incident {
 		}
 		return true
 	}
-	// rootsOf returns the roots reachable from s over symptomatic links.
 	memo := map[string][]string{}
 	var rootsOf func(s string, visiting map[string]bool) []string
 	rootsOf = func(s string, visiting map[string]bool) []string {
@@ -307,7 +283,6 @@ func (g *Graph) Incidents(system string, alerts []Alert) []Incident {
 	return out
 }
 
-// IncidentOf returns the incident that holds an alert of service, or nil.
 func IncidentOf(incidents []Incident, service string) *Incident {
 	for i := range incidents {
 		for _, r := range incidents[i].Roots {

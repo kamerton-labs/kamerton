@@ -1,12 +1,9 @@
 // Copyright 2026 The Kamerton Authors
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// Russian hints for the YAML editor, part of the Russian dictionary. The JSON
-// Schema is generated from the Go types and its descriptions are English
-// (they also serve kubectl explain and other editors), so in English the
-// editor shows them as they are. In Russian the hints come from this map,
-// keyed by "parent.field" first and then by field; a field missing here falls
-// back to the schema's English description.
+// Russian hints for the YAML editor. Schema descriptions are generated from
+// the Go types in English and shown as is in English. Lookup is by
+// "parent.field", then by field; a missing field falls back to the English text.
 
 const byPath: Record<string, string> = {
   'metadata.name': 'Имя системы: латиница в нижнем регистре, цифры, дефис и точка.',

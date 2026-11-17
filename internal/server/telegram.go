@@ -19,8 +19,6 @@ import (
 	"github.com/kamerton-labs/kamerton/internal/telegram"
 )
 
-// ---- Settings ----
-
 func (s *Server) settings(w http.ResponseWriter, _ *http.Request) {
 	ext := strings.TrimRight(s.opts.Generator.RunbookBaseURL, "/")
 	reason := ""
@@ -45,8 +43,6 @@ func (s *Server) settings(w http.ResponseWriter, _ *http.Request) {
 	})
 }
 
-// ---- Runbooks ----
-
 type runbookAlert struct {
 	Alert     string `json:"alert"`
 	Severity  string `json:"severity"`
@@ -59,12 +55,9 @@ type runbookAlert struct {
 	Expr      string `json:"expr"`
 }
 
-// runbook renders the runbook of a service from the current description:
-// the page behind the runbook_url annotation of generated alerts.
-//
-// Links in notifications carry only the service (/runbooks/<service>/<alert>),
-// so without ?system= the system is found by the service name: the first
-// system that describes it, preferring the one whose rules have that alert.
+// runbook renders the runbook of a service, the page behind runbook_url. Links in
+// notifications carry only the service, so without ?system= it picks the first
+// system that describes it, preferring one whose rules have that alert.
 func (s *Server) runbook(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("service")
 	list, err := s.opts.Descriptions.List(r.Context())
@@ -145,11 +138,8 @@ func (s *Server) runbookFor(w http.ResponseWriter, snap *descstore.Snapshot, nam
 	})
 }
 
-// ---- Telegram ----
-//
-// No handler in this file ever writes the bot token to a response or a log.
-// The token arrives only in PUT /telegram/token and goes straight to the
-// Telegram API (getMe) and the token store.
+// No handler here writes the bot token to a response or a log. It arrives only in
+// PUT /telegram/token and goes straight to getMe and the token store.
 
 func (s *Server) telegramReady(w http.ResponseWriter) bool {
 	if s.opts.Telegram == nil {

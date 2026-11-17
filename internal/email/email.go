@@ -1,12 +1,7 @@
 // Copyright 2026 The Kamerton Authors
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// Package email implements email setup from the UI, mirroring the Telegram
-// setup: the mail server (the SMTP password is stored only in a Kubernetes
-// Secret, never in the description, an API response or a log), named
-// recipients shared by all systems, and test messages. What each system
-// sends to a recipient is a receiver in that system's description
-// (notifications.receivers[].email), written by the system editor.
+// Package email implements email setup from the UI; the SMTP password lives only in a Secret.
 package email
 
 import (
@@ -27,30 +22,26 @@ import (
 	"github.com/kamerton-labs/kamerton/internal/descstore"
 )
 
-// Errors returned to the API.
 var (
 	ErrNoServer         = errors.New("the mail server is not configured")
 	ErrUnknownRecipient = errors.New("unknown recipient")
 	ErrInvalidInput     = errors.New("invalid input")
-	// ErrCheckFailed wraps a failed connection or login to the SMTP server.
-	ErrCheckFailed = errors.New("smtp check failed")
+	ErrCheckFailed      = errors.New("smtp check failed")
 )
 
 // ReceiverPrefix starts the names of receivers written for recipients:
 // email-<recipient ID>[-N].
 const ReceiverPrefix = "email-"
 
-// Service implements email setup. It is stateless apart from the stores, so
-// every replica can serve it.
+// Service is stateless apart from its stores, so every replica can serve it.
 type Service struct {
 	Passwords    PasswordStore
 	State        StateStore
 	Descriptions descstore.Store
 	Sender       Sender
-	// Namespace is Kamerton's namespace, where the password Secret lives.
-	Namespace string
-	Logger    *slog.Logger
-	Now       func() time.Time
+	Namespace    string
+	Logger       *slog.Logger
+	Now          func() time.Time
 
 	once sync.Once
 }
@@ -69,15 +60,11 @@ func (s *Service) init() {
 	})
 }
 
-// ---- Views (never contain the password) ----
-
-// Status is the state shown in the UI.
 type Status struct {
 	Server     ServerStatus    `json:"server"`
 	Recipients []RecipientView `json:"recipients"`
 }
 
-// ServerStatus says how mail is sent, never the password.
 type ServerStatus struct {
 	Configured  bool   `json:"configured"`
 	Smarthost   string `json:"smarthost,omitempty"`
@@ -90,15 +77,12 @@ type ServerStatus struct {
 	Namespace   string `json:"namespace"`
 }
 
-// RecipientView is a recipient with the systems that write to it.
 type RecipientView struct {
 	Recipient
-	// Receiver is the receiver name to use in a description.
 	Receiver string `json:"receiver"`
 	UsedIn   []Use  `json:"usedIn"`
 }
 
-// Use is what one system sends to a recipient.
 type Use struct {
 	System     string   `json:"system"`
 	Severities []string `json:"severities"`
@@ -106,7 +90,6 @@ type Use struct {
 	Custom     bool     `json:"custom,omitempty"`
 }
 
-// Status assembles the UI state.
 func (s *Service) Status(ctx context.Context) (*Status, error) {
 	s.init()
 	name, key := s.Passwords.Ref()
@@ -140,7 +123,6 @@ func (s *Service) Status(ctx context.Context) (*Status, error) {
 	return out, nil
 }
 
-// RecipientID returns the recipient ID of a receiver written by the UI.
 func RecipientID(receiverName string) (string, bool) {
 	rest, ok := strings.CutPrefix(receiverName, ReceiverPrefix)
 	if !ok || rest == "" {
@@ -150,7 +132,6 @@ func RecipientID(receiverName string) (string, bool) {
 	return id, true
 }
 
-// managed reports the recipient ID of an email receiver written for a known recipient.
 func managed(r *v1alpha1.Receiver, st *State) (string, bool) {
 	if r.Email == nil {
 		return "", false
@@ -195,8 +176,6 @@ func (s *Service) usesByRecipient(ctx context.Context) map[string][]Use {
 	return out
 }
 
-// routingOf reads what a receiver gets (same model as the UI and the
-// Telegram setup: routing.critical/warning for all services, routes for some).
 func routingOf(n *v1alpha1.Notifications, name string) Use {
 	u := Use{Severities: []string{}, Services: []string{}}
 	r := n.Routing
@@ -252,8 +231,6 @@ func routingOf(n *v1alpha1.Notifications, name string) Use {
 	return u
 }
 
-// ---- Server ----
-
 // ServerInput is the mail server form. An empty Password keeps the stored
 // one when the login is unchanged.
 type ServerInput struct {
@@ -263,9 +240,7 @@ type ServerInput struct {
 	Password  string `json:"password"`
 }
 
-// SetServer validates the settings, checks the connection and login, stores
-// the password in the Secret and the rest in the state, and updates the
-// receivers of every system that send through Kamerton's mail server.
+// SetServer also rewrites the receivers of every system that sends through this server.
 func (s *Service) SetServer(ctx context.Context, in ServerInput) (*ServerStatus, error) {
 	s.init()
 	in.Smarthost = strings.TrimSpace(in.Smarthost)
@@ -331,8 +306,7 @@ func (s *Service) SetServer(ctx context.Context, in ServerInput) (*ServerStatus,
 	return &full.Server, nil
 }
 
-// DeleteServer removes the receivers of all recipients from every system,
-// then the password, the server settings and the recipients.
+// DeleteServer removes the receivers of all recipients first, then the password, settings and recipients.
 func (s *Service) DeleteServer(ctx context.Context) error {
 	s.init()
 	st, err := s.State.Get(ctx)
@@ -357,9 +331,6 @@ func (s *Service) DeleteServer(ctx context.Context) error {
 	return nil
 }
 
-// ---- Recipients ----
-
-// RecipientInput is the recipient form.
 type RecipientInput struct {
 	Name string   `json:"name"`
 	To   []string `json:"to"`
@@ -395,7 +366,6 @@ func newID() string {
 	return hex.EncodeToString(b)
 }
 
-// AddRecipient remembers a new recipient.
 func (s *Service) AddRecipient(ctx context.Context, in RecipientInput) (*Recipient, error) {
 	s.init()
 	in, err := validRecipient(in)
@@ -420,8 +390,7 @@ func (s *Service) AddRecipient(ctx context.Context, in RecipientInput) (*Recipie
 	return out, err
 }
 
-// UpdateRecipient changes the name and addresses of a recipient and the
-// addresses in every system that writes to it.
+// UpdateRecipient also rewrites the addresses in every system that writes to it.
 func (s *Service) UpdateRecipient(ctx context.Context, id string, in RecipientInput) (*Recipient, error) {
 	s.init()
 	in, err := validRecipient(in)
@@ -448,8 +417,7 @@ func (s *Service) UpdateRecipient(ctx context.Context, id string, in RecipientIn
 	return out, nil
 }
 
-// DeleteRecipient removes the recipient's receivers from every system and
-// forgets it.
+// DeleteRecipient also removes its receivers from every system.
 func (s *Service) DeleteRecipient(ctx context.Context, id string) error {
 	s.init()
 	st, err := s.State.Get(ctx)
@@ -474,19 +442,15 @@ func (s *Service) DeleteRecipient(ctx context.Context, id string) error {
 	return err
 }
 
-// TestResult is the outcome of a test email.
 type TestResult struct {
 	OK    bool   `json:"ok"`
 	Error string `json:"error,omitempty"`
 }
 
-// testWords is the text of a test email in one language.
 type testWords struct {
 	subject, anyAddress, systems string
 }
 
-// testTexts are the test emails by notification language (see
-// spec.notifications.language).
 var testTexts = map[string]testWords{
 	languageEnglish: {
 		subject:    "Kamerton: test email",
@@ -539,7 +503,6 @@ func (s *Service) language(ctx context.Context, systems []string) string {
 	return lang
 }
 
-// SendTest sends a test email to a recipient.
 func (s *Service) SendTest(ctx context.Context, id string) (*TestResult, error) {
 	s.init()
 	st, err := s.State.Get(ctx)
@@ -574,10 +537,6 @@ func (s *Service) SendTest(ctx context.Context, id string) (*TestResult, error) 
 	return &TestResult{OK: true}, nil
 }
 
-// ---- Description editing ----
-
-// rewriteReceivers brings the email settings of managed receivers in line
-// with the server and recipient state. It reports whether anything changed.
 func (s *Service) rewriteReceivers(sd *v1alpha1.SystemDescription, st *State) bool {
 	n := sd.Spec.Notifications
 	if n == nil || st.Server == nil {
@@ -599,7 +558,6 @@ func (s *Service) rewriteReceivers(sd *v1alpha1.SystemDescription, st *State) bo
 	return changed
 }
 
-// ReceiverFor is the email receiver of a recipient.
 func (s *Service) ReceiverFor(srv *ServerSettings, r *Recipient) *v1alpha1.EmailReceiver {
 	e := &v1alpha1.EmailReceiver{To: append([]string(nil), r.To...), From: srv.From, Smarthost: srv.Smarthost, AuthUsername: srv.Username}
 	if srv.HasPassword {
@@ -645,7 +603,6 @@ func (s *Service) updateAll(ctx context.Context, mutate func(*v1alpha1.SystemDes
 	return errors.Join(errs...)
 }
 
-// removeReceivers deletes the receivers matching match and every reference to them.
 func removeReceivers(sd *v1alpha1.SystemDescription, match func(*v1alpha1.Receiver) bool) bool {
 	n := sd.Spec.Notifications
 	if n == nil {
@@ -692,7 +649,6 @@ func removeReceivers(sd *v1alpha1.SystemDescription, match func(*v1alpha1.Receiv
 	return true
 }
 
-// describe turns an SMTP or network error into one line in plain words.
 func describe(err error) string {
 	if err == nil {
 		return ""
@@ -714,7 +670,6 @@ func describe(err error) string {
 	return msg
 }
 
-// DescribeError is describe for the API.
 func DescribeError(err error) string { return describe(err) }
 
 func sortedCopy(in []string) []string {
@@ -723,14 +678,10 @@ func sortedCopy(in []string) []string {
 	return out
 }
 
-// ErrNotKamertonServer is returned for a receiver that does not send through
-// the mail server configured in Kamerton.
 var ErrNotKamertonServer = errors.New("the receiver does not use the mail server configured in Kamerton")
 
-// SendFollowUp sends a message to the addresses of an email receiver,
-// through the mail server configured in Kamerton only: the receiver must
-// name that server and login, and its password Secret (if any) must be
-// Kamerton's. The HTML body is used when the sender can send HTML.
+// SendFollowUp sends a message through Kamerton's mail server only: the receiver
+// must name that server and login and use Kamerton's password Secret, if any.
 func (s *Service) SendFollowUp(ctx context.Context, rcv *v1alpha1.EmailReceiver, subject, text, htmlBody string) error {
 	s.init()
 	st, err := s.State.Get(ctx)

@@ -17,22 +17,17 @@ import (
 	"github.com/kamerton-labs/kamerton/internal/description"
 )
 
-// Cluster keeps descriptions as SystemDescription custom resources.
 type Cluster struct {
-	// Client reads and writes SystemDescriptions. An uncached client sees
-	// writes immediately; a cached one is fine for reads.
+	// An uncached Client sees writes immediately; a cached one is fine for reads.
 	Client client.Client
-	// Namespace is Kamerton's namespace: new descriptions are created here
-	// and descriptions here are listed first.
+	// Namespace is where new descriptions are created; its descriptions are listed first.
 	Namespace string
-	// WatchNamespace limits the search; empty searches all namespaces.
+	// WatchNamespace limits the search; empty means all namespaces.
 	WatchNamespace string
-	// Name, when set, makes that description the default system (the one
-	// the single-description endpoints use) by listing it first.
+	// Name, when set, is listed first and so becomes the default system.
 	Name string
 }
 
-// Mode implements Store.
 func (c *Cluster) Mode() string { return ModeCluster }
 
 func (c *Cluster) snapshot(sd *v1alpha1.SystemDescription) (*Snapshot, error) {
@@ -43,7 +38,6 @@ func (c *Cluster) snapshot(sd *v1alpha1.SystemDescription) (*Snapshot, error) {
 	return &Snapshot{ID: sd.Name, SD: sd, Raw: raw, Source: "cluster:" + sd.Namespace + "/" + sd.Name}, nil
 }
 
-// List implements Store.
 func (c *Cluster) List(ctx context.Context) ([]*Snapshot, error) {
 	var list v1alpha1.SystemDescriptionList
 	var opts []client.ListOption
@@ -74,7 +68,6 @@ func (c *Cluster) List(ctx context.Context) ([]*Snapshot, error) {
 	return out, nil
 }
 
-// Get implements Store.
 func (c *Cluster) Get(ctx context.Context, id string) (*Snapshot, error) {
 	list, err := c.List(ctx)
 	if err != nil {
@@ -94,8 +87,7 @@ func (c *Cluster) key(ctx context.Context, id string) (types.NamespacedName, err
 	return types.NamespacedName{Namespace: cur.SD.Namespace, Name: cur.SD.Name}, nil
 }
 
-// Create implements Store: the resource is created in the document's
-// namespace or Kamerton's namespace.
+// Create puts the resource in the document's namespace, else in Kamerton's.
 func (c *Cluster) Create(ctx context.Context, raw []byte) (*Snapshot, description.Result, error) {
 	doc, res, err := validate(raw)
 	if err != nil {
@@ -122,8 +114,7 @@ func (c *Cluster) Create(ctx context.Context, raw []byte) (*Snapshot, descriptio
 	return snap, res, err
 }
 
-// Save implements Store: replaces the spec and Kamerton's annotations of
-// the resource; other metadata is left alone.
+// Save replaces the spec and Kamerton's annotations; other metadata is left alone.
 func (c *Cluster) Save(ctx context.Context, id string, raw []byte) (*Snapshot, description.Result, error) {
 	doc, res, err := validate(raw)
 	if err != nil {
@@ -158,7 +149,7 @@ func (c *Cluster) Save(ctx context.Context, id string, raw []byte) (*Snapshot, d
 	return snap, res, err
 }
 
-// Update implements Store, retrying when the resource changed concurrently.
+// Update retries when the resource changed concurrently.
 func (c *Cluster) Update(ctx context.Context, id string, mutate func(*v1alpha1.SystemDescription) error) (*Snapshot, error) {
 	key, err := c.key(ctx, id)
 	if err != nil {
@@ -195,7 +186,6 @@ func (c *Cluster) Update(ctx context.Context, id string, mutate func(*v1alpha1.S
 	return snap, err
 }
 
-// Delete implements Store.
 func (c *Cluster) Delete(ctx context.Context, id string) error {
 	key, err := c.key(ctx, id)
 	if err != nil {

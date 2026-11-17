@@ -1,9 +1,8 @@
 // Copyright 2026 The Kamerton Authors
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// How often a rule would have fired over the history stored in Prometheus,
-// for the threshold as it is now in the draft. Uses the backtest endpoint of
-// the core; when Prometheus is unavailable it says so and shows no numbers.
+// How often a rule would have fired over the history in Prometheus, for the
+// threshold now in the draft.
 
 import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'

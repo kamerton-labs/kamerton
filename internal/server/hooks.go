@@ -20,15 +20,9 @@ import (
 	"github.com/kamerton-labs/kamerton/internal/stack"
 )
 
-// ---- Alertmanager webhook (follow-up messages) ----
-//
-// Alertmanager posts every group of a system to this endpoint as well as to
-// Telegram and email (see generator/webhook.go). It is called by
-// Alertmanager, not by a browser: it needs no session and no CSRF header,
-// and is authenticated by a bearer token that Kamerton generates into a
-// Secret in its namespace; the AlertmanagerConfig references that Secret.
+// The Alertmanager webhook needs no session or CSRF header: it is authenticated by a
+// bearer token from a Secret that Kamerton generates in its namespace.
 
-// AlertmanagerHookPath is the path of the webhook endpoint.
 const AlertmanagerHookPath = "/api/v1/hooks/alertmanager"
 
 // TokenSource returns the current webhook token ("" when none).
@@ -36,8 +30,7 @@ type TokenSource interface {
 	Get(ctx context.Context) (string, error)
 }
 
-// hookToken returns the webhook token, re-read from the Secret at most every
-// refresh (a rotated Secret is picked up without a restart).
+// hookToken re-reads the Secret at most every refresh, so a rotated token needs no restart.
 func (s *Server) hookToken(ctx context.Context, refresh time.Duration) string {
 	s.hookMu.Lock()
 	defer s.hookMu.Unlock()
@@ -112,8 +105,6 @@ func (s *Server) alertmanagerHook(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
-// systemAlertsWithMuted reads the active alerts of a system, muted ones
-// included, from the Alertmanager of its set (follow-up messages).
 func (s *Server) systemAlertsWithMuted(ctx context.Context, sd *v1alpha1.SystemDescription) ([]alertmanager.Alert, error) {
 	c := s.clientsFor(ctx, sd.Spec.Stack)
 	if c.AM == nil {
@@ -126,8 +117,6 @@ func (s *Server) systemAlertsWithMuted(ctx context.Context, sd *v1alpha1.SystemD
 	return c.AM.ActiveAlerts(ctx, filter)
 }
 
-// evidenceSources are the programs of a system's set that evidence is read
-// from.
 func (s *Server) evidenceSources(ctx context.Context, sd *v1alpha1.SystemDescription) evidence.Sources {
 	c := s.clientsFor(ctx, sd.Spec.Stack)
 	return evidence.Sources{Prom: c.Prom, LokiURL: c.Set.URL(stack.KindLoki)}

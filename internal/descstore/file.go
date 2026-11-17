@@ -18,13 +18,9 @@ import (
 	"github.com/kamerton-labs/kamerton/internal/description"
 )
 
-// File keeps descriptions in YAML files (local mode): one file per system.
-//
-// Paths lists description files; Dir, when set, is a directory whose
-// *.yaml / *.yml files are all descriptions (re-scanned on every call) and
-// where new systems are created as <name>.yaml. Without Dir new systems are
-// written next to the first file and remembered until restart; start the
-// core with a directory to keep them.
+// File keeps one YAML file per system. With Dir set, its *.yaml files are
+// rescanned on every call and new systems go there; without it, new systems go
+// next to the first file and are remembered only until restart.
 type File struct {
 	Paths []string
 	Dir   string
@@ -33,8 +29,7 @@ type File struct {
 	created []string
 }
 
-// NewFile builds a file store from the --description value: one or more
-// comma-separated files, or a directory.
+// NewFile takes the --description value: comma-separated files or a directory.
 func NewFile(spec string) (*File, error) {
 	f := &File{}
 	for _, p := range strings.Split(spec, ",") {
@@ -61,7 +56,6 @@ func NewFile(spec string) (*File, error) {
 	return f, nil
 }
 
-// Mode implements Store.
 func (f *File) Mode() string { return ModeFile }
 
 func (f *File) paths() ([]string, error) {
@@ -96,8 +90,7 @@ func (f *File) paths() ([]string, error) {
 	return uniq, nil
 }
 
-// read loads one file. Missing files return ErrNoDescription; invalid files
-// a snapshot with Invalid set.
+// read returns ErrNoDescription for a missing file and a snapshot with Invalid set for an invalid one.
 func (f *File) read(path string) (*Snapshot, error) {
 	raw, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
@@ -127,8 +120,7 @@ func (f *File) read(path string) (*Snapshot, error) {
 	return snap, nil
 }
 
-// List implements Store. Files are re-read on every call, so edits made
-// outside Kamerton are picked up.
+// List re-reads the files on every call, so edits made outside Kamerton show up.
 func (f *File) List(context.Context) ([]*Snapshot, error) {
 	paths, err := f.paths()
 	if err != nil {
@@ -150,7 +142,6 @@ func (f *File) List(context.Context) ([]*Snapshot, error) {
 	return out, nil
 }
 
-// Get implements Store.
 func (f *File) Get(ctx context.Context, id string) (*Snapshot, error) {
 	list, err := f.List(ctx)
 	if err != nil {
@@ -164,7 +155,6 @@ func (f *File) Get(ctx context.Context, id string) (*Snapshot, error) {
 
 func pathOf(s *Snapshot) string { return strings.TrimPrefix(s.Source, "file:") }
 
-// Create implements Store.
 func (f *File) Create(ctx context.Context, raw []byte) (*Snapshot, description.Result, error) {
 	sd, res, err := validate(raw)
 	if err != nil {
@@ -201,7 +191,7 @@ func (f *File) Create(ctx context.Context, raw []byte) (*Snapshot, description.R
 	return &Snapshot{ID: sd.Name, SD: sd, Raw: raw, Source: "file:" + path}, res, nil
 }
 
-// Save implements Store. The file is replaced atomically and verbatim.
+// Save replaces the file atomically and verbatim.
 func (f *File) Save(ctx context.Context, id string, raw []byte) (*Snapshot, description.Result, error) {
 	sd, res, err := validate(raw)
 	if err != nil {
@@ -222,7 +212,7 @@ func (f *File) Save(ctx context.Context, id string, raw []byte) (*Snapshot, desc
 	return &Snapshot{ID: cur.ID, SD: sd, Raw: raw, Source: cur.Source}, res, nil
 }
 
-// Update implements Store. Comments in the file are not preserved.
+// Update rewrites the file, so comments in it are lost.
 func (f *File) Update(ctx context.Context, id string, mutate func(*v1alpha1.SystemDescription) error) (*Snapshot, error) {
 	cur, err := f.Get(ctx, id)
 	if err != nil {
@@ -243,7 +233,6 @@ func (f *File) Update(ctx context.Context, id string, mutate func(*v1alpha1.Syst
 	return snap, err
 }
 
-// Delete implements Store: the file is removed.
 func (f *File) Delete(ctx context.Context, id string) error {
 	cur, err := f.Get(ctx, id)
 	if err != nil {

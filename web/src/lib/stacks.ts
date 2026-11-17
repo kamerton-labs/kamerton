@@ -1,8 +1,8 @@
 // Copyright 2026 The Kamerton Authors
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// Sets of programs: plain-words names and the small
-// pieces of logic the status page, the sidebar and the system editor share.
+// Sets of programs: display names and helpers shared by the status page, the
+// sidebar and the system editor.
 
 import { t } from '@/i18n'
 import type { CheckState, FoundProgram, ProgramKind, ProgramOrigin, StackComponent, StackSet } from '@/lib/api'
@@ -26,7 +26,6 @@ export const originLabel = (o: ProgramOrigin): string => t(`stacks.origin.${o}` 
 /** ID of the built-in set; its name is shown from the dictionary, whatever name the core sends. */
 export const MAIN_STACK = 'main'
 
-/** Display name of a set. */
 export function stackName(id: string | undefined, name: string | undefined): string {
   if (id === MAIN_STACK) return t('stacks.mainName')
   return name || id || ''
@@ -34,14 +33,12 @@ export function stackName(id: string | undefined, name: string | undefined): str
 
 export type Tone = 'ok' | 'warn' | 'bad' | 'muted'
 
-/** State of a program in a few words and a colour. */
 export function programState(c: StackComponent | undefined): { tone: Tone; text: string } {
   if (!c || !c.configured) return { tone: 'muted', text: t('stacks.state.notConnected') }
   if (c.healthy) return { tone: 'ok', text: t('stacks.check.ok') }
   return { tone: c.state === 'not_ready' ? 'warn' : 'bad', text: checkText(c.state) }
 }
 
-/** Short words for a check result. */
 export function checkText(state?: CheckState): string {
   switch (state) {
     case 'ok':
@@ -67,10 +64,7 @@ export function setsInUse(sets: StackSet[]): StackSet[] {
   return used.length > 0 ? used : sets.filter((s) => s.builtin)
 }
 
-/**
- * Prometheus and Alertmanager of every set in use: are they all working?
- * problem names the first program that is not, in plain words.
- */
+/** Whether Prometheus and Alertmanager of every set in use work; problem names the first that does not. */
 export function coreHealth(sets: StackSet[] | undefined): { state: 'ok' | 'problem' | 'unknown'; problem?: string } {
   if (!sets) return { state: 'unknown' }
   const several = sets.length > 1
@@ -134,7 +128,6 @@ export function stackBadge(sets: number, name: string | undefined): string | nul
   return sets > 1 && name ? name : null
 }
 
-/** What the new-set form starts with. */
 export interface StackDraft {
   name?: string
   urls?: Partial<Record<ProgramKind, string>>

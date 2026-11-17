@@ -1,9 +1,8 @@
 // Copyright 2026 The Kamerton Authors
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// Notification text written by the team for one rule. Where it lives in the
-// description depends on the rule (the policy the rule comes from); the
-// placeholders and checks mirror internal/description CheckMessageText.
+// Team-written notification text of one rule. Placeholders and checks mirror
+// internal/description CheckMessageText.
 
 import { t, tl, type Lang } from '@/i18n'
 import { thresholdUnit, type RuleItem, type RuleKind } from './rules'
@@ -12,7 +11,6 @@ import { clone, type Description, type NotificationMessage, type Service } from 
 export const PLACEHOLDER_KEYS = ['value', 'threshold', 'service', 'operation', 'system', 'since'] as const
 export type PlaceholderKey = (typeof PLACEHOLDER_KEYS)[number]
 
-/** Name of a placeholder button, in the interface language. */
 export const placeholderLabel = (key: PlaceholderKey): string => t(`message.ph.${key}` as const)
 
 const KNOWN = new Set<string>(PLACEHOLDER_KEYS)
@@ -102,7 +100,7 @@ function prune(o: object | undefined) {
   for (const k of Object.keys(r)) if (r[k] === undefined) delete r[k]
 }
 
-/** Sets (or, with empty fields, removes) the team's text of a rule. */
+/** Sets the team's text of a rule; empty fields remove it. */
 export function setMessage(desc: Description, rule: RuleItem, msg: NotificationMessage): Description {
   const next = clone(desc)
   const s = next.spec.services.find((x) => x.name === rule.service)

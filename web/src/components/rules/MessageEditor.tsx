@@ -1,11 +1,8 @@
 // Copyright 2026 The Kamerton Authors
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// "Alert text": the team writes the notification of a rule in its own
-// words and language. Placeholders come from a fixed list and are inserted
-// with a click; the preview shows the message as it will arrive, in the
-// language of the notification messages of the description (English unless
-// it says Russian), the same words the core uses.
+// "Alert text": the team's own notification text of a rule. The preview uses
+// the description's message language and the same words as the core.
 
 import { useRef, useState } from 'react'
 import { ChevronDown } from 'lucide-react'

@@ -1,10 +1,8 @@
 // Copyright 2026 The Kamerton Authors
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// YAML editor (CodeMirror 6). Completions and hover hints come from the
-// description's JSON Schema (lib/yaml-schema.ts, Russian hints from
-// i18n/schema-ru.ts); error markers are YAML syntax errors (client-side, at
-// once) and the core's validation issues mapped from their JSON pointers.
+// YAML editor (CodeMirror 6). Completions and hints come from the JSON Schema
+// (lib/yaml-schema.ts); markers are local syntax errors and the core's issues.
 
 import { useEffect, useRef } from 'react'
 import { autocompletion, closeBrackets, completionKeymap, type CompletionContext, type CompletionResult } from '@codemirror/autocomplete'
@@ -30,7 +28,6 @@ interface Props {
   value: string
   onChange: (value: string) => void
   schema?: Record<string, unknown>
-  /** Issues from the core's validation of the current text. */
   issues?: EditorIssue[]
   readOnly?: boolean
   className?: string

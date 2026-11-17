@@ -1,8 +1,6 @@
 // Copyright 2026 The Kamerton Authors
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// Small building blocks shared by the screens.
-
 import type { ReactNode } from 'react'
 import { cn } from 'cn'
 import { Input } from '@/components/ui/input'

@@ -37,7 +37,6 @@ export function useEditor(): EditorState {
   return v
 }
 
-/** Debounced copy of a value. */
 export function useDebounced<T>(value: T, ms: number): T {
   const [v, setV] = useState(value)
   useEffect(() => {

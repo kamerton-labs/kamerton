@@ -17,7 +17,6 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation"
 )
 
-// Program kinds, in the order the UI shows them.
 const (
 	KindPrometheus    = "prometheus"
 	KindAlertmanager  = "alertmanager"
@@ -27,82 +26,71 @@ const (
 	KindOTelCollector = "otel-collector"
 )
 
-// Kinds lists every program kind a set has an address for.
+// Kinds is in the order the UI shows them.
 var Kinds = []string{KindPrometheus, KindAlertmanager, KindGrafana, KindLoki, KindTempo, KindOTelCollector}
 
-// Titles are the human names of the kinds (messages, warnings).
 var Titles = map[string]string{
 	KindPrometheus: "Prometheus", KindAlertmanager: "Alertmanager", KindGrafana: "Grafana",
 	KindLoki: "Loki", KindTempo: "Tempo", KindOTelCollector: "OpenTelemetry Collector",
 }
 
-// ValidKind reports whether k is one of Kinds.
 func ValidKind(k string) bool {
 	_, ok := Titles[k]
 	return ok
 }
 
-// The built-in set: its addresses come from the flags and may be overridden
-// one by one in the UI.
+// The built-in set's addresses come from the flags and may be overridden one by
+// one in the UI.
 const (
 	BuiltinID   = "main"
 	BuiltinName = "Main"
 )
 
-// Origins of a program address.
 const (
-	// OriginBundled: the address equals the flag value of a program installed
-	// with Kamerton.
+	// OriginBundled: the address equals the flag value of a program installed with
+	// Kamerton. OriginOwn is any other address.
 	OriginBundled = "bundled"
-	// OriginOwn: any other address.
-	OriginOwn = "own"
-	// OriginNone: no address, the program is not connected.
-	OriginNone = "none"
+	OriginOwn     = "own"
+	OriginNone    = "none"
 )
 
-// Set is a named group of program addresses as stored. Nothing in it is
-// secret: addresses with credentials are rejected.
+// Set is stored as is. Nothing in it is secret: addresses with credentials are
+// rejected.
 type Set struct {
 	ID   string `json:"id"`
 	Name string `json:"name,omitempty"`
 	// URLs maps a kind to an address. For the built-in set it holds only
 	// overrides of the flag values; an empty value disconnects the program.
 	URLs map[string]string `json:"urls,omitempty"`
-	// RuleLabels are put on the PrometheusRule objects of systems using the
-	// set (so that the right Prometheus picks them up).
-	RuleLabels map[string]string `json:"ruleLabels,omitempty"`
-	// AlertmanagerConfigLabels are put on their AlertmanagerConfig objects.
+	// RuleLabels go on the PrometheusRule objects of systems using the set, so the
+	// right Prometheus picks them up.
+	RuleLabels               map[string]string `json:"ruleLabels,omitempty"`
 	AlertmanagerConfigLabels map[string]string `json:"alertmanagerConfigLabels,omitempty"`
 	CreatedAt                time.Time         `json:"createdAt,omitzero"`
 	UpdatedAt                time.Time         `json:"updatedAt,omitzero"`
 }
 
-// State is everything stored about sets, keyed by ID. The built-in set is
-// present only when something of it was changed.
+// State is keyed by set ID. The built-in set is present only when something of
+// it was changed.
 type State struct {
 	Sets map[string]*Set `json:"sets,omitempty"`
 }
 
-// Flags are the addresses given at install time (flags or Helm values).
 type Flags struct {
 	URLs map[string]string
-	// External marks programs given as bring-your-own: their flag address is
-	// not "installed with Kamerton".
+	// External marks bring-your-own programs: not installed with Kamerton.
 	External map[string]bool
 }
 
-// Program is one resolved program of a set.
 type Program struct {
 	Kind   string `json:"kind"`
 	URL    string `json:"url"`
 	Origin string `json:"origin"`
 	// FlagURL is the install-time address (built-in set only).
-	FlagURL string `json:"flagURL,omitempty"`
-	// Overridden: the built-in set's address was changed in the UI.
-	Overridden bool `json:"overridden,omitempty"`
+	FlagURL    string `json:"flagURL,omitempty"`
+	Overridden bool   `json:"overridden,omitempty"`
 }
 
-// Resolved is a set with all six addresses filled in.
 type Resolved struct {
 	ID                       string            `json:"id"`
 	Name                     string            `json:"name"`
@@ -112,7 +100,6 @@ type Resolved struct {
 	AlertmanagerConfigLabels map[string]string `json:"alertmanagerConfigLabels"`
 }
 
-// URL returns the address of a kind ("" when not connected).
 func (r *Resolved) URL(kind string) string {
 	for _, p := range r.Programs {
 		if p.Kind == kind {
@@ -122,33 +109,29 @@ func (r *Resolved) URL(kind string) string {
 	return ""
 }
 
-// Errors of the set service.
 var (
 	ErrUnknownSet = errors.New("no such set of programs")
 	ErrBuiltin    = errors.New("the built-in set cannot be deleted")
 )
 
-// InputError is a problem with what the person entered, in plain Russian.
+// InputError messages are shown to the person as they are.
 type InputError struct{ Message string }
 
 func (e *InputError) Error() string { return e.Message }
 
-// InUseError: the set is used by systems and cannot be deleted.
 type InUseError struct{ Systems []string }
 
 func (e *InUseError) Error() string {
 	return "the set is used by systems: " + strings.Join(e.Systems, ", ")
 }
 
-// Sets resolves and changes sets of programs.
 type Sets struct {
 	Store StateStore
 	Flags Flags
 	// Namespace is Kamerton's namespace: a short service name in an address
 	// (http://svc:port) means a service there.
 	Namespace string
-	// Now is for tests.
-	Now func() time.Time
+	Now       func() time.Time
 }
 
 func (s *Sets) now() time.Time {
@@ -158,10 +141,8 @@ func (s *Sets) now() time.Time {
 	return time.Now().UTC()
 }
 
-// FlagURL returns the install-time address of a kind.
 func (s *Sets) FlagURL(kind string) string { return s.Flags.URLs[kind] }
 
-// origin classifies an address.
 func (s *Sets) origin(kind, u string) string {
 	switch {
 	case u == "":
@@ -233,7 +214,6 @@ func (s *Sets) list(st *State) []Resolved {
 	return append(out, others...)
 }
 
-// Get returns one set; ErrUnknownSet when there is none.
 func (s *Sets) Get(ctx context.Context, id string) (*Resolved, error) {
 	list, err := s.List(ctx)
 	if err != nil {
@@ -267,8 +247,8 @@ func (s *Sets) Resolve(ctx context.Context, id string) (r Resolved, unknown bool
 	return *got, false, nil
 }
 
-// Builtin returns the built-in set from the flags only (no stored
-// overrides): the fallback when the store cannot be read.
+// Builtin ignores stored overrides: it is the fallback when the store cannot be
+// read.
 func (s *Sets) Builtin() Resolved { return s.resolve(&Set{ID: BuiltinID}, true) }
 
 // Input changes a set. Nil fields stay as they are.
@@ -284,7 +264,6 @@ type Input struct {
 
 var idRe = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
 
-// Create adds a set.
 func (s *Sets) Create(ctx context.Context, in Input) (*Resolved, error) {
 	if in.Name == nil || strings.TrimSpace(*in.Name) == "" {
 		return nil, &InputError{"Give the set a name."}
@@ -313,7 +292,6 @@ func (s *Sets) Create(ctx context.Context, in Input) (*Resolved, error) {
 	return s.Get(ctx, created)
 }
 
-// Update changes a set (the built-in one too).
 func (s *Sets) Update(ctx context.Context, id string, in Input) (*Resolved, error) {
 	_, err := s.update(ctx, func(st *State) error {
 		set, err := s.stored(st, id)
@@ -352,8 +330,6 @@ func (s *Sets) ResetAddress(ctx context.Context, id, kind string) (*Resolved, er
 	return s.Get(ctx, id)
 }
 
-// Delete removes a set. usedBy lists the systems using it; a set in use and
-// the built-in set cannot be deleted.
 func (s *Sets) Delete(ctx context.Context, id string, usedBy []string) error {
 	if id == BuiltinID {
 		return ErrBuiltin
@@ -371,8 +347,7 @@ func (s *Sets) Delete(ctx context.Context, id string, usedBy []string) error {
 	return err
 }
 
-// stored returns the stored set to change; the built-in set is created on
-// first change.
+// stored creates the built-in set on its first change.
 func (s *Sets) stored(st *State, id string) (*Set, error) {
 	if set := st.Sets[id]; set != nil {
 		return set, nil
@@ -455,9 +430,6 @@ func (s *Sets) update(ctx context.Context, mutate func(*State) error) (*State, e
 	})
 }
 
-// NormalizeURL checks an address entered by a person: empty (not
-// connected) or an http/https URL without credentials, query or fragment.
-// The trailing slash is removed.
 func NormalizeURL(raw string) (string, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -484,7 +456,6 @@ var reservedLabels = map[string]string{
 	"kamerton.dev/system":          "",
 }
 
-// CheckLabels validates extra labels for generated objects.
 func CheckLabels(in map[string]string, what string) (map[string]string, error) {
 	out := map[string]string{}
 	for k, v := range in {
@@ -516,7 +487,6 @@ var translit = map[rune]string{
 	'қ': "k", 'ғ': "g", 'ү': "u", 'ұ': "u", 'ң': "n", 'ө': "o", 'һ': "h", 'ә': "a", 'і': "i",
 }
 
-// slug turns a name into an ID: latin letters, digits and dashes.
 func slug(name string) string {
 	var b strings.Builder
 	dash := false

@@ -1,9 +1,8 @@
 // Copyright 2026 The Kamerton Authors
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// Typed client for the Kamerton core API (/api/v1). All data shown in the UI
-// comes from here; nothing is mocked. When a backend dependency is not
-// configured the API says so explicitly and the UI shows an empty state.
+// Typed client for the core API (/api/v1). When a backend dependency is not
+// configured the API says so and the UI shows an empty state.
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { CSRF_HEADER, CSRF_VALUE, fetchSession, notifyUnauthorized } from '@/lib/auth'
@@ -45,7 +44,7 @@ const postYAML = <T>(path: string, yaml: string) =>
 const postJSON = <T>(path: string, body: unknown) =>
   request<T>(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
 
-// ---- Types (mirror internal/server and friends) ----
+// Types below mirror internal/server.
 
 export type JSONSchema = Record<string, unknown>
 
@@ -90,7 +89,6 @@ export interface SystemsResponse {
   alertsConfigured: boolean
   alertsError?: string
   starter: string
-  /** Number of sets of programs. */
   stacks: number
 }
 
@@ -443,8 +441,6 @@ export interface BacktestResult {
   step: string
 }
 
-// ---- Query hooks ----
-
 /** Whether login is enabled and the browser has a session. */
 export const useSession = () => useQuery({ queryKey: ['session'], queryFn: fetchSession, staleTime: Infinity, retry: false })
 
@@ -472,7 +468,7 @@ export const useAlerts = () =>
 
 export const useSettings = () => useQuery({ queryKey: ['settings'], queryFn: () => request<Settings>('/settings') })
 
-/** Runbook of a service; with a system the system-scoped endpoint, else found by service name (old links). */
+/** Runbook of a service: system-scoped with a system, else found by service name for links without one. */
 export const useRunbook = (service: string, system?: string) =>
   useQuery({
     queryKey: ['runbook', system ?? '', service],
@@ -482,8 +478,6 @@ export const useRunbook = (service: string, system?: string) =>
       ),
     retry: false,
   })
-
-// ---- Systems ----
 
 const sys = (id: string) => `/systems/${encodeURIComponent(id)}`
 
@@ -608,8 +602,6 @@ export const useDeleteEmailRecipient = () => useEmailMutation((id: string) => se
 
 export const useTestEmailRecipient = () =>
   useEmailMutation((id: string) => send<{ ok: boolean; error?: string }>('POST', `/email/recipients/${encodeURIComponent(id)}/test`))
-
-// ---- Sets of programs ----
 
 const stk = (id: string) => `/stacks/${encodeURIComponent(id)}`
 

@@ -1,19 +1,7 @@
 // Copyright 2026 The Kamerton Authors
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// Package followup sends the second message of an incident: Alertmanager
-// delivers the alert to Telegram and email itself (so alerts arrive while
-// Kamerton is down) and also notifies Kamerton's webhook. On a firing
-// notification Kamerton groups the system's alerts by cause
-// (triage.Incidents), collects evidence about the root service
-// (internal/evidence) and sends one short message to the same chats and
-// addresses, a little after the alert so it arrives second.
-//
-// One follow-up per incident: an incident is identified by its system, its
-// root services and the start of its earliest root alert, so Alertmanager's
-// repeats and later updates of the same group send nothing new, while a new
-// episode (the root resolved and fired again) does. The record is kept in
-// memory of the replica that received the notification.
+// Package followup sends a second message with evidence about the cause after Alertmanager delivers an incident.
 package followup
 
 import (
@@ -34,37 +22,28 @@ import (
 	"github.com/kamerton-labs/kamerton/internal/triage"
 )
 
-// Defaults of a Service.
 const (
-	// DefaultDelay is how long after the notification the follow-up goes
-	// out at the earliest, so it arrives after the alert itself.
+	// DefaultDelay makes the follow-up arrive after the alert itself.
 	DefaultDelay = 10 * time.Second
 	// DefaultTTL is how long an incident is remembered.
-	DefaultTTL = 24 * time.Hour
-	// maxRoots bounds the roots evidence is collected for.
-	maxRoots = 3
-	// processTimeout bounds the work on one notification.
+	DefaultTTL     = 24 * time.Hour
+	maxRoots       = 3
 	processTimeout = time.Minute
 )
 
-// TelegramSender sends a message with Kamerton's bot.
 type TelegramSender interface {
 	SendFollowUp(ctx context.Context, ref v1alpha1.SecretKeyRef, chatID int64, html string) error
 }
 
-// EmailSender sends a message through Kamerton's mail server.
 type EmailSender interface {
 	SendFollowUp(ctx context.Context, rcv *v1alpha1.EmailReceiver, subject, text, html string) error
 }
 
-// Service handles webhook notifications.
 type Service struct {
 	Descriptions descstore.Store
-	// Alerts returns the active alerts of a system, muted ones included,
-	// from the Alertmanager of its set; nil or an error: only the alerts of
-	// the notification are used.
-	Alerts func(ctx context.Context, sd *v1alpha1.SystemDescription) ([]alertmanager.Alert, error)
-	// Sources returns the programs of the system's set.
+	// Alerts returns a system's active alerts, muted ones included. On nil or an
+	// error only the alerts of the notification are used.
+	Alerts    func(ctx context.Context, sd *v1alpha1.SystemDescription) ([]alertmanager.Alert, error)
 	Sources   func(ctx context.Context, sd *v1alpha1.SystemDescription) evidence.Sources
 	Collector *evidence.Collector
 	// Telegram and Email are nil when that channel is unavailable.
@@ -74,8 +53,7 @@ type Service struct {
 	TTL      time.Duration
 	Logger   *slog.Logger
 	Now      func() time.Time
-	// Sleep waits for d or until ctx ends; replaceable in tests.
-	Sleep func(ctx context.Context, d time.Duration)
+	Sleep    func(ctx context.Context, d time.Duration)
 
 	mu   sync.Mutex
 	sent map[string]time.Time
@@ -112,8 +90,8 @@ func (s *Service) sleep(ctx context.Context, d time.Duration) {
 	}
 }
 
-// Handle processes a notification in the background and returns at once:
-// Alertmanager waits for the webhook answer only a few seconds.
+// Handle works in the background and returns at once: Alertmanager waits only
+// a few seconds for the webhook answer.
 func (s *Service) Handle(hook *alertmanager.Webhook) {
 	received := s.now()
 	s.wg.Add(1)
@@ -125,10 +103,10 @@ func (s *Service) Handle(hook *alertmanager.Webhook) {
 	}()
 }
 
-// Wait waits for notifications handled in the background (tests, shutdown).
 func (s *Service) Wait() { s.wg.Wait() }
 
-// claim records an incident; false when it was already recorded.
+// claim reports false when the incident was already recorded. Records live
+// in this replica's memory for TTL.
 func (s *Service) claim(key string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -152,17 +130,15 @@ func (s *Service) claim(key string) bool {
 	return true
 }
 
-// Result says what Process did with one incident (for logs and tests).
 type Result struct {
 	Incident string
 	// Skipped explains why nothing was sent; empty when sent.
-	Skipped string
-	// Telegram and Email count the messages sent.
+	Skipped         string
 	Telegram, Email int
 }
 
-// Process handles one notification synchronously; received is when it
-// arrived (the follow-up goes out at the earliest Delay after it).
+// Process handles one notification synchronously; the follow-up goes out no
+// earlier than Delay after received.
 func (s *Service) Process(ctx context.Context, hook *alertmanager.Webhook, received time.Time) []Result {
 	if hook == nil || hook.Status != "firing" {
 		return nil
@@ -192,7 +168,6 @@ func (s *Service) Process(ctx context.Context, hook *alertmanager.Webhook, recei
 	alerts := s.systemAlerts(ctx, sd, firing)
 	incidents := triage.NewGraph(&sd.Spec).Incidents(sd.Name, alerts)
 
-	// The services of the notification, by incident.
 	byIncident := map[string][]string{}
 	var order []string
 	for _, a := range firing {
@@ -232,7 +207,6 @@ func (s *Service) Process(ctx context.Context, hook *alertmanager.Webhook, recei
 	return results
 }
 
-// send collects evidence about the incident and sends the follow-up.
 func (s *Service) send(ctx context.Context, sd *v1alpha1.SystemDescription, inc *triage.Incident, services []string, recipients []v1alpha1.Receiver, received time.Time) Result {
 	res := Result{Incident: inc.ID}
 	f := s.evidence(ctx, sd, inc, services)
@@ -281,8 +255,6 @@ func (s *Service) send(ctx context.Context, sd *v1alpha1.SystemDescription, inc 
 	return res
 }
 
-// evidence assembles the follow-up of an incident; services are the
-// services of the notification.
 func (s *Service) evidence(ctx context.Context, sd *v1alpha1.SystemDescription, inc *triage.Incident, services []string) *generator.FollowUp {
 	f := &generator.FollowUp{System: sd.Name, Environment: sd.Spec.Environment, Window: evidence.DefaultWindow}
 	if s.Collector != nil {
@@ -336,8 +308,7 @@ func (s *Service) evidence(ctx context.Context, sd *v1alpha1.SystemDescription, 
 	return f
 }
 
-// rootAlert picks the alert that describes a root: its earliest symptom
-// alert, else its earliest alert.
+// rootAlert picks a root's earliest symptom alert, else its earliest alert.
 func rootAlert(alerts []triage.Alert, svc string) (string, time.Time) {
 	var best *triage.Alert
 	for i := range alerts {
@@ -367,8 +338,6 @@ func service(sd *v1alpha1.SystemDescription, name string) *v1alpha1.Service {
 	return nil
 }
 
-// description finds the system by the kamerton_system label (the name of
-// the description).
 func (s *Service) description(ctx context.Context, system string) *v1alpha1.SystemDescription {
 	if system == "" || s.Descriptions == nil {
 		return nil
@@ -386,9 +355,8 @@ func (s *Service) description(ctx context.Context, system string) *v1alpha1.Syst
 	return nil
 }
 
-// systemAlerts returns the system's alerts (muted ones included) for the
-// incident grouping, with the alerts of the notification added when
-// Alertmanager could not be asked or does not have them yet.
+// systemAlerts returns the system's alerts, muted ones included, adding those of
+// the notification when Alertmanager fails or does not have them yet.
 func (s *Service) systemAlerts(ctx context.Context, sd *v1alpha1.SystemDescription, firing []alertmanager.WebhookAlert) []triage.Alert {
 	var out []triage.Alert
 	seen := map[string]bool{}
@@ -452,9 +420,8 @@ func appendUnique(list []string, v string) []string {
 	return append(list, v)
 }
 
-// Recipients returns the receivers that got the notification about these
-// alerts: the receivers of their severity (routing.critical / warning) and
-// of the routes listing their service, in the order of the description.
+// Recipients returns the receivers of the alerts' severity and of the routes
+// listing their service, in description order.
 func Recipients(n *v1alpha1.Notifications, alerts []alertmanager.WebhookAlert) []v1alpha1.Receiver {
 	if n == nil || n.Routing == nil {
 		return nil

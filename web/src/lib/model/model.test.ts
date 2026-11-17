@@ -81,7 +81,7 @@ describe('canvas -> description', () => {
     expect(back.apiVersion).toBe(d.apiVersion)
     expect(back.metadata.name).toBe(d.metadata.name)
     expect(readLayout(back)).toEqual(Object.fromEntries(nodes.map((n) => [n.id, n.position])))
-    // And again: stable.
+    // Stable on a second round trip.
     const again = toCanvas(back)
     expect(fromCanvas(back, again.nodes, again.edges)).toEqual(back)
   })

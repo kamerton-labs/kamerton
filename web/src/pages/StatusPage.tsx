@@ -1,11 +1,6 @@
 // Copyright 2026 The Kamerton Authors
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// State of Kamerton itself and of the programs it works with: sets of
-// programs (the built-in one from the install and the ones added here),
-// each with six program cards; finding programs already running in the
-// cluster; Kamerton's own settings.
-
 import { useState } from 'react'
 import { AlertTriangle, Plus, RefreshCw, Search } from 'lucide-react'
 import { Page } from '@/components/common'

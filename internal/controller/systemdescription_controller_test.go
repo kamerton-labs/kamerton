@@ -120,7 +120,6 @@ func TestReconcileSetLabels(t *testing.T) {
 	}
 }
 
-// A change of the sets ConfigMap re-reconciles every system.
 func TestSetsConfigMapEnqueuesSystems(t *testing.T) {
 	s := runtime.NewScheme()
 	if err := v1alpha1.AddToScheme(s); err != nil {

@@ -38,57 +38,40 @@ import (
 
 const maxBody = 1 << 20
 
-// Options configure the server.
 type Options struct {
-	// UI is the built web UI; UIBuilt is false when only the placeholder exists.
+	// UIBuilt is false when only the placeholder UI exists.
 	UI      fs.FS
 	UIBuilt bool
-	// Prometheus and Alertmanager are the clients of the install-time
-	// addresses (nil when not configured). Systems read through the clients
-	// of their set of programs; these are used when the set's address is
-	// the install-time one.
+	// Prometheus and Alertmanager use the install-time addresses; nil when not configured.
 	Prometheus   prometheus.Querier
 	Alertmanager alertmanager.Reader
-	// Sets are the sets of program addresses. Nil: only the built-in set,
-	// kept in memory.
+	// Sets nil means only the built-in set, kept in memory.
 	Sets *stack.Sets
-	// Discoverer finds programs running in the cluster; nil when
-	// unavailable (DiscoveryUnavailable says why).
+	// Discoverer is nil when unavailable; DiscoveryUnavailable says why.
 	Discoverer           *stack.Discoverer
 	DiscoveryUnavailable string
-	// CheckHTTP is the HTTP client of address checks (short timeout).
-	CheckHTTP *http.Client
-	// NewPrometheus and NewAlertmanager build clients for addresses of
-	// sets; defaults are the real clients.
-	NewPrometheus   func(url string) (prometheus.Querier, error)
-	NewAlertmanager func(url string) alertmanager.Reader
-	Generator       generator.Options
-	Logger          *slog.Logger
-	// Descriptions is where the description is read from and saved to:
-	// the custom resource in a cluster or a file locally. Defaults to an
-	// in-memory store that cannot be saved (see SetDescription).
+	CheckHTTP            *http.Client
+	NewPrometheus        func(url string) (prometheus.Querier, error)
+	NewAlertmanager      func(url string) alertmanager.Reader
+	Generator            generator.Options
+	Logger               *slog.Logger
+	// Descriptions defaults to an in-memory store that cannot be saved.
 	Descriptions descstore.Store
 	// Telegram is nil when Telegram setup is unavailable (no cluster).
-	Telegram *telegram.Service
-	// TelegramUnavailable explains why Telegram is nil.
+	Telegram            *telegram.Service
 	TelegramUnavailable string
 	// Email is nil when email setup is unavailable (no cluster).
-	Email *email.Service
-	// EmailUnavailable explains why Email is nil.
+	Email            *email.Service
 	EmailUnavailable string
-	// Namespace is Kamerton's namespace (cluster mode).
-	Namespace string
+	Namespace        string
 	// Auth enables login; nil leaves the UI and API open (see NewAuth).
 	Auth *Auth
-	// FollowUp handles Alertmanager webhook notifications and sends the
-	// follow-up messages; nil when unavailable (FollowUpUnavailable says
-	// why). WebhookToken is the bearer token Alertmanager must send.
+	// FollowUp is nil when unavailable. WebhookToken is the bearer token Alertmanager must send.
 	FollowUp            *followup.Service
 	WebhookToken        TokenSource
 	FollowUpUnavailable string
 }
 
-// Server holds API state.
 type Server struct {
 	opts Options
 	log  *slog.Logger
@@ -115,7 +98,6 @@ type Server struct {
 	hookAt  time.Time
 }
 
-// New creates a server.
 func New(opts Options) *Server {
 	if opts.Logger == nil {
 		opts.Logger = slog.Default()
@@ -134,7 +116,6 @@ func New(opts Options) *Server {
 	}
 	s.checker = &stack.Checker{HTTP: opts.CheckHTTP}
 	if f := s.opts.FollowUp; f != nil {
-		// Alerts and evidence of a system come from its set of programs.
 		if f.Descriptions == nil {
 			f.Descriptions = s.opts.Descriptions
 		}
@@ -148,15 +129,13 @@ func New(opts Options) *Server {
 	return s
 }
 
-// SetDescription sets an in-memory description that cannot be saved. It
-// has no effect when a file or cluster store is configured.
+// SetDescription has no effect when a file or cluster store is configured.
 func (s *Server) SetDescription(sd *v1alpha1.SystemDescription, raw []byte, source string) {
 	if s.memory != nil {
 		s.memory.Set(sd, raw, source)
 	}
 }
 
-// Handler returns the HTTP handler.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, "ok\n") })
@@ -165,8 +144,6 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/schema", s.schema)
 	mux.HandleFunc("GET /api/v1/stack", s.stackStatus)
 
-	// Sets of programs (Prometheus, Alertmanager, Grafana, Loki, Tempo,
-	// OpenTelemetry Collector); each system uses one.
 	mux.HandleFunc("GET /api/v1/stacks", s.listStacks)
 	mux.HandleFunc("POST /api/v1/stacks", s.createStack)
 	mux.HandleFunc("POST /api/v1/stacks/check", s.checkStackAddress)
@@ -177,13 +154,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("DELETE /api/v1/stacks/{id}/programs/{kind}", s.resetStackProgram)
 	mux.HandleFunc("GET /api/v1/settings", s.settings)
 
-	// Login (see auth.go). The session endpoint also tells the UI whether
-	// login is enabled at all.
 	mux.HandleFunc("GET /api/auth/session", s.authSession)
 	mux.HandleFunc("POST /api/auth/login", s.authLogin)
 	mux.HandleFunc("POST /api/auth/logout", s.authLogout)
 
-	// Systems: one SystemDescription (or file) is one system.
 	mux.HandleFunc("GET /api/v1/systems", s.listSystems)
 	mux.HandleFunc("POST /api/v1/systems", s.createSystem)
 	mux.HandleFunc("GET /api/v1/systems/{id}", s.getSystem)
@@ -199,9 +173,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/systems/{id}/telegram", s.telegramStatusSystem)
 	mux.HandleFunc("PUT /api/v1/systems/{id}/telegram/routing", s.telegramRoutingSystem)
 
-	// Single-description endpoints of earlier versions: they operate on the
-	// default system. Links in notifications already sent rely on the
-	// runbook and alert endpoints.
+	// Single-description endpoints operate on the default system. Links in
+	// notifications already sent rely on the runbook and alert endpoints.
 	mux.HandleFunc("GET /api/v1/description", s.getDescription)
 	mux.HandleFunc("PUT /api/v1/description", s.putDescription)
 	mux.HandleFunc("POST /api/v1/description/validate", s.validate)
@@ -214,7 +187,6 @@ func (s *Server) Handler() http.Handler {
 	// Alertmanager webhook: bearer token instead of a session (hooks.go).
 	mux.HandleFunc("POST "+AlertmanagerHookPath, s.alertmanagerHook)
 
-	// Telegram: the bot and chats are shared by all systems.
 	mux.HandleFunc("GET /api/v1/telegram", s.telegramStatus)
 	mux.HandleFunc("PUT /api/v1/telegram/token", s.telegramSetToken)
 	mux.HandleFunc("DELETE /api/v1/telegram/token", s.telegramDeleteToken)
@@ -223,7 +195,6 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/v1/telegram/chats/{id}/test", s.telegramTest)
 	mux.HandleFunc("PUT /api/v1/telegram/routing", s.telegramRouting)
 
-	// Email: the mail server and recipients are shared by all systems.
 	mux.HandleFunc("GET /api/v1/email", s.emailStatus)
 	mux.HandleFunc("PUT /api/v1/email/server", s.emailSetServer)
 	mux.HandleFunc("DELETE /api/v1/email/server", s.emailDeleteServer)
@@ -251,7 +222,6 @@ func (s *Server) schema(w http.ResponseWriter, _ *http.Request) {
 	_, _ = w.Write(schema.JSON())
 }
 
-// starterDescription is offered when no description is loaded yet.
 const starterDescription = `apiVersion: kamerton.dev/v1alpha1
 kind: SystemDescription
 metadata:
@@ -264,8 +234,6 @@ spec:
       type: http
       critical: true
 `
-
-// ---- Legacy single-description endpoints (default system) ----
 
 func (s *Server) getDescription(w http.ResponseWriter, r *http.Request) {
 	mode := s.opts.Descriptions.Mode()
@@ -281,8 +249,7 @@ func (s *Server) getDescription(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// putDescription stores the description: an existing system with the
-// document's name is replaced, otherwise a new system is created.
+// putDescription replaces the system with the document's name, or creates a new one.
 func (s *Server) putDescription(w http.ResponseWriter, r *http.Request) {
 	body, ok := readBody(w, r)
 	if !ok {
@@ -369,11 +336,9 @@ func (s *Server) discover(w http.ResponseWriter, r *http.Request) {
 
 type discoveredView struct {
 	discovery.Service
-	// InSystems lists the other systems that already describe the service.
 	InSystems []string `json:"inSystems"`
 }
 
-// discoverFor lists services seen in telemetry; described refers to snap.
 func (s *Server) discoverFor(w http.ResponseWriter, r *http.Request, snap *descstore.Snapshot) {
 	var tel description.ResolvedTelemetry
 	described := map[string]bool{}
@@ -466,31 +431,25 @@ type alertView struct {
 	Severity string    `json:"severity"`
 	StartsAt time.Time `json:"startsAt"`
 	Summary  string    `json:"summary"`
-	// Title, Value and Threshold are the plain-words annotations written by
-	// the rule library (in the language of the description).
-	Title     string `json:"title,omitempty"`
-	Value     string `json:"value,omitempty"`
-	Threshold string `json:"threshold,omitempty"`
-	// Text and Action are the team's notification text, when written.
-	Text   string            `json:"text,omitempty"`
-	Action string            `json:"action,omitempty"`
-	Labels map[string]string `json:"labels"`
-	Triage *triage.Finding   `json:"triage,omitempty"`
-	// Fingerprint identifies the alert in Alertmanager.
-	Fingerprint string `json:"fingerprint,omitempty"`
+	// Title, Value and Threshold are the plain-words annotations of the rule library.
+	Title       string            `json:"title,omitempty"`
+	Value       string            `json:"value,omitempty"`
+	Threshold   string            `json:"threshold,omitempty"`
+	Text        string            `json:"text,omitempty"`
+	Action      string            `json:"action,omitempty"`
+	Labels      map[string]string `json:"labels"`
+	Triage      *triage.Finding   `json:"triage,omitempty"`
+	Fingerprint string            `json:"fingerprint,omitempty"`
 	// Muted is true for alerts an inhibit rule mutes (listed under "muted").
-	Muted bool `json:"muted,omitempty"`
-	// Incident is the ID of the incident the alert belongs to.
+	Muted    bool   `json:"muted,omitempty"`
 	Incident string `json:"incident,omitempty"`
 }
 
 func (s *Server) alerts(w http.ResponseWriter, r *http.Request) { s.alertsFor(w, r, nil) }
 
-// activeAlerts returns Kamerton's active alerts, including those muted by
-// inhibit rules (Status.InhibitedBy): of one system from the Alertmanager of
-// its set, or (snap nil) of all systems from every Alertmanager in use,
-// merged without duplicates. configured is false when no Alertmanager is
-// connected; partial lists Alertmanagers that failed while others answered.
+// activeAlerts returns active alerts, inhibited ones included, of one system or,
+// with snap nil, of all systems without duplicates. partial lists the
+// Alertmanagers that failed while others answered.
 func (s *Server) activeAlerts(ctx context.Context, snap *descstore.Snapshot, list []*descstore.Snapshot) (raw []alertmanager.Alert, configured bool, partial []string, err error) {
 	filter := map[string]string{rules.LabelManaged: "true"}
 	var sources []amSource
@@ -523,10 +482,8 @@ func (s *Server) activeAlerts(ctx context.Context, snap *descstore.Snapshot, lis
 	return mergeAlerts(ok...), true, partial, nil
 }
 
-// alertsFor lists active alerts. The response keeps the shape of earlier
-// versions ("alerts": alerts that are delivered) and adds "muted" (alerts
-// muted by the inhibit rules of grouping by cause) and "incidents" (alerts
-// grouped by cause on the dependency graph, see triage.Incidents).
+// alertsFor lists active alerts: "alerts" are delivered ones (a shape clients
+// rely on), "muted" are inhibited ones and "incidents" groups them by cause.
 func (s *Server) alertsFor(w http.ResponseWriter, r *http.Request, snap *descstore.Snapshot) {
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
@@ -606,7 +563,6 @@ func (s *Server) alertsFor(w http.ResponseWriter, r *http.Request, snap *descsto
 	writeJSON(w, http.StatusOK, resp)
 }
 
-// triageAlert is the part of an Alertmanager alert the incident grouping uses.
 func triageAlert(a alertmanager.Alert) triage.Alert {
 	title := a.Annotations[rules.AnnotationTitle]
 	if t := a.Annotations[generator.AnnotationMessageTitle]; t != "" {
@@ -681,7 +637,6 @@ func writeInvalid(w http.ResponseWriter, res description.Result) {
 	writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"error": "description is invalid", "code": "invalid", "valid": false, "errors": res.Errors, "warnings": res.Warnings})
 }
 
-// writeStoreErr maps store errors to HTTP responses.
 func writeStoreErr(w http.ResponseWriter, err error) {
 	var inv *descstore.InvalidError
 	switch {
@@ -712,8 +667,7 @@ func (r *statusRecorder) WriteHeader(code int) {
 	r.ResponseWriter.WriteHeader(code)
 }
 
-// securityHeaders keeps browsers from guessing content types and from
-// showing the UI inside a frame of another site (clickjacking).
+// securityHeaders stops content sniffing and framing by other sites (clickjacking).
 func securityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()

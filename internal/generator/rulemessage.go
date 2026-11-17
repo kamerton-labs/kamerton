@@ -13,9 +13,8 @@ import (
 	"github.com/kamerton-labs/kamerton/internal/rules"
 )
 
-// Annotations holding a notification text written by the team (see
-// v1alpha1.NotificationMessage). The notification templates prefer them to
-// the library's plain-words annotations.
+// Annotations holding the team's notification text. The templates prefer them
+// to the library's plain-words annotations.
 const (
 	AnnotationMessageTitle  = "kamerton_message_title"
 	AnnotationMessageText   = "kamerton_message_text"
@@ -25,9 +24,6 @@ const (
 	sincePlaceholder = "{since}"
 )
 
-// operationRef returns the {operation} substitution: an exact operation as a
-// template string literal (span names may contain anything), or a reference to
-// the operation label for per-operation rules, or "".
 func operationRef(exact, label string, perOperation bool) string {
 	switch {
 	case exact != "":
@@ -38,10 +34,7 @@ func operationRef(exact, label string, perOperation bool) string {
 	return ""
 }
 
-// withMessage writes the team's notification text into the rule's
-// annotations, replacing the placeholders that Prometheus can fill. The text
-// passed validation (description.CheckMessageText), so it contains no braces
-// other than placeholders and therefore no template actions of its own.
+// withMessage relies on description.CheckMessageText: the only braces in the text are placeholders.
 func (g *gen) withMessage(r rulefmt.Rule, svc *v1alpha1.Service, m *v1alpha1.NotificationMessage, operation string) rulefmt.Rule {
 	if m == nil {
 		return r
@@ -65,7 +58,6 @@ func (g *gen) withMessage(r rulefmt.Rule, svc *v1alpha1.Service, m *v1alpha1.Not
 	return r
 }
 
-// lastMessage returns the message of the last layer that has one.
 func lastMessage(ms ...*v1alpha1.NotificationMessage) *v1alpha1.NotificationMessage {
 	var out *v1alpha1.NotificationMessage
 	for _, m := range ms {

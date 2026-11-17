@@ -1,19 +1,7 @@
 // Copyright 2026 The Kamerton Authors
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// Package evidence collects what can be found about the probable cause of
-// an incident, for the follow-up message (internal/followup):
-//
-//   - what changed in the workload of the service in the last 30 minutes
-//     (new version, container restarts, pods not ready, Warning events),
-//     from the Kubernetes API (kube.go);
-//   - the operations with most failed calls, from the span metrics the
-//     error-rate rules use (prom.go);
-//   - one error line from the logs, from Loki (loki.go);
-//   - a link to failing traces in Grafana Explore with Tempo (traces.go).
-//
-// Every collector has a short timeout; a failure is logged and the part is
-// left out, never fatal. Collect bounds the total time.
+// Package evidence collects what can be found about an incident's cause; a failing collector only leaves its part out.
 package evidence
 
 import (
@@ -30,17 +18,14 @@ import (
 	"github.com/kamerton-labs/kamerton/internal/generator"
 )
 
-// Defaults of a Collector.
 const (
 	DefaultWindow  = 30 * time.Minute
 	DefaultTimeout = 5 * time.Second
 	DefaultTotal   = 12 * time.Second
-	// DefaultTempoDatasource is the UID of the Tempo data source of the
-	// bundled Grafana (deploy/helm/kamerton/values.yaml).
+	// DefaultTempoDatasource is the Tempo data source UID in the bundled Grafana.
 	DefaultTempoDatasource = "tempo"
 )
 
-// Sources are the programs of the system's set of programs.
 type Sources struct {
 	// Prom is the Prometheus of the set; nil: no metric evidence.
 	Prom prometheus.Querier
@@ -48,12 +33,9 @@ type Sources struct {
 	LokiURL string
 }
 
-// Collector collects evidence. The zero value collects nothing but the
-// parts that need no configuration (metrics with Sources.Prom, logs with
-// Sources.LokiURL).
+// Collector's zero value still collects metrics and logs when Sources provide them.
 type Collector struct {
-	// Kube reads pods, ReplicaSets, StatefulSets and events; nil: no
-	// workload evidence (no cluster, or the read access is turned off).
+	// Kube nil means no workload evidence (no cluster, or read access turned off).
 	Kube client.Reader
 	// GrafanaURL is Grafana's address as people open it; empty: no trace
 	// link. TempoDatasource is the UID of its Tempo data source.
@@ -110,8 +92,7 @@ func (c *Collector) httpClient() *http.Client {
 	return &http.Client{Timeout: c.timeout()}
 }
 
-// Collect gathers the evidence about one service of a description. since
-// is the start of the incident (the log search starts a little earlier).
+// Collect gathers evidence about one service; since is the incident start.
 // Title and Since of the result are left to the caller.
 func (c *Collector) Collect(ctx context.Context, sd *v1alpha1.SystemDescription, svc *v1alpha1.Service, src Sources, since time.Time) generator.RootEvidence {
 	ctx, cancel := context.WithTimeout(ctx, c.total())

@@ -21,18 +21,13 @@ import (
 	"time"
 )
 
-// Login with one shared user name and password (KAMERTON_AUTH_USER /
-// KAMERTON_AUTH_PASSWORD). Sessions are stateless: the cookie carries the
-// user and the expiry, signed with HMAC-SHA256, so they survive restarts and
-// work across replicas as long as every replica has the same key.
+// Login uses one shared user and password. Sessions are stateless HMAC-signed
+// cookies, so they survive restarts and work on every replica sharing the key.
 
 const (
-	// SessionCookie is the name of the session cookie.
 	SessionCookie = "kamerton_session"
-	// SessionTTL is how long a session lasts.
-	SessionTTL = 12 * time.Hour
+	SessionTTL    = 12 * time.Hour
 
-	// Failed logins allowed per client address within loginWindow.
 	loginMaxFailures = 5
 	loginWindow      = time.Minute
 
@@ -54,9 +49,8 @@ type Auth struct {
 	now     func() time.Time
 }
 
-// NewAuth configures login. secret is the session signing key; when empty,
-// the key is derived from the user and password, so sessions survive
-// restarts, are valid on every replica and end when the password changes.
+// NewAuth configures login. An empty secret derives the signing key from the user
+// and password, so sessions end when the password changes.
 func NewAuth(user, password, secret string) *Auth {
 	a := &Auth{
 		user:     user,
@@ -95,13 +89,11 @@ func (a *Auth) sign(payload string) string {
 	return base64.RawURLEncoding.EncodeToString(m.Sum(nil))
 }
 
-// issue returns a session token for the user valid until exp.
 func (a *Auth) issue(exp time.Time) string {
 	payload := tokenVersion + "|" + strconv.FormatInt(exp.Unix(), 10) + "|" + a.user
 	return base64.RawURLEncoding.EncodeToString([]byte(payload)) + "." + a.sign(payload)
 }
 
-// verify returns the user of a valid, unexpired token.
 func (a *Auth) verify(token string) (string, bool) {
 	b64, sig, ok := strings.Cut(token, ".")
 	if !ok {
@@ -129,7 +121,6 @@ func (a *Auth) verify(token string) (string, bool) {
 	return parts[2], true
 }
 
-// session returns the user of the request's session cookie.
 func (a *Auth) session(r *http.Request) (string, bool) {
 	c, err := r.Cookie(SessionCookie)
 	if err != nil || c.Value == "" {
@@ -138,8 +129,7 @@ func (a *Auth) session(r *http.Request) (string, bool) {
 	return a.verify(c.Value)
 }
 
-// isHTTPS reports whether the client reached us over HTTPS, directly or
-// through a proxy that sets X-Forwarded-Proto.
+// isHTTPS trusts X-Forwarded-Proto set by a proxy.
 func isHTTPS(r *http.Request) bool {
 	if r.TLS != nil {
 		return true
@@ -160,9 +150,8 @@ func (a *Auth) setCookie(w http.ResponseWriter, r *http.Request, value string, m
 	})
 }
 
-// clientAddr is the address the limiter counts failures for. It is the
-// TCP peer, not X-Forwarded-For, which a client could set to anything; behind
-// an ingress all clients therefore share one limit.
+// clientAddr is the TCP peer, not X-Forwarded-For, which a client could set to anything.
+// Behind an ingress all clients therefore share one limit.
 func clientAddr(r *http.Request) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
@@ -179,18 +168,13 @@ var publicAPI = map[string]bool{
 	"/api/auth/logout":  true,
 }
 
-// machineAPI are API paths called by programs, not browsers: they check
-// their own credentials (the Alertmanager webhook checks a bearer token)
-// and are exempt from the session and the CSRF header.
+// machineAPI paths check their own credentials and skip the session and CSRF checks.
 var machineAPI = map[string]bool{
 	AlertmanagerHookPath: true,
 }
 
-// csrfHeader must be present on state-changing API requests. Browsers do not
-// let another site send a custom header without a CORS preflight, which this
-// server never approves; the UI always sets it. It is required with login
-// disabled too: otherwise any web page opened by someone who can reach
-// Kamerton could change its settings with a plain form POST.
+// csrfHeader is required on state-changing API requests, also with login disabled: another
+// site cannot set a custom header without a CORS preflight, which this server never approves.
 const csrfHeader = "X-Requested-With"
 
 func isMutating(method string) bool {
@@ -201,9 +185,7 @@ func isMutating(method string) bool {
 	return false
 }
 
-// protect wraps the API with the CSRF check and, when login is enabled, the
-// session check. The UI's static files (and /healthz) stay public: the login
-// page has to load.
+// protect leaves static UI files public so the login page can load.
 func (s *Server) protect(next http.Handler) http.Handler {
 	a := s.opts.Auth
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -293,7 +275,6 @@ func writeTooMany(w http.ResponseWriter, wait time.Duration) {
 	writeJSON(w, http.StatusTooManyRequests, map[string]any{"error": "too many failed login attempts", "code": "too_many_attempts", "retryAfter": secs})
 }
 
-// loginLimiter counts failed logins per address in a sliding window.
 type loginLimiter struct {
 	mu       sync.Mutex
 	max      int
@@ -329,14 +310,12 @@ func (l *loginLimiter) waitFor(list []time.Time, now time.Time) time.Duration {
 	return list[len(list)-l.max].Add(l.window).Sub(now)
 }
 
-// blocked returns how long addr must wait, or 0.
 func (l *loginLimiter) blocked(addr string, now time.Time) time.Duration {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.waitFor(l.recent(addr, now), now)
 }
 
-// fail records a failure and returns how long addr is now blocked, or 0.
 func (l *loginLimiter) fail(addr string, now time.Time) time.Duration {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -357,7 +336,6 @@ func (l *loginLimiter) reset(addr string) {
 	delete(l.failures, addr)
 }
 
-// LogAuthMode reports at startup whether login is enabled (never the password).
 func LogAuthMode(log *slog.Logger, a *Auth) {
 	if a == nil {
 		log.Warn("login is disabled: anyone who can reach the UI can change settings; set KAMERTON_AUTH_USER and KAMERTON_AUTH_PASSWORD to enable it")

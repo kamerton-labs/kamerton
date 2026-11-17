@@ -19,7 +19,6 @@ import (
 	"github.com/kamerton-labs/kamerton/internal/email"
 )
 
-// Exists only in tests; never a real password.
 const fakeSMTPPassword = "fake-smtp-password-server-tests"
 
 type stubSender struct{ sent int }
@@ -61,7 +60,6 @@ func TestEmailUnavailableWithoutCluster(t *testing.T) {
 	}
 }
 
-// Mutating email endpoints sit behind the same login and CSRF check as the rest of the API.
 func TestEmailEndpointsNeedAuth(t *testing.T) {
 	a := NewAuth("admin", "secret-password-for-tests", "")
 	es := &email.Service{Passwords: &email.MemoryPasswordStore{}, State: &email.MemoryStateStore{}, Descriptions: &descstore.Memory{}, Sender: &stubSender{}}

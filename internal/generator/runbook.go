@@ -14,7 +14,6 @@ import (
 	"github.com/kamerton-labs/kamerton/internal/rules"
 )
 
-// runbookWords are the fixed texts of a runbook stub in one language.
 type runbookWords struct {
 	title, generated, typ, critical, owner, dependsOn, calledBy string
 	alerts, severity, signal, todo, escalation, escalationTodo  string
@@ -61,9 +60,6 @@ var runbookTexts = map[string]runbookWords{
 	},
 }
 
-// runbook renders a Markdown runbook stub for one service in the language of
-// the description's notifications. It lists what is known from the
-// description and leaves the human parts as explicit TODOs.
 func runbook(sd *v1alpha1.SystemDescription, svc *v1alpha1.Service, rs []rulefmt.Rule) string {
 	lang := rules.LanguageEnglish
 	if n := sd.Spec.Notifications; n != nil && n.Language != "" {
@@ -127,8 +123,7 @@ func runbook(sd *v1alpha1.SystemDescription, svc *v1alpha1.Service, rs []rulefmt
 	return b.String()
 }
 
-// runbookHints are first steps for the rules that need no threshold from the
-// team; the UI runbook page shows the same advice.
+// runbookHints: the UI runbook page shows the same advice.
 var runbookHints = map[string]string{
 	rules.AlertOOMKilled: "The kernel killed the container for exceeding its memory limit; Kubernetes restarted it. " +
 		"Check `kubectl describe pod` (Last State: OOMKilled), the memory graph before the kill (a steady climb is a leak, a jump is a heavy request), " +
@@ -149,8 +144,6 @@ var runbookHints = map[string]string{
 		"Find slow traces of this operation and the dependency that takes the time.",
 }
 
-// runbookHintsRussian is runbookHints in Russian, for descriptions with
-// notifications.language: ru.
 var runbookHintsRussian = map[string]string{
 	rules.AlertOOMKilled: "Ядро убило контейнер за превышение лимита памяти, Kubernetes его перезапустил. " +
 		"Посмотрите `kubectl describe pod` (Last State: OOMKilled) и график памяти перед убийством (ровный рост - утечка, резкий скачок - тяжёлый запрос); " +

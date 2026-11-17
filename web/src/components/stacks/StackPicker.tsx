@@ -1,9 +1,7 @@
 // Copyright 2026 The Kamerton Authors
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// A system's set of programs, chosen in its settings (the canvas panel).
-// Shown only when more than one set exists: with one set there is nothing
-// to choose.
+// Shown only when more than one set exists.
 
 import { useState } from 'react'
 import { Check, Layers } from 'lucide-react'
@@ -81,7 +79,6 @@ function StackDialog({ sets, onClose }: { sets: StackSet[]; onClose: () => void 
   )
 }
 
-/** Row in the canvas panel: "Program set: Team B". */
 export default function StackPicker() {
   const { desc } = useEditor()
   const stacks = useStacks()

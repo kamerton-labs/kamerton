@@ -18,22 +18,17 @@ import (
 	"github.com/kamerton-labs/kamerton/internal/description"
 )
 
-// Log search.
 const (
 	// logLead is how long before the incident start the log search begins.
-	logLead = 5 * time.Minute
-	// maxLogBytes caps the Loki response read.
+	logLead     = 5 * time.Minute
 	maxLogBytes = 1 << 20
 	// maxRawLine caps a log line before it is trimmed for the message.
-	maxRawLine = 2000
-	// errorPattern selects error lines (case-insensitive RE2).
+	maxRawLine   = 2000
 	errorPattern = `(?i)(error|exception|fail|fatal|panic|timeout|refused)`
 )
 
-// LogQuery returns the LogQL query of error lines of a service. Logs that
-// reach Loki over OTLP carry the OpenTelemetry service name as the stream
-// label service_name, the same name and label the span metrics use
-// (spec.telemetry.spans.serviceLabel, the service's telemetryName).
+// LogQuery selects error lines by the stream label service_name: logs that reach
+// Loki over OTLP carry the same service name the span metrics use.
 func LogQuery(sd *v1alpha1.SystemDescription, svc *v1alpha1.Service) string {
 	tel := description.ResolveTelemetry(sd.Spec.Telemetry)
 	label := tel.Spans.ServiceLabel
@@ -53,8 +48,7 @@ type lokiResponse struct {
 	} `json:"data"`
 }
 
-// LogLine returns the newest error line of a service between shortly
-// before since and now, from the Loki at base; "" when there is none.
+// LogLine returns the newest error line from shortly before since until now; "" when none.
 func (c *Collector) LogLine(ctx context.Context, base string, sd *v1alpha1.SystemDescription, svc *v1alpha1.Service, since, now time.Time) (string, error) {
 	start := since.Add(-logLead)
 	if since.IsZero() || start.Before(now.Add(-c.window())) {

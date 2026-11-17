@@ -1,10 +1,9 @@
 // Copyright 2026 The Kamerton Authors
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// Add a set of programs (name and addresses, typed or taken from found
-// programs) or rename one. The advanced part holds the extra labels for
-// PrometheusRule and AlertmanagerConfig objects: which Prometheus Operator
-// instance picks up the rules of systems using the set.
+// Add or rename a set of programs. The extra labels go on PrometheusRule and
+// AlertmanagerConfig objects so the right Prometheus Operator instance picks
+// them up.
 
 import { useState } from 'react'
 import { ChevronDown, Loader2 } from 'lucide-react'

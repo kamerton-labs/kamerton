@@ -1,10 +1,9 @@
 // Copyright 2026 The Kamerton Authors
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// Time zone of the times in notification messages
-// (spec.notifications.timeZone). The core resolves the zone and writes the
-// UTC offset into the message templates (internal/generator/timezone.go);
-// here the zone is chosen and its offset is shown the same way: "UTC+5".
+// Time zone of notification times (spec.notifications.timeZone). The core
+// writes the UTC offset into message templates (internal/generator/timezone.go);
+// the UI shows it the same way: "UTC+5".
 
 import { t } from '@/i18n'
 import { clone, type Description } from './types'
@@ -27,7 +26,6 @@ export function setTimeZone(desc: Description, zone: string): Description {
   return next
 }
 
-/** The browser's zone, for example Asia/Almaty. */
 export function browserTimeZone(): string {
   try {
     return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'

@@ -25,58 +25,48 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-// Found is a program found in the cluster and checked over HTTP.
 type Found struct {
-	Kind      string `json:"kind"`
-	Namespace string `json:"namespace"`
-	Service   string `json:"service"`
-	URL       string `json:"url"`
-	Version   string `json:"version,omitempty"`
-	Healthy   bool   `json:"healthy"`
-	// State and Message come from Check.
-	State   string `json:"state"`
-	Message string `json:"message"`
-	// Operator is the Prometheus Operator resource behind the service, when found.
-	Operator *OperatorInstance `json:"operator,omitempty"`
-	// UsedBy lists the sets that already use this address (filled by the API).
+	Kind      string            `json:"kind"`
+	Namespace string            `json:"namespace"`
+	Service   string            `json:"service"`
+	URL       string            `json:"url"`
+	Version   string            `json:"version,omitempty"`
+	Healthy   bool              `json:"healthy"`
+	State     string            `json:"state"`
+	Message   string            `json:"message"`
+	Operator  *OperatorInstance `json:"operator,omitempty"`
+	// UsedBy is filled by the API, not by discovery.
 	UsedBy []string `json:"usedBy"`
 
 	headless bool
 }
 
-// OperatorInstance is a Prometheus or Alertmanager custom resource of the
-// Prometheus Operator and what it picks up.
 type OperatorInstance struct {
 	// Kind is "Prometheus" or "Alertmanager".
 	Kind      string `json:"kind"`
 	Namespace string `json:"namespace"`
 	Name      string `json:"name"`
-	// Labels are what Kamerton's PrometheusRule (AlertmanagerConfig)
-	// objects need for this instance to pick them up (matchLabels of the
-	// selector).
+	// Labels are the matchLabels that Kamerton's PrometheusRule (AlertmanagerConfig)
+	// objects need for this instance to pick them up.
 	Labels map[string]string `json:"labels"`
 	// SelectsAll: the selector is empty and takes every object.
 	SelectsAll bool `json:"selectsAll"`
-	// SelectsNone: no selector, the instance takes no objects at all.
+	// SelectsNone: there is no selector, so the instance takes no objects at all.
 	SelectsNone bool `json:"selectsNone"`
-	// HasExpressions: the selector has matchExpressions, which cannot be
-	// turned into labels automatically.
-	HasExpressions bool `json:"hasExpressions"`
-	// Namespaces says, in plain words, from which namespaces objects are taken.
-	Namespaces string `json:"namespaces"`
+	// HasExpressions: matchExpressions cannot be turned into labels automatically.
+	HasExpressions bool   `json:"hasExpressions"`
+	Namespaces     string `json:"namespaces"`
 
 	selector labels.Selector
 }
 
-// Picks reports whether an object with these labels is selected (namespace
-// selection is not considered).
+// Picks ignores namespace selection.
 func (o *OperatorInstance) Picks(lbls map[string]string) bool {
 	return o.selector != nil && o.selector.Matches(labels.Set(lbls))
 }
 
-// dropHeadlessTwins removes a headless service (prometheus-operated,
-// alertmanager-operated) when a normal service of the same program, namespace,
-// version and operator resource was found: it is the same instance twice.
+// dropHeadlessTwins drops a headless service (prometheus-operated) when a normal
+// service of the same instance was found.
 func dropHeadlessTwins(in []Found) []Found {
 	same := func(a, b *Found) bool {
 		if a.Kind != b.Kind || a.Namespace != b.Namespace || a.Version != b.Version {
@@ -105,35 +95,29 @@ func dropHeadlessTwins(in []Found) []Found {
 	return out
 }
 
-// Operator is what was learned from Prometheus Operator resources.
 type Operator struct {
-	// Available is false when the CRDs are missing or cannot be read;
-	// Reason then says why.
 	Available     bool               `json:"available"`
 	Reason        string             `json:"reason,omitempty"`
 	Prometheuses  []OperatorInstance `json:"prometheuses"`
 	Alertmanagers []OperatorInstance `json:"alertmanagers"`
 }
 
-// Discovery is the result of looking for programs in the cluster.
 type Discovery struct {
 	Found    []Found  `json:"found"`
 	Operator Operator `json:"operator"`
-	// Warnings are problems a person should know, in plain words.
 	Warnings []string `json:"warnings"`
 }
 
-// Discoverer finds programs through the Kubernetes API (Services in all
-// namespaces and Prometheus Operator resources) and confirms each candidate
+// Discoverer finds programs through the Kubernetes API only and confirms each
 // with an HTTP check. It never scans the network.
 type Discoverer struct {
-	// Client reads Services and custom resources; an uncached client.
+	// Client should be uncached.
 	Client client.Reader
-	// HTTP is used for the identity checks (short timeout).
+	// HTTP defaults to a client with a 3s timeout.
 	HTTP *http.Client
-	// Concurrency bounds the parallel HTTP checks (default 8).
+	// Concurrency defaults to 8.
 	Concurrency int
-	// Timeout bounds the whole discovery (default 25s).
+	// Timeout bounds the whole discovery; default 25s.
 	Timeout time.Duration
 }
 
@@ -142,7 +126,6 @@ var (
 	gvkAlertmanagerList = schema.GroupVersionKind{Group: "monitoring.coreos.com", Version: "v1", Kind: "AlertmanagerList"}
 )
 
-// Discover lists candidates, checks them and reads operator resources.
 func (d *Discoverer) Discover(ctx context.Context) (*Discovery, error) {
 	timeout := d.Timeout
 	if timeout == 0 {
@@ -239,8 +222,7 @@ func (d *Discoverer) Discover(ctx context.Context) (*Discovery, error) {
 	return out, nil
 }
 
-// Operator reads Prometheus and Alertmanager resources of the Prometheus
-// Operator. Missing CRDs or permissions are reported, never fatal.
+// Operator reports missing CRDs or permissions in Reason; they are never fatal.
 func (d *Discoverer) Operator(ctx context.Context) Operator {
 	op := Operator{Prometheuses: []OperatorInstance{}, Alertmanagers: []OperatorInstance{}}
 	proms, err := d.listCRs(ctx, gvkPrometheusList, "Prometheus", "ruleSelector", "ruleNamespaceSelector")
@@ -318,7 +300,6 @@ func (d *Discoverer) listCRs(ctx context.Context, gvk schema.GroupVersionKind, k
 	return out, nil
 }
 
-// DiscoveryError is a discovery failure with a plain-words message.
 type DiscoveryError struct {
 	Message string
 	Err     error
@@ -326,7 +307,6 @@ type DiscoveryError struct {
 
 func (e *DiscoveryError) Error() string { return e.Message + " (" + e.Err.Error() + ")" }
 
-// Unwrap returns the underlying error.
 func (e *DiscoveryError) Unwrap() error { return e.Err }
 
 var runtimeDefaultConverter = runtime.DefaultUnstructuredConverter
@@ -335,8 +315,8 @@ func runtimeConvert(in map[string]any, out *metav1.LabelSelector) error {
 	return runtimeDefaultConverter.FromUnstructured(in, out)
 }
 
-// OperatorWarnings reports instances Kamerton cannot tell apart: two or
-// more that take every object.
+// OperatorWarnings reports two or more instances that take every object: Kamerton
+// cannot tell them apart.
 func OperatorWarnings(op *Operator) []string {
 	var out []string
 	all := func(list []OperatorInstance, what, objects string) {
@@ -355,9 +335,8 @@ func OperatorWarnings(op *Operator) []string {
 	return out
 }
 
-// Recognize says which program a Service looks like: by well-known labels,
-// operator service names or service names; byPort is true when only a
-// typical port suggested it (such candidates are kept only if confirmed).
+// Recognize sets byPort when only a typical port suggested the kind; such
+// candidates are kept only if confirmed.
 func Recognize(svc *corev1.Service) (kind string, byPort bool) {
 	name := svc.Name
 	switch name {
@@ -387,7 +366,6 @@ func Recognize(svc *corev1.Service) (kind string, byPort bool) {
 	return "", false
 }
 
-// skipService drops helper services that are never the program's API.
 func skipService(name string) bool {
 	for _, suf := range []string{"-headless", "-memberlist", "-discovery", "-gossip-ring", "-thanos-discovery", "loki-gateway"} {
 		if strings.HasSuffix(name, suf) {
@@ -397,7 +375,6 @@ func skipService(name string) bool {
 	return false
 }
 
-// kindFromName maps a label value or service name to a kind.
 func kindFromName(v string) string {
 	v = strings.ToLower(v)
 	if v == "" {
@@ -437,8 +414,7 @@ var typicalPorts = map[string][]int32{
 	KindOTelCollector: {13133},
 }
 
-// pickPort chooses the port to check; problem explains a service without a
-// usable port.
+// pickPort returns a problem text when the service has no usable port.
 func pickPort(svc *corev1.Service, kind string) (int32, string) {
 	ports := svc.Spec.Ports
 	for _, want := range typicalPorts[kind] {
@@ -466,8 +442,8 @@ func pickPort(svc *corev1.Service, kind string) (int32, string) {
 	return 0, "The Service has no TCP port."
 }
 
-// matchOperator finds the operator resource behind a service: by the
-// operator's pod selector label, else the only resource in the namespace.
+// matchOperator matches by the operator's pod selector label, else takes the only
+// resource in the namespace.
 func matchOperator(svc *corev1.Service, kind string, op *Operator) *OperatorInstance {
 	var list []OperatorInstance
 	var keys []string
@@ -508,13 +484,10 @@ func kindIndex(k string) int {
 	return len(Kinds)
 }
 
-// ObjectLabels are the labels Kamerton itself puts on every generated object.
 var ObjectLabels = map[string]string{"app.kubernetes.io/managed-by": "kamerton", "kamerton.dev/managed": "true"}
 
-// SetWarnings checks a set against the operator resources: when more than
-// one Prometheus (Alertmanager) would pick up the rules (routes) of systems
-// using this set, Kamerton cannot keep them apart; when none would, they
-// are not loaded at all.
+// SetWarnings: Kamerton cannot keep systems apart when several instances pick up
+// their objects, and nothing is loaded when none does.
 func SetWarnings(set *Resolved, op *Operator) []string {
 	if op == nil || !op.Available {
 		return nil
@@ -550,8 +523,6 @@ func SetWarnings(set *Resolved, op *Operator) []string {
 	return out
 }
 
-// managedNamespace reports whether an in-cluster address (svc.namespace...)
-// points into a namespace with an operator resource of this kind.
 func managedNamespace(raw string, list []OperatorInstance) bool {
 	u, err := url.Parse(raw)
 	if err != nil {

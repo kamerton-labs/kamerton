@@ -115,10 +115,7 @@ function sync(doc: Document, path: Path, prev: unknown, next: unknown) {
   doc.setIn(path, isPlainObject(next) || Array.isArray(next) ? createNode(doc, next, node) : next)
 }
 
-/**
- * Writes `next` into the YAML text `text`, touching only what changed.
- * `text` must parse (callers keep editing disabled while it does not).
- */
+/** Writes `next` into `text`, touching only what changed. `text` must parse. */
 export function writeDescriptionYaml(text: string, next: Description): string {
   const doc = parseDocument(text)
   if (doc.errors.length > 0) throw new Error('cannot update YAML with syntax errors')

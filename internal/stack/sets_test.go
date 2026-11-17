@@ -39,7 +39,6 @@ func program(t *testing.T, r *Resolved, kind string) Program {
 	return Program{}
 }
 
-// exerciseStore runs the same scenario against every store implementation.
 func exerciseStore(t *testing.T, store StateStore) {
 	ctx := context.Background()
 	s := &Sets{Store: store, Flags: flags()}
@@ -62,7 +61,6 @@ func exerciseStore(t *testing.T, store StateStore) {
 		t.Errorf("loki not connected: %+v", p)
 	}
 
-	// Override one address of the built-in set, then reset it.
 	b, err = s.Update(ctx, BuiltinID, Input{URLs: map[string]string{KindPrometheus: " http://prom.team-a:9090/ "}})
 	if err != nil {
 		t.Fatal(err)
@@ -83,7 +81,6 @@ func exerciseStore(t *testing.T, store StateStore) {
 		t.Errorf("disconnect: %+v", p)
 	}
 
-	// A second set, ID derived from a Russian name.
 	team, err := s.Create(ctx, Input{Name: ptr("Команда А"), URLs: map[string]string{KindPrometheus: "http://prometheus-operated.team-a:9090", KindAlertmanager: "http://kamerton-kps-alertmanager:9093"},
 		RuleLabels: &map[string]string{"release": "team-a"}})
 	if err != nil {
@@ -101,11 +98,10 @@ func exerciseStore(t *testing.T, store StateStore) {
 	if team.RuleLabels["release"] != "team-a" {
 		t.Errorf("labels: %+v", team.RuleLabels)
 	}
-	// Same name again: refused; the derived ID would be unique anyway.
+	// The same name is refused, although the derived ID would be unique.
 	if _, err := s.Create(ctx, Input{Name: ptr("команда а")}); !isInput(err) {
 		t.Errorf("duplicate name: %v", err)
 	}
-	// A different name with the same slug gets a unique ID.
 	other, err := s.Create(ctx, Input{Name: ptr("Команда А!")})
 	if err != nil || other.ID != "komanda-a-2" {
 		t.Errorf("unique ID: %+v %v", other, err)
@@ -114,13 +110,11 @@ func exerciseStore(t *testing.T, store StateStore) {
 		t.Error(err)
 	}
 
-	// Rename keeps the ID.
 	team, err = s.Update(ctx, "komanda-a", Input{Name: ptr("Team A")})
 	if err != nil || team.ID != "komanda-a" || team.Name != "Team A" {
 		t.Fatalf("rename: %+v %v", team, err)
 	}
 
-	// Resolve: unknown falls back to the built-in set.
 	r, unknown, err := s.Resolve(ctx, "nope")
 	if err != nil || !unknown || r.ID != BuiltinID {
 		t.Errorf("unknown set: %+v %v %v", r.ID, unknown, err)
@@ -134,7 +128,6 @@ func exerciseStore(t *testing.T, store StateStore) {
 		t.Errorf("resolve team: %+v", r)
 	}
 
-	// Delete: the built-in set and a used set cannot be deleted.
 	if err := s.Delete(ctx, BuiltinID, nil); !errors.Is(err, ErrBuiltin) {
 		t.Errorf("delete built-in: %v", err)
 	}
@@ -164,7 +157,6 @@ func TestSetsMemoryStore(t *testing.T) { exerciseStore(t, &MemoryStateStore{}) }
 func TestSetsFileStore(t *testing.T) {
 	path := filepath.Join(t.TempDir(), ".kamerton-stacks.json")
 	exerciseStore(t, &FileStateStore{Path: path})
-	// A new store on the same file sees the state (survives restarts).
 	s := &Sets{Store: &FileStateStore{Path: path}, Flags: flags()}
 	b, err := s.Get(context.Background(), BuiltinID)
 	if err != nil {
@@ -215,7 +207,6 @@ func TestCheckLabels(t *testing.T) {
 	if l, err := CheckLabels(map[string]string{"release": "kps", " team ": " a ", "": "x"}, "PrometheusRule"); err != nil || l["release"] != "kps" || l["team"] != "a" || len(l) != 2 {
 		t.Errorf("good labels: %v %v", l, err)
 	}
-	// Repeating Kamerton's own label with its value is fine (found selectors do).
 	if _, err := CheckLabels(map[string]string{"kamerton.dev/managed": "true"}, "AlertmanagerConfig"); err != nil {
 		t.Errorf("own label with own value: %v", err)
 	}

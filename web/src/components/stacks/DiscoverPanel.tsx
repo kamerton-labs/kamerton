@@ -1,11 +1,9 @@
 // Copyright 2026 The Kamerton Authors
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// "Find installed": programs Kamerton found through the Kubernetes API
-// (Services of the cluster, confirmed by an HTTP check), grouped by
-// program. A found program goes into an existing set, or several found
-// ones make a new set; selectors of Prometheus Operator resources fill in
-// the labels Kamerton's objects need.
+// "Find installed": programs found through the Kubernetes API (cluster
+// Services confirmed by an HTTP check). Selectors of Prometheus Operator
+// resources fill in the labels Kamerton's objects need.
 
 import { useState } from 'react'
 import { AlertTriangle, Loader2, Plus, SearchX, X } from 'lucide-react'

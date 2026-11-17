@@ -14,7 +14,6 @@ import (
 	"time"
 )
 
-// Alert is the subset of an Alertmanager v2 alert used by Kamerton.
 type Alert struct {
 	Fingerprint  string            `json:"fingerprint"`
 	Labels       map[string]string `json:"labels"`
@@ -32,7 +31,6 @@ type Status struct {
 	InhibitedBy []string `json:"inhibitedBy,omitempty"`
 }
 
-// Inhibited reports whether an inhibit rule mutes the alert.
 func (a *Alert) Inhibited() bool { return len(a.Status.InhibitedBy) > 0 }
 
 // MutedReader also lists alerts muted by inhibit rules. Readers that do not
@@ -43,30 +41,24 @@ type MutedReader interface {
 	AlertsWithInhibited(ctx context.Context, filter map[string]string) ([]Alert, error)
 }
 
-// Reader lists active alerts.
 type Reader interface {
 	ActiveAlerts(ctx context.Context, filter map[string]string) ([]Alert, error)
 }
 
-// Client implements Reader over HTTP.
 type Client struct {
 	base string
 	http *http.Client
 }
 
-// New returns a client for the Alertmanager at base (for example
-// http://alertmanager-operated.monitoring:9093).
 func New(base string) *Client {
 	return &Client{base: strings.TrimRight(base, "/"), http: &http.Client{Timeout: 15 * time.Second}}
 }
 
-// ActiveAlerts returns active (not silenced, not inhibited) alerts matching
-// the label equality filter.
+// ActiveAlerts returns alerts that are neither silenced nor inhibited, filtered by label equality.
 func (c *Client) ActiveAlerts(ctx context.Context, filter map[string]string) ([]Alert, error) {
 	return c.list(ctx, filter, false)
 }
 
-// AlertsWithInhibited implements MutedReader.
 func (c *Client) AlertsWithInhibited(ctx context.Context, filter map[string]string) ([]Alert, error) {
 	return c.list(ctx, filter, true)
 }

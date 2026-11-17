@@ -19,16 +19,12 @@ import (
 	"time"
 )
 
-// Sender talks to the SMTP server. The password is passed per call and is
-// never part of an error message.
+// Sender gets the password per call and never puts it in an error.
 type Sender interface {
-	// Check connects and logs in without sending anything.
 	Check(ctx context.Context, cfg ServerSettings, password string) error
-	// Send sends a plain-text message.
 	Send(ctx context.Context, cfg ServerSettings, password string, to []string, subject, body string) error
 }
 
-// HTMLSender also sends a message with an HTML body next to the plain text.
 type HTMLSender interface {
 	SendHTML(ctx context.Context, cfg ServerSettings, password string, to []string, subject, text, html string) error
 }
@@ -36,9 +32,9 @@ type HTMLSender interface {
 // SMTPSender implements Sender with net/smtp: implicit TLS on port 465,
 // otherwise STARTTLS when the server offers it (required to log in).
 type SMTPSender struct {
-	// Timeout of one whole conversation. Default 20s.
+	// Timeout covers one whole SMTP conversation. Default 20s.
 	Timeout time.Duration
-	// TLSConfig is for tests; nil uses the system roots.
+	// TLSConfig nil uses the system roots.
 	TLSConfig *tls.Config
 }
 
@@ -109,7 +105,6 @@ func (s *SMTPSender) dial(ctx context.Context, cfg ServerSettings, password stri
 	return c, nil
 }
 
-// Check implements Sender.
 func (s *SMTPSender) Check(ctx context.Context, cfg ServerSettings, password string) error {
 	c, err := s.dial(ctx, cfg, password)
 	if err != nil {
@@ -119,13 +114,11 @@ func (s *SMTPSender) Check(ctx context.Context, cfg ServerSettings, password str
 	return nil
 }
 
-// Send implements Sender.
 func (s *SMTPSender) Send(ctx context.Context, cfg ServerSettings, password string, to []string, subject, body string) error {
 	return s.send(ctx, cfg, password, to, buildMessage(cfg.From, to, subject, body, time.Now()))
 }
 
-// SendHTML implements HTMLSender: a multipart/alternative message with the
-// plain text first and the HTML second.
+// SendHTML sends multipart/alternative with the plain text first.
 func (s *SMTPSender) SendHTML(ctx context.Context, cfg ServerSettings, password string, to []string, subject, text, html string) error {
 	return s.send(ctx, cfg, password, to, buildHTMLMessage(cfg.From, to, subject, text, html, time.Now()))
 }
@@ -198,8 +191,7 @@ func buildHTMLMessage(from string, to []string, subject, text, html string, now 
 	return b.Bytes()
 }
 
-// scrub makes sure an error never carries the password (servers may echo
-// parts of a failed AUTH exchange).
+// scrub removes the password from err: servers may echo parts of a failed AUTH exchange.
 func scrub(err error, password string) error {
 	if err == nil || password == "" || !strings.Contains(err.Error(), password) {
 		return err
@@ -207,9 +199,6 @@ func scrub(err error, password string) error {
 	return errors.New(strings.ReplaceAll(err.Error(), password, "***"))
 }
 
-// ---- Validation ----
-
-// ValidSmarthost checks host:port.
 func ValidSmarthost(v string) error {
 	host, port, err := net.SplitHostPort(v)
 	if err != nil || host == "" || strings.ContainsAny(host, " \t\r\n/") {

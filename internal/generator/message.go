@@ -12,25 +12,9 @@ import (
 	"github.com/kamerton-labs/kamerton/internal/rules"
 )
 
-// Notification message templates.
-//
-// They are Alertmanager templates (Go text/template syntax). Alertmanager
-// executes a Telegram message with parse mode HTML and an email html body
-// with html/template, so label and annotation values are HTML-escaped by
-// Alertmanager itself; the email text body and subject are executed with
-// text/template. The templates only use what Alertmanager v0.25+ provides:
-// .Status, .CommonLabels, .Alerts.Firing, .Alerts.Resolved, alert fields,
-// time.Time methods and Alertmanager's built-in reReplaceAll; no custom functions. The output uses only tags allowed
-// by Telegram's HTML parse mode (<b>, <i>, <a href>).
-//
-// Times are shown in spec.notifications.timeZone (see zoneClock): Kamerton
-// computes the UTC offsets of the zone and the template only adds a constant
-// to the UTC time, so nothing depends on the time-zone database or the
-// version of the Alertmanager that sends the message.
-//
-// Links point only to Kamerton's external URL (the alert in the UI and the
-// runbook). Without an external URL the message has no links: in-cluster
-// addresses such as the Prometheus generator URL are useless on a phone.
+// Alertmanager HTML-escapes values itself, and the templates use only what v0.25+ provides.
+// Times are shifted by offsets Kamerton computes (see zoneClock), and links point only to
+// Kamerton's external URL: in-cluster addresses are useless on a phone.
 
 // maxListedAlerts bounds the alerts listed in one grouped message, so the
 // message stays readable and below Telegram's 4096-character limit.
@@ -58,7 +42,6 @@ var words = map[string]messageWords{
 	},
 }
 
-// messageTemplates are the rendered templates for one description.
 type messageTemplates struct {
 	TelegramHTML string
 	EmailHTML    string
@@ -66,8 +49,6 @@ type messageTemplates struct {
 	EmailSubject string
 }
 
-// buildMessages renders the templates for a language, an external URL
-// (empty: no links) and the clock of the time zone.
 func buildMessages(lang, externalURL string, clock zoneClock) messageTemplates {
 	w, ok := words[lang]
 	if !ok {
@@ -127,7 +108,6 @@ func messageBody(w messageWords, base string, htmlMode bool, clock zoneClock) st
 	}
 
 	var t strings.Builder
-	// Header: state, severity, system (environment), number of alerts.
 	t.WriteString(`{{ if eq .Status "firing" }}{{ if eq .CommonLabels.severity "critical" }}🔴 ` + b(w.critical) +
 		`{{ else if eq .CommonLabels.severity "warning" }}🟡 ` + b(w.warning) + `{{ else }}🟠 ` + b(w.problem) + `{{ end }}` +
 		`{{ else }}✅ ` + b(w.resolved) + `{{ end }}` +
@@ -139,9 +119,7 @@ func messageBody(w messageWords, base string, htmlMode bool, clock zoneClock) st
 		alertLinks = `{{ with $a.Annotations.runbook_url }}` + link(`{{ . }}`, w.runbook) + ` · {{ end }}` +
 			link(base+`/alerts?alertname={{ $a.Labels.alertname }}`+amp+`service={{ $a.Labels.service }}`, w.open) + "\n"
 	}
-	// A text written by the team (kamerton_message_*) replaces the library's
-	// words; {since} in it is filled here, the only place the start time is
-	// known. $since is the start time in the zone of the description.
+	// $since is the start time in the description's zone, used to fill {since} in the team's text.
 	since := func(field string) string {
 		return `{{ reReplaceAll "\\{since\\}" $since ` + field + ` }}`
 	}
@@ -154,7 +132,6 @@ func messageBody(w messageWords, base string, htmlMode bool, clock zoneClock) st
 		`{{ with $a.Annotations.kamerton_message_action }}👉 ` + since(`.`) + "\n{{ end }}" +
 		`{{ end }}`
 
-	// Firing alerts: service, plain-words title, value vs threshold, since.
 	t.WriteString(`{{ range $i, $a := .Alerts.Firing }}{{ if lt $i ` + strconv.Itoa(maxListedAlerts) + ` }}` + clock.assign("$since", "$a.StartsAt") + "\n" +
 		`{{ if eq $a.Labels.severity "critical" }}🔴{{ else }}🟡{{ end }} ` + b(`{{ $a.Labels.service }}`) + `: ` + title + "\n" +
 		`{{ with $a.Annotations.kamerton_value }}` + w.now + ` ` + b(`{{ . }}`) +
@@ -166,7 +143,6 @@ func messageBody(w messageWords, base string, htmlMode bool, clock zoneClock) st
 	t.WriteString(`{{ if gt (len .Alerts.Firing) ` + strconv.Itoa(maxListedAlerts) + ` }}` + "\n" +
 		i(`… `+w.shown+` `+strconv.Itoa(maxListedAlerts)+` `+w.more+` {{ len .Alerts.Firing }}`) + "\n{{ end }}")
 
-	// Resolved alerts: a compact list, one line each.
 	resolvedHeader := `{{ if .Alerts.Firing }}` + "\n" + b(w.alsoResolved) + ":\n{{ end }}"
 	t.WriteString(`{{ if .Alerts.Resolved }}` + resolvedHeader +
 		`{{ range $i, $a := .Alerts.Resolved }}{{ if lt $i ` + strconv.Itoa(maxListedAlerts) + ` }}` +

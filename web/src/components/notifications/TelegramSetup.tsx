@@ -1,11 +1,8 @@
 // Copyright 2026 The Kamerton Authors
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// Telegram setup: bot token (validated by the core with getMe and stored in a
-// Kubernetes Secret), chats discovered by the core, test messages, and which
-// systems send to each chat. What goes where is chosen per system (canvas,
-// "Where to send alerts").
-// The token never comes back from the API; this screen only shows the bot's
+// Telegram setup. The core validates the bot token with getMe and stores it in
+// a Kubernetes Secret; the token never comes back from the API, only the bot's
 // public name.
 
 import { useState } from 'react'
@@ -131,7 +128,6 @@ function BotSetup({ t: token, replacing, onDone, onCancel }: { t: TelegramStatus
   )
 }
 
-/** The connected bot: avatar, name, @username, status and a quiet menu. */
 function BotSummary({ t, onReplace }: { t: TelegramStatus['token']; onReplace: () => void }) {
   const del = useDeleteTelegramToken()
   const [confirmDialog, confirm] = useConfirm()
@@ -232,7 +228,7 @@ function AddChatForm() {
   )
 }
 
-/** The manual way, tucked away: check a chat by its ID. */
+/** Checks a chat by its ID. */
 function ManualAdd() {
   const [open, setOpen] = useState(false)
   const { t: tr } = useT()

@@ -1,10 +1,7 @@
 // Copyright 2026 The Kamerton Authors
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// Package descstore reads and writes system descriptions: SystemDescription
-// custom resources in a cluster, or YAML files locally. One description is
-// one system. The HTTP API and the Telegram setup both go through it, so the
-// UI always shows what the controller reconciles.
+// Package descstore stores system descriptions as cluster resources or local YAML files.
 package descstore
 
 import (
@@ -19,31 +16,23 @@ import (
 	"github.com/kamerton-labs/kamerton/internal/description"
 )
 
-// Modes of a store.
 const (
 	ModeCluster = "cluster"
 	ModeFile    = "file"
 	ModeNone    = "none"
 )
 
-// AnnotationPrefix marks annotations owned by Kamerton (for example the
-// canvas layout). They are kept when a description is saved from the UI.
+// AnnotationPrefix marks Kamerton's own annotations, such as the canvas layout, which survive a save from the UI.
 const AnnotationPrefix = "kamerton.dev/"
 
 var (
-	// ErrNoDescription means the system does not exist (or none exists yet).
 	ErrNoDescription = errors.New("no system description is loaded")
-	// ErrNotWritable means there is nowhere to save the description.
-	ErrNotWritable = errors.New("there is nowhere to save the description: start the core with --description FILE or in a cluster with the controller enabled")
-	// ErrConflict means the description changed since it was read.
-	ErrConflict = errors.New("the description was changed by someone else; reload and try again")
-	// ErrExists means a system with that name already exists.
-	ErrExists = errors.New("a system with this name already exists")
-	// ErrRename means the document's name differs from the system being saved.
-	ErrRename = errors.New("the name of a system cannot be changed; create a new system instead")
+	ErrNotWritable   = errors.New("there is nowhere to save the description: start the core with --description FILE or in a cluster with the controller enabled")
+	ErrConflict      = errors.New("the description was changed by someone else; reload and try again")
+	ErrExists        = errors.New("a system with this name already exists")
+	ErrRename        = errors.New("the name of a system cannot be changed; create a new system instead")
 )
 
-// InvalidError carries validation results of a rejected description.
 type InvalidError struct{ Result description.Result }
 
 func (e *InvalidError) Error() string {
@@ -53,10 +42,8 @@ func (e *InvalidError) Error() string {
 	return "description is invalid"
 }
 
-// Snapshot is one stored description (one system).
 type Snapshot struct {
-	// ID identifies the system in the API: the name, or name~namespace
-	// when two descriptions in different namespaces share a name.
+	// ID is the name, or name~namespace when names repeat across namespaces.
 	ID string
 	// SD is nil when the stored document is invalid (see Invalid).
 	SD *v1alpha1.SystemDescription
@@ -64,14 +51,11 @@ type Snapshot struct {
 	Raw []byte
 	// Source is "file:<path>" or "cluster:<namespace>/<name>".
 	Source string
-	// Note is a remark for the UI, for example when several descriptions exist.
-	Note string
-	// Invalid is set when the stored document does not pass validation
-	// (a file edited by hand). The UI can still open it in YAML mode.
+	Note   string
+	// Invalid is set when the stored document fails validation; the UI can still open it as YAML.
 	Invalid *description.Result
 }
 
-// Name is the system name.
 func (s *Snapshot) Name() string {
 	if s.SD != nil {
 		return s.SD.Name
@@ -79,27 +63,20 @@ func (s *Snapshot) Name() string {
 	return s.ID
 }
 
-// Store reads and writes descriptions.
 type Store interface {
 	Mode() string
-	// List returns all systems, sorted (see Default for the order).
 	List(ctx context.Context) ([]*Snapshot, error)
 	// Get returns ErrNoDescription when the system does not exist.
 	Get(ctx context.Context, id string) (*Snapshot, error)
 	// Create validates and stores a new system; ErrExists when the name is taken.
 	Create(ctx context.Context, raw []byte) (*Snapshot, description.Result, error)
-	// Save validates and replaces an existing system. The document's name
-	// must match the system (ErrRename).
+	// Save replaces an existing system; a different name fails with ErrRename.
 	Save(ctx context.Context, id string, raw []byte) (*Snapshot, description.Result, error)
-	// Update applies mutate to a system, validates and stores it.
 	Update(ctx context.Context, id string, mutate func(*v1alpha1.SystemDescription) error) (*Snapshot, error)
-	// Delete removes a system.
 	Delete(ctx context.Context, id string) error
 }
 
-// Default returns the first valid system: the one the single-description
-// endpoints (/api/v1/description, …) and old links operate on. It carries a
-// note when several exist.
+// Default returns the first valid system, with a note when there are several.
 func Default(ctx context.Context, s Store) (*Snapshot, error) {
 	list, err := s.List(ctx)
 	if err != nil {
@@ -126,7 +103,6 @@ func Default(ctx context.Context, s Store) (*Snapshot, error) {
 	return first, nil
 }
 
-// DefaultID is the ID of the default system, or "" when there is none.
 func DefaultID(ctx context.Context, s Store) string {
 	snap, err := Default(ctx, s)
 	if err != nil {
@@ -135,7 +111,6 @@ func DefaultID(ctx context.Context, s Store) string {
 	return snap.ID
 }
 
-// validate checks a YAML document and returns the decoded description.
 func validate(raw []byte) (*v1alpha1.SystemDescription, description.Result, error) {
 	res := description.Validate(raw)
 	if !res.Valid {
@@ -144,8 +119,6 @@ func validate(raw []byte) (*v1alpha1.SystemDescription, description.Result, erro
 	return res.Document, res, nil
 }
 
-// assignIDs gives every snapshot its ID: the name, or name~namespace when
-// names repeat. list must be sorted.
 func assignIDs(list []*Snapshot, namespace func(*Snapshot) string) {
 	count := map[string]int{}
 	for _, s := range list {
@@ -196,8 +169,7 @@ func sortSnapshots(list []*Snapshot, preferNamespace string) {
 	})
 }
 
-// keepOwnAnnotations copies Kamerton's annotations from src to dst,
-// removing those absent from src.
+// keepOwnAnnotations copies Kamerton's annotations from src to dst and drops those absent from src.
 func keepOwnAnnotations(dst, src map[string]string) map[string]string {
 	for k := range dst {
 		if strings.HasPrefix(k, AnnotationPrefix) {
@@ -220,26 +192,20 @@ func keepOwnAnnotations(dst, src map[string]string) map[string]string {
 	return dst
 }
 
-// ---- Memory (no storage; a description may be set programmatically) ----
-
-// Memory holds one description that cannot be saved. Used when the core runs
-// without a file and without a cluster, and in tests.
+// Memory holds one description that cannot be saved: for runs without a file or cluster, and tests.
 type Memory struct {
 	mu   sync.RWMutex
 	snap *Snapshot
 }
 
-// Set replaces the description.
 func (m *Memory) Set(sd *v1alpha1.SystemDescription, raw []byte, source string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.snap = &Snapshot{ID: sd.Name, SD: sd, Raw: raw, Source: source}
 }
 
-// Mode implements Store.
 func (m *Memory) Mode() string { return ModeNone }
 
-// List implements Store.
 func (m *Memory) List(context.Context) ([]*Snapshot, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -249,7 +215,6 @@ func (m *Memory) List(context.Context) ([]*Snapshot, error) {
 	return []*Snapshot{m.snap}, nil
 }
 
-// Get implements Store.
 func (m *Memory) Get(_ context.Context, id string) (*Snapshot, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -259,7 +224,6 @@ func (m *Memory) Get(_ context.Context, id string) (*Snapshot, error) {
 	return m.snap, nil
 }
 
-// Create implements Store.
 func (m *Memory) Create(_ context.Context, raw []byte) (*Snapshot, description.Result, error) {
 	if _, res, err := validate(raw); err != nil {
 		return nil, res, err
@@ -267,7 +231,6 @@ func (m *Memory) Create(_ context.Context, raw []byte) (*Snapshot, description.R
 	return nil, description.Result{}, ErrNotWritable
 }
 
-// Save implements Store.
 func (m *Memory) Save(_ context.Context, _ string, raw []byte) (*Snapshot, description.Result, error) {
 	if _, res, err := validate(raw); err != nil {
 		return nil, res, err
@@ -275,10 +238,8 @@ func (m *Memory) Save(_ context.Context, _ string, raw []byte) (*Snapshot, descr
 	return nil, description.Result{}, ErrNotWritable
 }
 
-// Update implements Store.
 func (m *Memory) Update(context.Context, string, func(*v1alpha1.SystemDescription) error) (*Snapshot, error) {
 	return nil, ErrNotWritable
 }
 
-// Delete implements Store.
 func (m *Memory) Delete(context.Context, string) error { return ErrNotWritable }

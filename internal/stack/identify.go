@@ -14,46 +14,36 @@ import (
 	"time"
 )
 
-// Check states.
 const (
-	// StateOK: the address answers and it is the expected program.
 	StateOK = "ok"
 	// StateNotReady: it is the program, but its health check fails.
-	StateNotReady = "not_ready"
-	// StateNoAnswer: nothing answers at the address.
-	StateNoAnswer = "no_answer"
-	// StateWrongProgram: something answers, but not the expected program.
+	StateNotReady     = "not_ready"
+	StateNoAnswer     = "no_answer"
 	StateWrongProgram = "wrong_program"
 	// StateNoAccess: the program asks for a login.
 	StateNoAccess = "no_access"
-	// StateBadURL: the address is not an http/https URL.
-	StateBadURL = "bad_url"
+	StateBadURL   = "bad_url"
 )
 
-// CheckResult says whether an address is the program it should be.
 type CheckResult struct {
-	Kind string `json:"kind"`
-	URL  string `json:"url"`
-	// State is one of the State* constants.
+	Kind       string `json:"kind"`
+	URL        string `json:"url"`
 	State      string `json:"state"`
 	Identified bool   `json:"identified"`
 	Healthy    bool   `json:"healthy"`
 	Version    string `json:"version,omitempty"`
-	// Message is a plain-words explanation for the UI.
-	Message string `json:"message"`
-	// Error is the technical reason, when there is one.
+	// Message is for the UI; Error is the technical reason.
+	Message   string `json:"message"`
 	Error     string `json:"error,omitempty"`
 	LatencyMs int64  `json:"latencyMs"`
 }
 
-// identity describes how to recognise a program over HTTP.
 type identity struct {
 	// health is the readiness path; empty when the identity answer says it.
 	health string
-	// path is the identity endpoint.
-	path string
-	// match decodes the identity answer: ok when it is this program, the
-	// version when known, and healthy for programs without a health path.
+	path   string
+	// match reports whether the answer is this program, its version when known,
+	// and health for programs without a health path.
 	match func(body []byte) (ok bool, version string, healthy bool)
 }
 
@@ -125,10 +115,8 @@ const (
 	maxRedirects  = 3
 )
 
-// sameHostRedirects lets a check follow a few redirects within the same host
-// (a program behind a path prefix, http to https) and nowhere else: the
-// address is checked, not whatever it points to. Any other redirect ends the
-// check with the redirect status (not the expected program).
+// sameHostRedirects follows a few redirects within the same host and nowhere
+// else: the address is checked, not whatever it points to.
 func sameHostRedirects(req *http.Request, via []*http.Request) error {
 	if len(via) >= maxRedirects ||
 		(req.URL.Scheme != "http" && req.URL.Scheme != "https") ||
@@ -138,7 +126,6 @@ func sameHostRedirects(req *http.Request, via []*http.Request) error {
 	return nil
 }
 
-// cleanVersion keeps a version string short and printable.
 func cleanVersion(v string) string {
 	v = strings.Map(func(r rune) rune {
 		if r < 0x20 || r == 0x7f {
@@ -152,9 +139,7 @@ func cleanVersion(v string) string {
 	return v
 }
 
-// Check probes one address for one program kind: is it reachable, is it
-// really that program, is it ready, which version. Only GET requests are
-// sent; of the answers only the status and a short version string are kept.
+// Check sends only GET requests and keeps only the status and a short version.
 func Check(ctx context.Context, c *http.Client, kind, rawURL string) CheckResult {
 	res := CheckResult{Kind: kind, URL: rawURL}
 	title := Titles[kind]

@@ -1,9 +1,9 @@
 // Copyright 2026 The Kamerton Authors
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// Look of the YAML editor in both themes. Highlight styles use concrete
-// colors (a HighlightStyle compiles to class rules once, so var() would not
-// follow the theme); each clears 4.5:1 on its own background.
+// Highlight styles use concrete colors: a HighlightStyle compiles to class
+// rules once, so var() would not follow the theme. Each clears 4.5:1 on its
+// background.
 
 import { HighlightStyle } from '@codemirror/language'
 import { EditorView } from '@codemirror/view'

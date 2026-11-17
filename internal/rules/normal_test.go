@@ -49,13 +49,12 @@ func TestNearLimit(t *testing.T) {
 	cpu := CPUNearLimit(NearLimitParams{Meta: m, Target: fullPodTarget(), Share: 0.9})
 	mustValidate(t, mem, cpu)
 	contains(t, "memory", mem.Expr, `resource="memory"`, "> 0.95", "predict_linear(", "[1h], 1800)", ">= 1",
-		// a pod is compared with its limit only when every container has one
+		// A pod is compared with its limit only when every container has one.
 		`count by (namespace, pod) (kube_pod_container_resource_limits{namespace="otel-demo", pod=~"checkout-.*", resource="memory"}) >= on (namespace, pod) count by (namespace, pod) (kube_pod_container_status_restarts_total`)
 	contains(t, "cpu", cpu.Expr, `resource="cpu"`, "rate(container_cpu_usage_seconds_total", "> 0.9")
 	if strings.Contains(cpu.Expr, "predict_linear") {
 		t.Error("the CPU rule has no trend condition")
 	}
-	// Without a restarts metric the guard is left out rather than broken.
 	pt := fullPodTarget()
 	pt.RestartsMetric = "-"
 	r := MemoryNearLimit(NearLimitParams{Meta: m, Target: pt, Share: 0.9})
@@ -102,8 +101,7 @@ func TestErrorRatePerOperationMinErrors(t *testing.T) {
 	if r.Alert != AlertOperationErrorRate {
 		t.Errorf("alert %s", r.Alert)
 	}
-	// No traffic-rate condition on the operations: a rare operation that fails
-	// three times is enough.
+	// A rare operation that fails three times is enough: no traffic-rate condition.
 	if strings.Contains(r.Expr, "and on (service_name, span_name)\n(\n  sum by (service_name, span_name) (rate(") {
 		t.Errorf("per-operation rule still has a traffic-rate condition:\n%s", r.Expr)
 	}
@@ -120,11 +118,10 @@ func TestLatencyPerOperation(t *testing.T) {
 	contains(t, "expr", r.Expr,
 		"sum by (service_name, span_name, le)", "> 1000",
 		">= 3",
-		// alerts only on operations that were faster than the threshold during the normal hour
+		// Alerts only on operations that were faster than the threshold during the normal hour.
 		"[1h] offset 10m))) <= 1000", ">= 30",
 		"unless on (service_name)")
 	contains(t, "title", r.Annotations[AnnotationTitle], "операция {{ index $labels \"span_name\" }}")
-	// Without MinRequestsPerSecond there is no rate condition, only the call count.
 	if strings.Contains(r.Expr, "[5m])) > 0\n") {
 		t.Errorf("rate condition with zero rate:\n%s", r.Expr)
 	}
@@ -186,7 +183,6 @@ func TestQueueConsumerStoppedVariants(t *testing.T) {
 		t.Errorf("without groups the topic comes from the lag series:\n%s", r.Expr)
 	}
 
-	// Members metric off: only the stalled offset condition, no fallback value.
 	qt = queueTarget()
 	qt.MembersMetric = "-"
 	r = QueueConsumerStopped(QueueConsumerStoppedParams{Meta: meta(), Target: qt})
@@ -198,7 +194,6 @@ func TestQueueConsumerStoppedVariants(t *testing.T) {
 		t.Errorf("threshold mentions members: %s", r.Annotations[AnnotationThreshold])
 	}
 
-	// Offset metric off: only the members condition.
 	qt = queueTarget()
 	qt.OffsetMetric = ""
 	r = QueueConsumerStopped(QueueConsumerStoppedParams{Meta: meta(), Target: qt})
@@ -207,7 +202,6 @@ func TestQueueConsumerStoppedVariants(t *testing.T) {
 		t.Errorf("offset off:\n%s", r.Expr)
 	}
 
-	// Hostile topic names stay quoted.
 	qt = queueTarget()
 	qt.Topic = `or"ders\x`
 	r = QueueConsumerStopped(QueueConsumerStoppedParams{Meta: meta(), Target: qt})

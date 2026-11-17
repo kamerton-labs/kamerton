@@ -16,35 +16,23 @@ import (
 	"github.com/kamerton-labs/kamerton/internal/descstore"
 )
 
-// ---- Secret references in descriptions saved through the API ----
-//
-// Alertmanager sends the value of a referenced Secret to the receiver's
-// endpoint (the SMTP password to the smarthost). A description saved through
-// the API may therefore reference only Kamerton's own Secrets where Kamerton
-// controls the endpoint, or keep a reference the stored version already had
-// (written by a cluster admin with kubectl). Everything else is rejected.
-// The Telegram and email services write their receivers through the store,
-// not through these handlers, and are not checked here.
+// Alertmanager sends the value of a referenced Secret to the receiver's endpoint,
+// so a description saved through the API may reference only Kamerton's own Secrets
+// (where Kamerton controls the endpoint) or ones the stored version already had.
 
-// secretPolicy is what a description saved through the API may reference.
 type secretPolicy struct {
-	// telegram is Kamerton's bot token Secret; nil when Telegram setup is
-	// unavailable or the description lives outside Kamerton's namespace.
+	// telegram is nil when Telegram setup is unavailable or the namespace differs.
 	telegram *v1alpha1.SecretKeyRef
-	// email is Kamerton's SMTP password Secret with the configured server;
-	// nil when no mail server is configured or the namespace differs.
+	// email is nil when no mail server is configured or the namespace differs.
 	email                *v1alpha1.SecretKeyRef
 	emailHost, emailUser string
-	// otherNamespace is set when the description lives outside Kamerton's
-	// namespace (cluster mode), where Kamerton's Secrets cannot be read.
+	// otherNamespace is set when the description lives where Kamerton's Secrets cannot be read.
 	otherNamespace string
 	// stored are the receivers of the stored version (nil on create).
 	stored  []v1alpha1.Receiver
 	created bool
 }
 
-// secretPolicyFor builds the policy for a description that lives (or will
-// be created) in namespace; stored is the current version or nil.
 func (s *Server) secretPolicyFor(ctx context.Context, stored *v1alpha1.SystemDescription, namespace string) *secretPolicy {
 	p := &secretPolicy{created: stored == nil}
 	if stored != nil && stored.Spec.Notifications != nil {
@@ -72,8 +60,6 @@ func sameRef(a, b *v1alpha1.SecretKeyRef) bool {
 	return a != nil && b != nil && a.Name == b.Name && a.Key == b.Key
 }
 
-// storedTelegram reports whether the stored version has a Telegram
-// receiver with the same token reference.
 func (p *secretPolicy) storedTelegram(ref *v1alpha1.SecretKeyRef) bool {
 	for _, r := range p.stored {
 		if r.Telegram != nil && sameRef(&r.Telegram.BotTokenSecret, ref) {
@@ -95,7 +81,6 @@ func (p *secretPolicy) storedEmail(e *v1alpha1.EmailReceiver) bool {
 	return false
 }
 
-// keepClause is the "unchanged reference" option of the messages.
 func (p *secretPolicy) keepClause(what string) string {
 	if p.created {
 		return ""
@@ -167,7 +152,6 @@ func (p *secretPolicy) emailIssue(i int, r *v1alpha1.Receiver) *description.Issu
 	}
 }
 
-// issues lists the receivers of doc whose Secret references are not allowed.
 func (p *secretPolicy) issues(doc *v1alpha1.SystemDescription) []description.Issue {
 	if doc.Spec.Notifications == nil {
 		return nil
@@ -189,8 +173,7 @@ func (p *secretPolicy) issues(doc *v1alpha1.SystemDescription) []description.Iss
 	return out
 }
 
-// storedDescription is the stored version of a system for the comparison,
-// read leniently when it does not validate (a file edited by hand).
+// storedDescription reads leniently: a file edited by hand may not validate.
 func storedDescription(snap *descstore.Snapshot) *v1alpha1.SystemDescription {
 	if snap == nil {
 		return nil
@@ -205,8 +188,6 @@ func storedDescription(snap *descstore.Snapshot) *v1alpha1.SystemDescription {
 	return &sd
 }
 
-// secretIssues checks the Secret references of doc, to be saved over stored
-// (nil: a new system).
 func (s *Server) secretIssues(ctx context.Context, doc *v1alpha1.SystemDescription, stored *descstore.Snapshot) []description.Issue {
 	prev := storedDescription(stored)
 	ns := doc.Namespace
@@ -220,9 +201,6 @@ func (s *Server) secretIssues(ctx context.Context, doc *v1alpha1.SystemDescripti
 	return s.secretPolicyFor(ctx, prev, ns).issues(doc)
 }
 
-// checkDraftSecrets adds the Secret reference problems of a draft to its
-// validation result, so the editor shows them before saving. Without
-// storage nothing can be saved and nothing is checked.
 func (s *Server) checkDraftSecrets(ctx context.Context, res *description.Result, stored *descstore.Snapshot) {
 	if res.Document == nil || s.opts.Descriptions.Mode() == descstore.ModeNone {
 		return
@@ -233,8 +211,7 @@ func (s *Server) checkDraftSecrets(ctx context.Context, res *description.Result,
 	}
 }
 
-// storedByName is the system a legacy endpoint would replace (the one with
-// the document's name), or nil.
+// storedByName is the system a legacy endpoint would replace, or nil.
 func (s *Server) storedByName(ctx context.Context, doc *v1alpha1.SystemDescription) *descstore.Snapshot {
 	if doc == nil {
 		return nil
@@ -246,10 +223,8 @@ func (s *Server) storedByName(ctx context.Context, doc *v1alpha1.SystemDescripti
 	return snap
 }
 
-// allowSave checks a description about to be saved through the API over
-// stored (nil: created). It writes a 400 and returns false when the
-// document references Secrets it may not or is created outside Kamerton's
-// namespace. Documents that do not validate are left to the store.
+// allowSave writes a 400 and returns false when a description saved through the
+// API references Secrets it may not, or is created outside Kamerton's namespace.
 func (s *Server) allowSave(ctx context.Context, w http.ResponseWriter, body []byte, stored *descstore.Snapshot) bool {
 	if s.opts.Descriptions.Mode() == descstore.ModeNone {
 		// Nothing can be saved; the store says so.
@@ -281,9 +256,8 @@ func (s *Server) allowSave(ctx context.Context, w http.ResponseWriter, body []by
 	return false
 }
 
-// createNamespaceProblem explains why the API may not create doc: in a
-// cluster new descriptions go only to Kamerton's namespace (or the one
-// namespace Kamerton watches).
+// createNamespaceProblem: in a cluster the API creates descriptions only in Kamerton's
+// namespace or the one it watches.
 func (s *Server) createNamespaceProblem(doc *v1alpha1.SystemDescription) string {
 	if s.opts.Descriptions.Mode() != descstore.ModeCluster || doc.Namespace == "" || s.opts.Namespace == "" || doc.Namespace == s.opts.Namespace {
 		return ""

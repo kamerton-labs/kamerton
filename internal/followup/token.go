@@ -8,10 +8,9 @@ import (
 	"encoding/hex"
 )
 
-// TokenKey is the key of the webhook token in its Secret.
 const TokenKey = "token"
 
-// NewToken returns a random bearer token for the webhook (256 bits, hex).
+// NewToken returns a random 256-bit bearer token, hex-encoded.
 func NewToken() (string, error) {
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {

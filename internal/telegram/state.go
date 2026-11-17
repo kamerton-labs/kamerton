@@ -20,20 +20,18 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-// State is what Kamerton remembers about the bot. It holds no secret: the
-// token lives only in the token store; the bot ID kept here is the public
-// part of the token and is used to notice that the token was replaced.
+// State is what Kamerton remembers about the bot. It holds no secret: the bot
+// ID is the public part of the token, used to notice that the token was replaced.
 type State struct {
 	Bot *BotInfo `json:"bot,omitempty"`
 	// Offset is the next getUpdates offset (last processed update_id + 1).
 	Offset int64 `json:"offset,omitempty"`
-	// Chats the bot is (or was) a member of, keyed by chat ID.
+	// Chats are keyed by chat ID, including chats the bot has left.
 	Chats map[int64]*KnownChat `json:"chats,omitempty"`
 	// Poll is the health of the polling loop, written by the leader.
 	Poll PollStatus `json:"poll"`
 }
 
-// BotInfo describes the bot of the configured token.
 type BotInfo struct {
 	ID        int64     `json:"id"`
 	Username  string    `json:"username"`
@@ -41,7 +39,6 @@ type BotInfo struct {
 	CheckedAt time.Time `json:"checkedAt"`
 }
 
-// KnownChat is a chat discovered from updates or checked by ID.
 type KnownChat struct {
 	ID    int64  `json:"id"`
 	Title string `json:"title"`
@@ -49,10 +46,8 @@ type KnownChat struct {
 	// Status of the bot in the chat: member, administrator, left, kicked, ...
 	Status string `json:"status"`
 	// Available is false when the bot was removed or the chat cannot be reached.
-	Available bool `json:"available"`
-	// Problem explains why the chat is unavailable.
-	Problem string `json:"problem,omitempty"`
-	// MigratedFrom is the old ID of a group that became a supergroup.
+	Available    bool      `json:"available"`
+	Problem      string    `json:"problem,omitempty"`
 	MigratedFrom int64     `json:"migratedFrom,omitempty"`
 	UpdatedAt    time.Time `json:"updatedAt"`
 	// Source: "update" (discovered by polling), "check" (checked by ID),
@@ -60,18 +55,14 @@ type KnownChat struct {
 	Source string `json:"source"`
 }
 
-// PollStatus is the health of the polling loop.
 type PollStatus struct {
-	// Poller is the identity of the replica that polls (the leader).
 	Poller     string    `json:"poller,omitempty"`
 	LastPollAt time.Time `json:"lastPollAt,omitempty"`
 	LastError  string    `json:"lastError,omitempty"`
 	ErrorAt    time.Time `json:"errorAt,omitempty"`
-	// Conflict is true when Telegram reports another getUpdates consumer or a webhook.
-	Conflict bool `json:"conflict,omitempty"`
+	Conflict   bool      `json:"conflict,omitempty"`
 }
 
-// SortedChats returns the chats ordered by availability and title.
 func (s *State) SortedChats() []*KnownChat {
 	out := make([]*KnownChat, 0, len(s.Chats))
 	for _, c := range s.Chats {
@@ -99,20 +90,17 @@ type StateStore interface {
 // ErrNoChange can be returned by a mutate function to skip the write.
 var ErrNoChange = errors.New("no change")
 
-// MemoryStateStore keeps state in memory (tests, local runs).
 type MemoryStateStore struct {
 	mu sync.Mutex
 	s  State
 }
 
-// Get implements StateStore.
 func (m *MemoryStateStore) Get(context.Context) (*State, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return clone(&m.s)
 }
 
-// Update implements StateStore.
 func (m *MemoryStateStore) Update(_ context.Context, mutate func(*State) error) (*State, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -145,13 +133,9 @@ func clone(s *State) (*State, error) {
 	return &out, nil
 }
 
-// StateConfigMapKey is the data key holding the JSON state.
 const StateConfigMapKey = "state.json"
 
-// ConfigMapStateStore keeps state as JSON in a ConfigMap in Kamerton's
-// namespace. A ConfigMap survives restarts of the core, is shared by all
-// replicas (the leader polls, any replica serves the UI), needs no volume
-// (the root filesystem is read-only) and holds nothing secret.
+// ConfigMapStateStore needs no volume: the root filesystem is read-only.
 type ConfigMapStateStore struct {
 	// Client should be uncached: a cached client would start a cluster-wide
 	// ConfigMap informer.
@@ -160,7 +144,6 @@ type ConfigMapStateStore struct {
 	Name      string
 }
 
-// Get implements StateStore.
 func (c *ConfigMapStateStore) Get(ctx context.Context) (*State, error) {
 	s, _, err := c.read(ctx)
 	return s, err
@@ -186,7 +169,6 @@ func (c *ConfigMapStateStore) read(ctx context.Context) (*State, *corev1.ConfigM
 	return out, &cm, err
 }
 
-// Update implements StateStore.
 func (c *ConfigMapStateStore) Update(ctx context.Context, mutate func(*State) error) (*State, error) {
 	var result *State
 	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {

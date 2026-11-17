@@ -37,16 +37,11 @@ export function systemStateText(s: Pick<SystemSummary, 'state' | 'alerts'>): str
   }
 }
 
-/** A date and time in the interface language. */
 export function dateTime(iso: string): string {
   return new Date(iso).toLocaleString(getLang() === 'ru' ? 'ru-RU' : 'en-GB')
 }
 
-/**
- * A link target from server data (descriptions are written by people): only
- * absolute http:// and https:// addresses, so a javascript: or data: URL never
- * becomes a clickable link. Anything else returns null.
- */
+/** Only absolute http(s) URLs from server data become links, never javascript: or data:. Else null. */
 export function httpUrl(raw: string | undefined): string | null {
   if (!raw) return null
   try {
@@ -63,10 +58,7 @@ export function cssColor(name: string, fallback: string): string {
   return v || fallback
 }
 
-/**
- * A version short enough for one line: a release as "v0.1.0", a build from a
- * commit as its first seven characters, a branch build ("main") as is.
- */
+/** A one-line version: a release as "v0.1.0", a commit build as 7 characters, a branch build as is. */
 export function shortVersion(v: string): string {
   const s = v.trim()
   const release = /^v?(\d+\.\d+(?:\.\d+)?(?:-[0-9A-Za-z.]+)?)$/.exec(s)

@@ -1,10 +1,6 @@
 // Copyright 2026 The Kamerton Authors
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// Settings of the selected service in plain words: what it is, whether it
-// is important, what it depends on, its rules, and where its alerts go.
-// Technical details (telemetry name, pods) are behind "Advanced".
-
 import { useState } from 'react'
 import { Mail, Plus, Send, Trash2, X } from 'lucide-react'
 import { Field } from '@/components/common'

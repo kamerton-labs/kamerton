@@ -17,10 +17,8 @@ import (
 	"github.com/kamerton-labs/kamerton/internal/rules"
 )
 
-// ValidateSpec runs semantic checks that a JSON Schema cannot express. It
-// assumes the spec already passed schema validation (types, enums, patterns).
-// It is also used by the controller for custom resources, where the API
-// server has already enforced the CRD schema.
+// ValidateSpec runs the semantic checks a JSON Schema cannot express; the spec
+// must already pass schema or CRD validation.
 func ValidateSpec(spec *v1alpha1.SystemDescriptionSpec) []Issue {
 	v := &validator{}
 	v.spec(spec)
@@ -172,9 +170,8 @@ func (v *validator) service(p string, s *v1alpha1.Service, names map[string]int)
 	}
 }
 
-// CheckLinkURL returns the problem with a URL that ends up as a link in
-// notifications or the UI, or "": it must be an absolute http or https URL
-// with a host and no user name or password.
+// CheckLinkURL returns the problem with a link URL, or "": it must be absolute
+// http or https with a host and no user name or password.
 func CheckLinkURL(raw string) string {
 	u, err := url.Parse(raw)
 	switch {
@@ -196,7 +193,6 @@ func CheckLinkURL(raw string) string {
 
 var legacyLabelName = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
 
-// MessagePlaceholders are the substitutions allowed in notification texts.
 var MessagePlaceholders = []string{"value", "threshold", "service", "operation", "system", "since"}
 
 var (
@@ -204,9 +200,8 @@ var (
 	markupRe      = regexp.MustCompile(`<\s*/?\s*[a-zA-Z!?][^>]*>`)
 )
 
-// CheckMessageText returns the problem with one field of a notification
-// text, or "": placeholders must be from MessagePlaceholders, braces are only
-// for placeholders, and markup is not allowed (the text is shown as written).
+// CheckMessageText returns the problem with one notification text field, or "":
+// braces only around MessagePlaceholders, and no markup, since the text is shown as written.
 func CheckMessageText(text string) string {
 	known := map[string]bool{}
 	for _, p := range MessagePlaceholders {
@@ -430,7 +425,6 @@ func (v *validator) notifications(p string, spec *v1alpha1.SystemDescriptionSpec
 	}
 }
 
-// findCycle returns one dependency cycle (service names) or nil.
 func findCycle(services []v1alpha1.Service) []string {
 	deps := make(map[string][]string, len(services))
 	for _, s := range services {

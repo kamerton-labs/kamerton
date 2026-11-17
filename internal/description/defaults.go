@@ -7,9 +7,8 @@ import (
 	"github.com/kamerton-labs/kamerton/api/v1alpha1"
 )
 
-// Built-in defaults. They follow the OpenTelemetry span metrics connector
-// (with the "traces.span.metrics" namespace) and cAdvisor naming; every one of
-// them can be overridden in spec.telemetry.
+// Built-in defaults follow the OpenTelemetry span metrics connector (namespace
+// traces.span.metrics) and cAdvisor naming; spec.telemetry overrides each.
 const (
 	DefaultCallsMetric          = "traces_span_metrics_calls_total"
 	DefaultDurationBucketMetric = "traces_span_metrics_duration_milliseconds_bucket"
@@ -35,29 +34,24 @@ const (
 	DefaultGroupLabel    = "group"
 	DefaultTopicLabel    = "topic"
 
-	// DefaultRateWindow is used for rate()/increase() when not set. It is
-	// kept short so that a failure is visible within a couple of minutes;
-	// span metrics that update once a minute still give two samples in 2m.
+	// DefaultRateWindow is short so a failure shows within minutes; span metrics
+	// updated once a minute still give two samples in 2m.
 	DefaultRateWindow v1alpha1.Duration = "2m"
-	// MinRecommendedRateWindow is the smallest window that still covers two
-	// samples at a one-minute update interval.
+	// MinRecommendedRateWindow covers two samples at a one-minute update interval.
 	MinRecommendedRateWindow v1alpha1.Duration = "2m"
 
 	// DisabledMetric disables a metric-based rule when used as a metric name.
 	DisabledMetric = "-"
 )
 
-// DefaultServerSpanKinds are span kinds that represent incoming work.
 var DefaultServerSpanKinds = []string{"SPAN_KIND_SERVER", "SPAN_KIND_CONSUMER"}
 
-// ResolvedTelemetry is spec.telemetry with every default filled in.
 type ResolvedTelemetry struct {
 	Spans      v1alpha1.SpanMetrics
 	Containers v1alpha1.ContainerMetrics
 	Queues     v1alpha1.QueueMetrics
 }
 
-// ResolveTelemetry returns the telemetry mapping with defaults applied.
 func ResolveTelemetry(t *v1alpha1.Telemetry) ResolvedTelemetry {
 	var r ResolvedTelemetry
 	if t != nil {
@@ -103,7 +97,6 @@ func ResolveTelemetry(t *v1alpha1.Telemetry) ResolvedTelemetry {
 	return r
 }
 
-// RateWindow returns spec.defaults.rateWindow or the built-in default.
 func RateWindow(spec *v1alpha1.SystemDescriptionSpec) v1alpha1.Duration {
 	if spec.Defaults != nil && spec.Defaults.RateWindow != "" {
 		return spec.Defaults.RateWindow

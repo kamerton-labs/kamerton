@@ -17,8 +17,6 @@ import (
 	"github.com/kamerton-labs/kamerton/internal/rules"
 )
 
-// amMatcher and amInhibitRule mirror the generated spec, so the test can
-// evaluate the rules the way Alertmanager does.
 type amMatcher struct {
 	Name, Value, MatchType string
 }
@@ -53,11 +51,8 @@ func all(ms []amMatcher, labels map[string]string) bool {
 	return true
 }
 
-// inhibited evaluates inhibit rules like Alertmanager's inhibitor: an alert
-// is muted when some rule's target matches it and another firing alert
-// (muted or not) matches that rule's source with equal labels. Like
-// Alertmanager, an alert matching both sides is not muted by an alert that
-// also matches both sides, so no alert inhibits itself through a rule.
+// inhibited evaluates rules like Alertmanager's inhibitor: an alert matching both
+// sides is not muted by another alert matching both sides.
 func inhibited(rules []amInhibitRule, alerts []map[string]string) map[int]bool {
 	out := map[int]bool{}
 	for ti, target := range alerts {
@@ -258,7 +253,6 @@ func TestInhibitRulesOtelDemo(t *testing.T) {
 	if b.RuleCount != 164 {
 		t.Errorf("rule count = %d, want 164", b.RuleCount)
 	}
-	// payment is called by checkout only.
 	var callers []string
 	for _, r := range inhibitRulesOf(t, sd) {
 		for _, m := range r.SourceMatch {
@@ -319,8 +313,6 @@ func TestWebhookRoute(t *testing.T) {
 		}
 	}
 
-	// Another namespace (the Secret is not there), or the follow-up off:
-	// no webhook, delivery unchanged.
 	other := shop(nil)
 	other.Namespace = "team-a"
 	off := false

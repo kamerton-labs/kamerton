@@ -9,22 +9,14 @@ import (
 	"github.com/prometheus/prometheus/model/rulefmt"
 )
 
-// Annotations used by Kamerton's own notification templates. They hold the
-// alert in plain words in the language of the description, separately from
-// the English summary/description kept for Alertmanager, Grafana and other
-// consumers:
-//
-//	kamerton_title      what is wrong, for example "Too many failed requests · operation X"
-//	kamerton_value      the current value, as a Prometheus annotation template
-//	kamerton_threshold  the threshold, already formatted
+// Annotations for Kamerton's own templates, in the language of the description.
+// AnnotationValue is a Prometheus template; AnnotationThreshold is already formatted.
 const (
 	AnnotationTitle     = "kamerton_title"
 	AnnotationValue     = "kamerton_value"
 	AnnotationThreshold = "kamerton_threshold"
 )
 
-// Languages supported for notification text. English is the default; the
-// default English alert titles are phrases[LanguageEnglish].titles below.
 const (
 	LanguageRussian = "ru"
 	LanguageEnglish = "en"
@@ -36,7 +28,7 @@ type phraseSet struct {
 	perMinute, normally, ofNormal, noneAtAll       string
 	container, restartsIn, anyOOM, ofLimit         string
 	normalWord, moreThan                           string
-	// noMembers and offsetStill take the duration (%s); or joins them.
+	// noMembers and offsetStill take the duration as %s.
 	noMembers, offsetStill, or string
 }
 
@@ -102,8 +94,6 @@ func (m Meta) phrases() phraseSet {
 	return phrases[LanguageEnglish]
 }
 
-// explain adds the plain-words annotations. detail, when not empty, is
-// appended to the title (for example the operation or pod).
 func (m Meta) explain(r *rulefmt.Rule, detail, value, threshold string) {
 	title := m.phrases().titles[r.Alert]
 	if title == "" {

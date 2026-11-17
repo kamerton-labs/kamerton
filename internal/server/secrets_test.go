@@ -25,9 +25,8 @@ import (
 
 // Mail server configured in Kamerton in these tests.
 const (
-	kmHost = "smtp.kamerton.example:587"
-	kmUser = "alerts@kamerton.example"
-	// attackerHost is an SMTP server of someone who wants a Secret value.
+	kmHost       = "smtp.kamerton.example:587"
+	kmUser       = "alerts@kamerton.example"
 	attackerHost = "smtp.attacker.example:25"
 )
 
@@ -45,8 +44,6 @@ func mailReceiver(name, host, user string, secret *v1alpha1.SecretKeyRef) v1alph
 	}}
 }
 
-// secretDesc is a small valid description with the given receivers, all
-// routed to warnings.
 func secretDesc(name, ns string, rs ...v1alpha1.Receiver) *v1alpha1.SystemDescription {
 	sd := &v1alpha1.SystemDescription{}
 	sd.Name, sd.Namespace = name, ns
@@ -107,10 +104,9 @@ func secretCluster(t *testing.T) *secretEnv {
 }
 
 type secretCase struct {
-	name string
-	sd   *v1alpha1.SystemDescription
-	want int
-	// inMessage must appear in the rejection message.
+	name      string
+	sd        *v1alpha1.SystemDescription
+	want      int
 	inMessage []string
 }
 
@@ -168,7 +164,6 @@ func TestSecretRefsOnCreate(t *testing.T) {
 		{name: "managed telegram, other key", sd: secretDesc("x8", "", tgReceiver("tg", -5, ref(telegram.DefaultSecretName, "other"))), want: http.StatusBadRequest},
 		{name: "another namespace", sd: secretDesc("x9", "team-a"), want: http.StatusBadRequest, inMessage: []string{"kamerton", "team-a"}},
 	})
-	// Nothing rejected was written.
 	for _, name := range []string{"x1", "x2", "x3", "x4", "x5", "x6", "x7", "x8"} {
 		var sd v1alpha1.SystemDescription
 		if err := env.c.Get(context.Background(), types.NamespacedName{Namespace: "kamerton", Name: name}, &sd); err == nil {
@@ -211,11 +206,9 @@ func TestSecretRefsOnUpdate(t *testing.T) {
 		{name: "hand-written email with another username", sd: edited(handTelegram, otherUser), want: http.StatusBadRequest},
 		{name: "hand-written receiver removed", sd: edited(handTelegram), want: http.StatusOK},
 	})
-	// The stored version now has no ops-mail: adding it again is a new reference.
 	runSecretCases(t, "PUT", env.api+"/systems/legacy", []secretCase{
 		{name: "removed ref cannot come back", sd: edited(handTelegram, handMail), want: http.StatusBadRequest},
 	})
-	// Restore it as a cluster admin would (kubectl), then go on.
 	restoreLegacy(t, env.c, handTelegram, handMail)
 	runSecretCases(t, "PUT", env.api+"/systems/legacy", []secretCase{
 		{name: "same hand-written email under another name", sd: edited(handTelegram, handMail, renamed), want: http.StatusOK},
@@ -240,12 +233,10 @@ func TestSecretRefsOnUpdate(t *testing.T) {
 		{name: "foreign: managed email", sd: foreign(foreignTG, mailReceiver("email-1", kmHost, kmUser, managedMail)), want: http.StatusBadRequest, inMessage: []string{"team-a"}},
 		{name: "foreign: other telegram secret", sd: foreign(tgReceiver("tg", -9, ref("ops-bot", "token"))), want: http.StatusBadRequest},
 	})
-	// A namespace in the document does not move a saved description.
 	moved := foreign(foreignTG, mailReceiver("email-1", kmHost, kmUser, managedMail))
 	moved.Namespace = "kamerton"
 	runSecretCases(t, "PUT", env.api+"/systems/foreign", []secretCase{{name: "foreign: namespace in the document", sd: moved, want: http.StatusBadRequest}})
 
-	// The single-description endpoint: replace and create.
 	runSecretCases(t, "PUT", env.api+"/description", []secretCase{
 		{name: "legacy endpoint: unchanged", sd: edited(handTelegram, handMail), want: http.StatusOK},
 		{name: "legacy endpoint: smarthost swap", sd: edited(handTelegram, handMail, mailReceiver("steal", attackerHost, kmUser, managedMail)), want: http.StatusBadRequest},
@@ -264,7 +255,6 @@ func TestSecretRefsOnUpdate(t *testing.T) {
 	}
 }
 
-// restoreLegacy writes the legacy receivers directly, as kubectl would.
 func restoreLegacy(t *testing.T, c client.Client, rs ...v1alpha1.Receiver) {
 	t.Helper()
 	var sd v1alpha1.SystemDescription
@@ -277,7 +267,6 @@ func restoreLegacy(t *testing.T, c client.Client, rs ...v1alpha1.Receiver) {
 	}
 }
 
-// The editor learns about a forbidden reference from validation, before saving.
 func TestSecretRefsInValidation(t *testing.T) {
 	env := secretCluster(t)
 	attack := secretDesc("legacy", "kamerton", handTelegram, handMail, mailReceiver("steal", attackerHost, kmUser, ref(email.DefaultSecretName, email.DefaultSecretKey)))
@@ -311,7 +300,6 @@ func TestManagedServicesStillSave(t *testing.T) {
 		t.Fatalf("routing: %d %s", code, body)
 	}
 
-	// A recipient: the editor writes its receiver as the UI does.
 	rc, err := env.email.AddRecipient(context.Background(), email.RecipientInput{Name: "Дежурные", To: []string{"oncall@example.com"}})
 	if err != nil {
 		t.Fatal(err)
@@ -333,7 +321,6 @@ func TestManagedServicesStillSave(t *testing.T) {
 		t.Fatalf("save with the email receiver: %d %s", code, body)
 	}
 
-	// The mail server moves: the email service rewrites receivers itself.
 	if _, err := env.email.SetServer(context.Background(), email.ServerInput{Smarthost: "smtp2.kamerton.example:465", From: "kamerton@kamerton.example", Username: kmUser}); err != nil {
 		t.Fatal(err)
 	}
@@ -351,19 +338,16 @@ func TestManagedServicesStillSave(t *testing.T) {
 	if found != 2 {
 		t.Fatalf("receivers written by the services: %+v", cur.Spec.Notifications.Receivers)
 	}
-	// Saving what the services wrote is allowed.
 	if code, body := saveWith(); code != 200 {
 		t.Fatalf("save after the services: %d %s", code, body)
 	}
-	// Telegram routing still refuses descriptions outside Kamerton's namespace.
 	if code, _ := do(t, "PUT", env.api+"/systems/foreign/telegram/routing", `{"chats":[{"chatID":-100,"severities":["critical"],"services":[]}]}`); code < 400 {
 		t.Errorf("routing in team-a: %d", code)
 	}
 }
 
-// In file mode nothing manages Telegram or email: only references already
-// in the stored file may stay. The example description is saved as the
-// end-to-end flows do.
+// In file mode nothing manages Telegram or email: only references already in the
+// stored file may stay.
 func TestSecretRefsFileMode(t *testing.T) {
 	example, err := os.ReadFile("../../testdata/otel-demo/system.yaml")
 	if err != nil {

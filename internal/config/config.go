@@ -1,9 +1,7 @@
 // Copyright 2026 The Kamerton Authors
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// Package config holds the runtime configuration of the core. Every flag can
-// also be set with an environment variable KAMERTON_<FLAG_NAME> (dashes become
-// underscores), which is how the Helm chart configures the container.
+// Package config holds the runtime configuration; every flag is also read from KAMERTON_<FLAG_NAME>.
 package config
 
 import (
@@ -14,62 +12,44 @@ import (
 	"strings"
 )
 
-// Config is the core configuration.
 type Config struct {
-	// HTTP server for UI and API.
-	ListenAddress string
-	// DescriptionFile is an optional description loaded at startup (local mode).
+	ListenAddress   string
 	DescriptionFile string
-	// RunbookBaseURL is the external URL of Kamerton (as users open it), used
-	// for runbook and alert links in rules and notifications. Empty: no links.
+	// RunbookBaseURL is Kamerton's URL as users open it; empty means no links in rules and notifications.
 	RunbookBaseURL string
 
-	// Endpoints of the managed (or external) programs. Empty means not configured.
-	PrometheusURL    string
-	AlertmanagerURL  string
-	GrafanaURL       string
-	LokiURL          string
-	TempoURL         string
-	OTelCollectorURL string
-	// ExternalPrometheus / ExternalGrafana mark bring-your-own mode.
+	// Empty program URLs mean the program is not configured.
+	PrometheusURL      string
+	AlertmanagerURL    string
+	GrafanaURL         string
+	LokiURL            string
+	TempoURL           string
+	OTelCollectorURL   string
 	ExternalPrometheus bool
 	ExternalGrafana    bool
-	// The addresses above form the built-in set of programs; more sets are
-	// added in the UI and kept in StacksConfigMap (cluster) or StacksFile
-	// (local; default: next to the descriptions).
+	// Program sets added in the UI: StacksConfigMap in a cluster, StacksFile locally.
 	StacksConfigMap string
 	StacksFile      string
-	// StackDiscovery lets the UI look for programs running in the cluster
-	// (Kubernetes API, read-only).
-	StackDiscovery bool
+	StackDiscovery  bool
 
-	// Controller (Kubernetes operator) settings.
 	EnableController       bool
 	MetricsBindAddress     string
 	HealthProbeBindAddress string
 	LeaderElect            bool
-	// WatchNamespace limits the controller to one namespace; empty = all.
+	// WatchNamespace empty means all namespaces.
 	WatchNamespace string
-	// Namespace is Kamerton's own namespace (Secret with the bot token,
-	// Telegram state). Empty: the service account namespace.
+	// Namespace holds the bot token Secret and Telegram state; empty means the service account namespace.
 	Namespace string
-	// DescriptionName selects the SystemDescription shown and edited by the
-	// UI in cluster mode; empty picks one (preferring Kamerton's namespace).
+	// DescriptionName selects the UI's SystemDescription in cluster mode; empty picks one, preferring Kamerton's namespace.
 	DescriptionName string
 
-	// Telegram setup.
 	TelegramAPIURL     string
 	TelegramSecretName string
 
-	// Email setup.
 	EmailSecretName string
 
-	// Follow-up messages. AlertmanagerWebhookURL is Kamerton's webhook as
-	// Alertmanager reaches it (empty: no webhook in generated routing);
-	// WebhookSecretName holds its bearer token. WorkloadEvidence lets the
-	// follow-up read pods, ReplicaSets, StatefulSets and events in all
-	// namespaces. GrafanaExternalURL is Grafana as people open it, for trace
-	// links (empty: no link).
+	// AlertmanagerWebhookURL is the webhook as Alertmanager reaches it, GrafanaExternalURL is Grafana as
+	// people open it; empty disables each.
 	AlertmanagerWebhookURL string
 	WebhookSecretName      string
 	WorkloadEvidence       bool
@@ -78,7 +58,6 @@ type Config struct {
 	LogLevel string
 }
 
-// Register binds flags to c with environment-variable defaults.
 func (c *Config) Register(fs *flag.FlagSet) {
 	str := func(p *string, name, def, usage string) {
 		fs.StringVar(p, name, envString(name, def), usage+envHint(name))
@@ -117,7 +96,6 @@ func (c *Config) Register(fs *flag.FlagSet) {
 	str(&c.LogLevel, "log-level", "info", "log level: debug, info, warn, error")
 }
 
-// EnvName returns the environment variable for a flag.
 func EnvName(flagName string) string {
 	return "KAMERTON_" + strings.ToUpper(strings.ReplaceAll(flagName, "-", "_"))
 }

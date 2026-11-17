@@ -104,7 +104,6 @@ func TestRenderFollowUpEscapesAndTrims(t *testing.T) {
 	if strings.Contains(m.EmailText, "\n second line") {
 		t.Error("log line is not a single line")
 	}
-	// No trace link without an http(s) URL.
 	f.Roots[0].TraceURL = "javascript:alert(1)"
 	if m := RenderFollowUp(f, "en", ""); strings.Contains(m.TelegramHTML, "href") {
 		t.Errorf("unsafe link rendered: %s", m.TelegramHTML)

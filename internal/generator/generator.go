@@ -1,10 +1,7 @@
 // Copyright 2026 The Kamerton Authors
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// Package generator turns a system description into the artifacts Kamerton
-// manages: Prometheus alerting rules, Grafana dashboards, Alertmanager routing
-// and runbook stubs. It is pure: no I/O, no cluster access. Applying the
-// result is the job of package deployer.
+// Package generator turns a system description into alert rules, dashboards, routing and runbooks.
 package generator
 
 import (
@@ -30,9 +27,8 @@ const (
 	builtinMemoryLimitShare = 0.95
 	builtinCPULimitShare    = 0.9
 	builtinCPUFactor        = 3
-	// The per-operation latency and "slower than normal" rules have their own
-	// pending periods (shorter ones in the policy win): rare operations give
-	// few samples, and a slowdown should page within five minutes.
+	// Rare operations give few samples, and a slowdown should page within five
+	// minutes. A shorter pending period in the policy wins.
 	builtinOperationLatencyFor = 30 * time.Second
 	builtinAboveNormalFor      = time.Minute
 	builtinErrorFor            = 1 * time.Minute
@@ -42,8 +38,7 @@ const (
 	builtinSaturationFor       = 2 * time.Minute
 	builtinMaxRestarts         = 3
 	builtinQueueFor            = 2 * time.Minute
-	// The stopped consumer rule waits a minute (a shorter queue "for" wins):
-	// its conditions already span one to three minutes.
+	// A shorter queue "for" wins. The rule's conditions already span one to three minutes.
 	builtinQueueStoppedFor   = time.Minute
 	builtinCustomFor         = 2 * time.Minute
 	builtinTrafficThreshold  = 0.1
@@ -57,44 +52,27 @@ const (
 	runbookAnnotationPathFmt = "%s/runbooks/%s"
 )
 
-// Options tune generation.
 type Options struct {
-	// RunbookBaseURL is Kamerton's external URL. When set, generated
-	// runbook_url annotations point to <RunbookBaseURL>/runbooks/<service>/<alert>
-	// (a page of the UI) for services without runbookURL, and notification
-	// messages link to the alert and the runbook in the UI. When empty,
-	// notification messages contain no links at all.
+	// RunbookBaseURL is Kamerton's external URL. When empty, messages contain no links.
 	RunbookBaseURL string
-	// Now is the time of generation, used for the daylight-saving changes
-	// of the notification time zone; zero means time.Now().
-	Now time.Time
-	// Webhook, when set, adds a route that also notifies Kamerton about
-	// every group (see WebhookOptions). Nil: no webhook.
+	// Now picks the daylight-saving changes of the notification time zone. Zero means time.Now().
+	Now     time.Time
 	Webhook *WebhookOptions
 }
 
-// Bundle is everything generated from one description.
 type Bundle struct {
-	System string
-	// RuleGroups are the alerting rules, one group per service.
+	System     string
 	RuleGroups rulefmt.RuleGroups
-	// RulesYAML is RuleGroups rendered as a Prometheus rule file and
-	// validated with Prometheus' rulefmt parser.
-	RulesYAML []byte
-	// RuleCount is the number of alerting rules.
-	RuleCount int
-	// Dashboards maps a file name to Grafana dashboard JSON.
+	RulesYAML  []byte
+	RuleCount  int
 	Dashboards map[string][]byte
-	// AlertmanagerConfig is the spec of a prometheus-operator
-	// AlertmanagerConfig (monitoring.coreos.com/v1alpha1), or nil when the
-	// description has no notifications.
+	// AlertmanagerConfig is the spec of a prometheus-operator AlertmanagerConfig,
+	// or nil when the description has no notifications.
 	AlertmanagerConfig map[string]any
-	// Runbooks maps a file name to a Markdown runbook stub.
-	Runbooks map[string]string
+	Runbooks           map[string]string
 }
 
-// Generate builds the bundle for a valid description. Callers must validate
-// the description first (description.Validate or description.ValidateSpec).
+// Generate expects a description that passed description.Validate or ValidateSpec.
 func Generate(sd *v1alpha1.SystemDescription, opts Options) (*Bundle, error) {
 	g := newGen(sd, opts)
 	b := &Bundle{System: sd.Name, Dashboards: map[string][]byte{}, Runbooks: map[string]string{}}
@@ -158,7 +136,6 @@ func newGen(sd *v1alpha1.SystemDescription, opts Options) *gen {
 	return g
 }
 
-// language of notification text: the description's notifications.language, default en.
 func (g *gen) language() string {
 	if n := g.spec.Notifications; n != nil && n.Language != "" {
 		return n.Language
@@ -175,17 +152,11 @@ func (g *gen) now() time.Time {
 
 func (g *gen) service(groupName string) *v1alpha1.Service { return g.byName[groupName] }
 
-// SpanTarget returns the span-metric selection the request rules of a
-// service use (metric and label names, excluded operations, rate window),
-// so other code queries exactly what the rules alert on.
+// SpanTarget lets other code query exactly what the request rules alert on.
 func SpanTarget(sd *v1alpha1.SystemDescription, svc *v1alpha1.Service) rules.SpanTarget {
 	return newGen(sd, Options{}).spanTarget(svc)
 }
 
-// PodTarget returns the pod selection the saturation rules of a service use:
-// the namespace (workload.namespace, else defaults.namespace; empty: any)
-// and the pod name regex (workload.podRegex, else the service name followed
-// by a Deployment or StatefulSet pod suffix).
 func PodTarget(sd *v1alpha1.SystemDescription, svc *v1alpha1.Service) rules.PodTarget {
 	return newGen(sd, Options{}).podTarget(svc)
 }
@@ -213,8 +184,7 @@ func (g *gen) meta(svc *v1alpha1.Service, forD time.Duration) rules.Meta {
 	return rules.Meta{Service: svc.Name, Severity: sev, For: forD, RunbookURL: runbook, Labels: lbls, RunbookPerAlert: perAlert, Language: g.language()}
 }
 
-// metaSev is meta with the severity set by a policy (empty keeps the
-// service's default).
+// metaSev keeps the service's default severity when sev is empty.
 func (g *gen) metaSev(svc *v1alpha1.Service, forD time.Duration, sev v1alpha1.Severity) rules.Meta {
 	m := g.meta(svc, forD)
 	if sev != "" {
@@ -270,7 +240,7 @@ func (g *gen) podTarget(svc *v1alpha1.Service) rules.PodTarget {
 }
 
 // hasRequestRules says whether span-based request rules apply: always for
-// http/grpc services; for queue/database only when explicitly configured.
+// http and grpc, for queue and database only when configured.
 func hasRequestRules(svc *v1alpha1.Service) bool {
 	switch svc.Type {
 	case v1alpha1.ServiceTypeHTTP, v1alpha1.ServiceTypeGRPC:
@@ -288,14 +258,12 @@ func (g *gen) serviceRules(svc *v1alpha1.Service) ([]rulefmt.Rule, error) {
 	if hasRequestRules(svc) && spansOn {
 		target := g.spanTarget(svc)
 
-		// Error rate, service level and optionally per operation.
 		if ep := mergeErrorRate(d.ErrorRate, svc.ErrorRate); ep.enabled {
 			out = append(out, g.withMessage(rules.ErrorRate(rules.ErrorRateParams{
 				Meta: g.metaSev(svc, ep.forD, ep.severity), Target: target,
 				Threshold: ep.threshold, MinRequestsPerSecond: ep.minRPS,
 			}), svc, ep.message, ""))
 			if ep.perOperation {
-				// Operations with their own policy are evaluated separately.
 				perOp := withoutOperations(target, svc, func(op v1alpha1.Operation) bool { return op.ErrorRate != nil })
 				out = append(out, g.withMessage(rules.ErrorRate(rules.ErrorRateParams{
 					Meta: g.metaSev(svc, ep.forD, ep.severity), Target: perOp,
@@ -304,7 +272,6 @@ func (g *gen) serviceRules(svc *v1alpha1.Service) ([]rulefmt.Rule, error) {
 				}), svc, ep.message, operationRef("", g.tel.Spans.OperationLabel, true)))
 			}
 		}
-		// Latency, service level.
 		if lp := mergeLatency(d.Latency, svc.Latency); lp.enabled && g.tel.Spans.DurationBucketMetric != description.DisabledMetric {
 			out = append(out, g.withMessage(rules.Latency(rules.LatencyParams{
 				Meta: g.metaSev(svc, lp.forD, lp.severity), Target: target,
@@ -323,7 +290,6 @@ func (g *gen) serviceRules(svc *v1alpha1.Service) ([]rulefmt.Rule, error) {
 				}), svc, lp.message, ""))
 			}
 		}
-		// Explicit operations.
 		for _, op := range svc.Operations {
 			opTarget := target
 			opTarget.Operation = op.Name
@@ -344,7 +310,6 @@ func (g *gen) serviceRules(svc *v1alpha1.Service) ([]rulefmt.Rule, error) {
 				}
 			}
 		}
-		// SLO burn rate.
 		if svc.SLO != nil {
 			window := mustDuration(string(svc.SLO.Window), builtinSLOWindow)
 			for _, r := range rules.SLOBurnRate(rules.SLOParams{
@@ -355,7 +320,6 @@ func (g *gen) serviceRules(svc *v1alpha1.Service) ([]rulefmt.Rule, error) {
 		}
 	}
 
-	// Requests stopped arriving.
 	if tp := mergeTraffic(svc, d.TrafficDrop, svc.TrafficDrop); tp.enabled && spansOn && trafficApplies(svc) {
 		out = append(out, g.withMessage(rules.TrafficStopped(rules.TrafficParams{
 			Meta: g.metaSev(svc, tp.forD, tp.severity), Target: g.spanTarget(svc),
@@ -363,7 +327,6 @@ func (g *gen) serviceRules(svc *v1alpha1.Service) ([]rulefmt.Rule, error) {
 		}), svc, tp.message, ""))
 	}
 
-	// Saturation.
 	sp := mergeSaturation(d.Saturation, svc.Saturation)
 	if sp.enabled {
 		pt := g.podTarget(svc)
@@ -397,7 +360,6 @@ func (g *gen) serviceRules(svc *v1alpha1.Service) ([]rulefmt.Rule, error) {
 		}
 	}
 
-	// Queue lag.
 	if q := svc.Queue; q != nil && g.tel.Queues.LagMetric != description.DisabledMetric {
 		qt := g.tel.Queues
 		target := rules.QueueTarget{
@@ -409,7 +371,6 @@ func (g *gen) serviceRules(svc *v1alpha1.Service) ([]rulefmt.Rule, error) {
 		out = append(out, g.withMessage(rules.QueueLag(rules.QueueLagParams{
 			Meta: g.metaSev(svc, qfor, q.Severity), Target: target, MaxLag: q.MaxLag,
 		}), svc, q.Message, ""))
-		// Nobody reads the queue: on by default, needs no threshold.
 		stoppedOn := q.ConsumerStoppedEnabled == nil || *q.ConsumerStoppedEnabled
 		if stoppedOn && (qt.MembersMetric != description.DisabledMetric || qt.OffsetMetric != description.DisabledMetric) {
 			out = append(out, g.withMessage(rules.QueueConsumerStopped(rules.QueueConsumerStoppedParams{
@@ -418,7 +379,6 @@ func (g *gen) serviceRules(svc *v1alpha1.Service) ([]rulefmt.Rule, error) {
 		}
 	}
 
-	// Rules written by the user.
 	for _, cr := range svc.CustomRules {
 		if cr.Enabled != nil && !*cr.Enabled {
 			continue
@@ -438,8 +398,6 @@ func (g *gen) serviceRules(svc *v1alpha1.Service) ([]rulefmt.Rule, error) {
 	return out, nil
 }
 
-// withoutOperations excludes the operations that have their own policy
-// (own(op)) from a per-operation target.
 func withoutOperations(t rules.SpanTarget, svc *v1alpha1.Service, own func(v1alpha1.Operation) bool) rules.SpanTarget {
 	t.ExcludeOperations = append([]string{}, t.ExcludeOperations...)
 	for _, op := range svc.Operations {
@@ -450,11 +408,8 @@ func withoutOperations(t rules.SpanTarget, svc *v1alpha1.Service, own func(v1alp
 	return t
 }
 
-// trafficApplies says whether the "requests stopped arriving" rule can apply:
-// http and grpc services receive calls as server or consumer spans of their
-// own. Queues and databases usually appear only as client or producer spans
-// of other services, so for them the rule exists only when the service
-// itself sets trafficDrop (for example a database behind an instrumented proxy).
+// trafficApplies: queues and databases usually appear only as client or producer
+// spans of other services, so for them the rule needs an explicit trafficDrop.
 func trafficApplies(svc *v1alpha1.Service) bool {
 	switch svc.Type {
 	case v1alpha1.ServiceTypeHTTP, v1alpha1.ServiceTypeGRPC:
@@ -464,7 +419,6 @@ func trafficApplies(svc *v1alpha1.Service) bool {
 	}
 }
 
-// telemetryNames are the service label values of all services of the system.
 func (g *gen) telemetryNames() []string {
 	out := make([]string, 0, len(g.spec.Services))
 	for i := range g.spec.Services {
@@ -481,9 +435,8 @@ type traffic struct {
 	message           *v1alpha1.NotificationMessage
 }
 
-// mergeTraffic merges the traffic policy layers. The rule is on by default
-// only for critical services: a page about a quiet service nobody depends on
-// is noise, and the services worth waking someone for are marked critical.
+// mergeTraffic merges the traffic policy layers. The rule is on by default only
+// for critical services: a page about a quiet service nobody depends on is noise.
 func mergeTraffic(svc *v1alpha1.Service, layers ...*v1alpha1.TrafficDropPolicy) traffic {
 	t := traffic{enabled: svc.Critical, threshold: builtinTrafficThreshold, minRPS: builtinTrafficMinRPS, forD: builtinTrafficFor}
 	for _, l := range layers {

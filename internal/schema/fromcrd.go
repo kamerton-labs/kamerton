@@ -14,24 +14,10 @@ import (
 	"github.com/kamerton-labs/kamerton/api/v1alpha1"
 )
 
-// SchemaID is the $id of the generated JSON Schema.
 const SchemaID = "https://kamerton.dev/schemas/v1alpha1/systemdescription.schema.json"
 
-// FromCRD converts the controller-gen generated CustomResourceDefinition of
-// SystemDescription into a standalone JSON Schema (draft-07) for the YAML
-// file form of the description.
-//
-// The CRD is itself generated from the Go types in api/v1alpha1, so the Go
-// types stay the single source of truth for the CRD, the core validator, the
-// UI forms and the editor autocompletion.
-//
-// Conversion steps:
-//   - pick the openAPIV3Schema of the served version;
-//   - drop status (it is not part of the description);
-//   - describe apiVersion, kind and metadata precisely;
-//   - convert OpenAPI v3.0 boolean exclusiveMinimum/exclusiveMaximum to draft-07 numbers;
-//   - drop x-kubernetes-* and nullable extensions;
-//   - forbid unknown properties so typos are reported.
+// FromCRD converts the CRD into a draft-07 JSON Schema for the file form. It drops
+// status and x-kubernetes-* extensions and forbids unknown properties so typos are reported.
 func FromCRD(crdYAML []byte) ([]byte, error) {
 	var crd map[string]any
 	if err := yaml.Unmarshal(crdYAML, &crd); err != nil {

@@ -15,7 +15,6 @@ import (
 	"go.yaml.in/yaml/v3"
 )
 
-// Render serializes rule groups to a Prometheus rule file.
 func Render(groups rulefmt.RuleGroups) ([]byte, error) {
 	var buf bytes.Buffer
 	enc := yaml.NewEncoder(&buf)
@@ -29,9 +28,7 @@ func Render(groups rulefmt.RuleGroups) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// Validate parses a rule file with Prometheus' own rule file parser
-// (model/rulefmt), which checks YAML structure, PromQL expressions, label
-// names and annotation templates exactly as Prometheus does on load.
+// Validate uses Prometheus' own parser, so it fails where Prometheus would on load.
 func Validate(ruleFile []byte) error {
 	p := parser.NewParser(parser.Options{})
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -39,7 +36,7 @@ func Validate(ruleFile []byte) error {
 	return errors.Join(errs...)
 }
 
-// RenderAndValidate renders groups and validates the result.
+// RenderAndValidate returns the rendered file also on a validation error.
 func RenderAndValidate(groups rulefmt.RuleGroups) ([]byte, error) {
 	out, err := Render(groups)
 	if err != nil {
@@ -51,7 +48,6 @@ func RenderAndValidate(groups rulefmt.RuleGroups) ([]byte, error) {
 	return out, nil
 }
 
-// Count returns the number of rules in groups.
 func Count(groups rulefmt.RuleGroups) int {
 	n := 0
 	for _, g := range groups.Groups {

@@ -1,9 +1,6 @@
 // Copyright 2026 The Kamerton Authors
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// Notification channels, shared by all systems: one card per channel. What
-// each system sends where is chosen inside the system.
-
 import { Page } from '@/components/common'
 import EmailSetup from '@/components/notifications/EmailSetup'
 import { LinksNotice, NoAuthWarning } from '@/components/notifications/Notices'

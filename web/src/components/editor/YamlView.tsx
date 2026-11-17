@@ -1,9 +1,6 @@
 // Copyright 2026 The Kamerton Authors
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// YAML mode: the description as text, with schema completion and checks in
-// the editor. It edits the same draft as the canvas.
-
 import { useT } from '@/i18n'
 import { useSchema, type Issue } from '@/lib/api'
 import YamlEditor from './YamlEditor'

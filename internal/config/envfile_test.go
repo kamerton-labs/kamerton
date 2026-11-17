@@ -45,7 +45,6 @@ EMPTY=
 			t.Errorf("%q: %v", bad, err)
 		}
 	}
-	// Errors never echo the value.
 	if _, err := ParseEnv([]byte(`KAMERTON_AUTH_PASSWORD="hunter2`)); err == nil || strings.Contains(err.Error(), "hunter2") {
 		t.Errorf("error must not contain the value: %v", err)
 	}

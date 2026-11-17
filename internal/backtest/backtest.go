@@ -1,15 +1,7 @@
 // Copyright 2026 The Kamerton Authors
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// Package backtest estimates how often an alerting rule would have fired over
-// the history stored in Prometheus.
-//
-// The alert expression is evaluated as a range query. A series is "pending"
-// at every step where the expression returned a sample (alert expressions
-// filter with a comparison, so presence means the condition held). A pending
-// run fires once it lasts at least the rule's "for" duration, mirroring
-// Prometheus' alerting rule state machine. The estimate is as precise as the
-// step: use a step no larger than the rule evaluation interval.
+// Package backtest estimates how often an alerting rule would have fired over stored history.
 package backtest
 
 import (
@@ -24,13 +16,11 @@ import (
 	"github.com/kamerton-labs/kamerton/internal/clients/prometheus"
 )
 
-// ErrNotConfigured means no Prometheus is configured.
 var ErrNotConfigured = errors.New("backtest: Prometheus is not configured")
 
 // MaxPoints caps the number of steps per query (Prometheus rejects > 11000).
 const MaxPoints = 11000
 
-// Request describes one backtest.
 type Request struct {
 	Expr  string        `json:"expr"`
 	For   time.Duration `json:"for"`
@@ -39,7 +29,6 @@ type Request struct {
 	Step  time.Duration `json:"step"`
 }
 
-// Episode is one period during which the alert would have been firing.
 type Episode struct {
 	Labels   map[string]string `json:"labels"`
 	FiringAt time.Time         `json:"firingAt"`
@@ -49,7 +38,6 @@ type Episode struct {
 	Ongoing    bool      `json:"ongoing"`
 }
 
-// Result is the outcome of a backtest.
 type Result struct {
 	Firings  int       `json:"firings"`
 	Series   int       `json:"series"`
@@ -59,7 +47,6 @@ type Result struct {
 	Step     string    `json:"step"`
 }
 
-// Run executes a backtest against Prometheus.
 func Run(ctx context.Context, q prometheus.Querier, req Request) (*Result, error) {
 	if q == nil {
 		return nil, ErrNotConfigured
@@ -85,7 +72,8 @@ func Run(ctx context.Context, q prometheus.Querier, req Request) (*Result, error
 	return res, nil
 }
 
-// Evaluate computes firing episodes from a range-query result.
+// Evaluate computes firing episodes as Prometheus would: a run of samples fires once
+// it lasts forDur. Precision is one step, so step should not exceed the evaluation interval.
 func Evaluate(m model.Matrix, forDur, step time.Duration, end time.Time) *Result {
 	res := &Result{Series: len(m), Step: model.Duration(step).String(), Episodes: []Episode{}}
 	for _, s := range m {
@@ -109,7 +97,6 @@ func Evaluate(m model.Matrix, forDur, step time.Duration, end time.Time) *Result
 		for _, p := range s.Values {
 			t := p.Timestamp.Time()
 			if inRun && t.Sub(prev) > step {
-				// Gap: the condition did not hold at prev+step.
 				closeRun(prev.Add(step), false)
 			}
 			if !inRun {

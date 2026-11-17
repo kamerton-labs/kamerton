@@ -1,10 +1,8 @@
 // Copyright 2026 The Kamerton Authors
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// Email setup, in the same shape as Telegram: the mail server (the SMTP
-// password is checked by the core and stored only in a Kubernetes Secret;
-// it never comes back), named recipients shared by all systems, test
-// emails. What goes where is chosen per system on the canvas.
+// Email setup. The SMTP password is checked by the core and stored only in a
+// Kubernetes Secret; it never comes back.
 
 import { useState, type KeyboardEvent } from 'react'
 import { zodResolver } from '@hookform/resolvers/zod'
@@ -34,8 +32,6 @@ import {
 import { t, useT } from '@/i18n'
 import { presetFor, SMARTHOST_RE, smtpPresets, splitAddresses } from './email-form'
 import { AddTile, ChannelCard, IconTile, NoUsesHint, PasswordInput, SecretLocation, StatusDot, TestResultLine, UseChips } from './parts'
-
-// ---- Mail server ----
 
 const serverSchema = z.object({
   smarthost: z.string().trim().regex(SMARTHOST_RE, { error: () => t('email.smarthostFormat') }),
@@ -203,8 +199,6 @@ function ServerSummary({ server, onEdit }: { server: EmailServer; onEdit: () => 
     </div>
   )
 }
-
-// ---- Recipients ----
 
 /** Addresses as removable chips with a text field that turns typed or pasted text into chips. */
 function AddressesInput({ id, value, onChange, invalid }: { id: string; value: string[]; onChange: (v: string[]) => void; invalid?: boolean }) {

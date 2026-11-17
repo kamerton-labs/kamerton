@@ -1,11 +1,7 @@
 // Copyright 2026 The Kamerton Authors
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// Package stack knows the observability programs Kamerton works with:
-// sets of their addresses (the built-in set from the flags and sets added
-// in the UI, see sets.go), checks that an address really is the expected
-// program (identify.go), and finds programs already running in the cluster
-// through the Kubernetes API (discover.go).
+// Package stack checks, discovers and groups the observability programs Kamerton uses.
 package stack
 
 import (
@@ -15,14 +11,13 @@ import (
 	"time"
 )
 
-// Status is the health of one program of a set.
 type Status struct {
 	Name       string `json:"name"`
 	URL        string `json:"url,omitempty"`
 	Configured bool   `json:"configured"`
-	// External: not installed with Kamerton (origin "own").
+	// External means origin "own": not installed with Kamerton.
 	External bool `json:"external"`
-	// Origin is bundled, own or none.
+	// Origin: bundled, own or none.
 	Origin string `json:"origin"`
 	// Healthy is nil when not configured.
 	Healthy   *bool  `json:"healthy"`
@@ -33,12 +28,11 @@ type Status struct {
 	LatencyMs int64  `json:"latencyMs,omitempty"`
 }
 
-// Checker checks program addresses, remembering results for a short time
-// so that several sets sharing a program and frequent page refreshes do not
-// multiply requests.
+// Checker caches results briefly, so sets sharing a program and frequent page
+// refreshes do not multiply requests.
 type Checker struct {
 	HTTP *http.Client
-	// TTL of remembered results (default 10s).
+	// TTL defaults to 10s.
 	TTL time.Duration
 
 	mu    sync.Mutex
@@ -50,7 +44,6 @@ type cached struct {
 	res CheckResult
 }
 
-// Check is Check with a short-lived cache.
 func (c *Checker) Check(ctx context.Context, kind, u string) CheckResult {
 	ttl := c.TTL
 	if ttl == 0 {
@@ -77,7 +70,6 @@ func (c *Checker) Check(ctx context.Context, kind, u string) CheckResult {
 	return res
 }
 
-// Health checks every program of a set concurrently.
 func (c *Checker) Health(ctx context.Context, set *Resolved) []Status {
 	out := make([]Status, len(set.Programs))
 	var wg sync.WaitGroup

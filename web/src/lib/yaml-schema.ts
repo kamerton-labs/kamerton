@@ -1,14 +1,10 @@
 // Copyright 2026 The Kamerton Authors
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// What the YAML editor knows about the description, from its JSON Schema:
-// which keys are valid at the cursor, which values an enum allows, and the
-// hint for a field. Plus mapping the core's JSON-pointer issue paths to
-// positions in the text. Pure functions, unit-tested; the CodeMirror wiring
-// lives in components/editor/YamlEditor.tsx.
-//
-// The cursor position is resolved by indentation rather than by parsing, so
-// completion works in a half-typed document that does not parse yet.
+// JSON Schema helpers for the YAML editor: keys and values at the cursor,
+// field hints, and the core's JSON-pointer issue paths as text positions.
+// The cursor is resolved by indentation, not by parsing, so completion works
+// in a half-typed document.
 
 import { isMap, isPair, isScalar, isSeq, parseDocument, type Node as YamlNode } from 'yaml'
 import { getLang, t } from '@/i18n'
@@ -144,7 +140,6 @@ export interface Suggestion {
   detail: string
   info: string
   kind: 'property' | 'value'
-  /** Text to insert. */
   apply: string
 }
 
@@ -156,12 +151,11 @@ const typeLabel = (n: SchemaNode): string => {
   return ty && (SCHEMA_TYPES as readonly string[]).includes(ty) ? t(`schema.type.${ty as (typeof SCHEMA_TYPES)[number]}` as const) : ''
 }
 
-/** Hint for a field: in Russian the Russian hint when known; otherwise the schema's own (English) description. */
+/** Hint for a field: the Russian hint when known in Russian, else the schema's English description. */
 export function hintFor(root: SchemaNode, path: string[]): string {
   return (getLang() === 'ru' ? hintRu(path) : undefined) ?? schemaAt(root, path)?.description ?? ''
 }
 
-/** Completion items at the cursor. */
 export function suggest(root: SchemaNode, doc: string, pos: number): { ctx: CursorContext; items: Suggestion[] } {
   const ctx = contextAt(doc, pos)
   if (ctx.kind === 'value') {
@@ -208,18 +202,12 @@ export function hoverAt(root: SchemaNode, doc: string, pos: number): { from: num
   return { from, to, title: `${m[4]}${n ? ` · ${typeLabel(n)}` : ''}`, text }
 }
 
-// ---- Issue paths -> text positions ----
-
 function unescape(seg: string) {
   return seg.replace(/~1/g, '/').replace(/~0/g, '~')
 }
 
-/**
- * Position of a JSON pointer (/spec/services/2/dependsOn/0) in YAML text: the
- * key of the field, or the item for list entries. A path that does not exist
- * (a missing required field) points at its deepest existing parent. Returns
- * null when the text does not parse.
- */
+/** Position of a JSON pointer in YAML text. A missing path points at its deepest
+ *  existing parent; null when the text does not parse. */
 export function pointerToRange(text: string, pointer: string): { from: number; to: number } | null {
   const doc = parseDocument(text, { keepSourceTokens: false })
   if (doc.errors.length > 0) return null

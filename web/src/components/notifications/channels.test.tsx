@@ -1,8 +1,7 @@
 // Copyright 2026 The Kamerton Authors
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// Render checks of the channel cards with mocked API hooks (no browser:
-// static markup is enough to check structure, texts and safety attributes).
+// No browser: static markup is enough to check structure, texts and safety attributes.
 
 import { renderToStaticMarkup } from 'react-dom/server'
 import { MemoryRouter } from 'react-router'

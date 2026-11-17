@@ -1,17 +1,7 @@
 // Copyright 2026 The Kamerton Authors
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// Package telegram lets Kamerton set up Telegram notifications from the UI:
-// it validates a bot token, stores it in a Kubernetes Secret, discovers the
-// chats the bot is added to by long polling getUpdates, sends test messages
-// and writes the chosen routing into the system description. Alert delivery
-// itself stays with Alertmanager.
-//
-// The bot token is a credential. It is sent only to the Telegram API (as
-// part of the request URL, as the Bot API requires) and to the token store.
-// It never appears in errors returned by this package, in logs, or in values
-// that are serialized to API responses: every error that might carry a
-// request URL is scrubbed.
+// Package telegram sets up Telegram notifications from the UI; delivery stays with Alertmanager.
 package telegram
 
 import (
@@ -29,20 +19,16 @@ import (
 	"time"
 )
 
-// DefaultAPIURL is the public Bot API endpoint.
 const DefaultAPIURL = "https://api.telegram.org"
 
-// tokenPattern is the shape of a bot token as issued by @BotFather:
-// "<bot id>:<secret>". It is checked before the token leaves Kamerton.
+// tokenPattern is the @BotFather token shape "<bot id>:<secret>", checked before the
+// token leaves Kamerton.
 var tokenPattern = regexp.MustCompile(`^([0-9]{5,20}):[A-Za-z0-9_-]{30,64}$`)
 
-// ErrMalformedToken means the token does not look like a bot token.
 var ErrMalformedToken = errors.New("this does not look like a bot token: expected <digits>:<letters, digits, - and _> as issued by @BotFather")
 
-// ValidTokenFormat reports whether s looks like a bot token.
 func ValidTokenFormat(s string) bool { return tokenPattern.MatchString(s) }
 
-// BotIDFromToken returns the bot's user ID, the public part of a token.
 func BotIDFromToken(token string) (int64, bool) {
 	m := tokenPattern.FindStringSubmatch(token)
 	if m == nil {
@@ -52,13 +38,11 @@ func BotIDFromToken(token string) (int64, bool) {
 	return id, err == nil
 }
 
-// APIError is an unsuccessful Bot API response.
 type APIError struct {
-	Code        int    `json:"code"`
-	Description string `json:"description"`
-	// MigrateToChatID is set when a group was upgraded to a supergroup.
-	MigrateToChatID int64 `json:"migrateToChatID,omitempty"`
-	// RetryAfter is set when the request was rate limited (seconds).
+	Code            int    `json:"code"`
+	Description     string `json:"description"`
+	MigrateToChatID int64  `json:"migrateToChatID,omitempty"`
+	// RetryAfter is in seconds.
 	RetryAfter int `json:"retryAfter,omitempty"`
 }
 
@@ -66,7 +50,6 @@ func (e *APIError) Error() string {
 	return fmt.Sprintf("telegram: %d %s", e.Code, e.Description)
 }
 
-// IsUnauthorized reports whether err means the token was rejected.
 func IsUnauthorized(err error) bool {
 	var ae *APIError
 	return errors.As(err, &ae) && (ae.Code == http.StatusUnauthorized || ae.Code == http.StatusNotFound)
@@ -78,7 +61,6 @@ func IsConflict(err error) bool {
 	return errors.As(err, &ae) && ae.Code == http.StatusConflict
 }
 
-// User is a Telegram user or bot (subset).
 type User struct {
 	ID        int64  `json:"id"`
 	IsBot     bool   `json:"is_bot"`
@@ -87,7 +69,6 @@ type User struct {
 	Username  string `json:"username,omitempty"`
 }
 
-// Chat is a Telegram chat (subset).
 type Chat struct {
 	ID        int64  `json:"id"`
 	Type      string `json:"type"` // private, group, supergroup, channel
@@ -97,7 +78,6 @@ type Chat struct {
 	LastName  string `json:"last_name,omitempty"`
 }
 
-// DisplayTitle is the title of a group or the name of a private chat.
 func (c Chat) DisplayTitle() string {
 	if c.Title != "" {
 		return c.Title
@@ -109,14 +89,12 @@ func (c Chat) DisplayTitle() string {
 	return name
 }
 
-// ChatMember is the status of a member (subset).
 type ChatMember struct {
 	Status   string `json:"status"` // creator, administrator, member, restricted, left, kicked
 	User     User   `json:"user"`
 	IsMember *bool  `json:"is_member,omitempty"`
 }
 
-// Present reports whether the member is in the chat.
 func (m ChatMember) Present() bool {
 	switch m.Status {
 	case "creator", "administrator", "member":
@@ -128,7 +106,6 @@ func (m ChatMember) Present() bool {
 	}
 }
 
-// ChatMemberUpdated is a change of a member's status.
 type ChatMemberUpdated struct {
 	Chat          Chat       `json:"chat"`
 	From          User       `json:"from"`
@@ -137,7 +114,6 @@ type ChatMemberUpdated struct {
 	NewChatMember ChatMember `json:"new_chat_member"`
 }
 
-// Message is a message (subset relevant to chat discovery).
 type Message struct {
 	MessageID         int64  `json:"message_id"`
 	Chat              Chat   `json:"chat"`
@@ -149,7 +125,6 @@ type Message struct {
 	LeftChatMember    *User  `json:"left_chat_member,omitempty"`
 }
 
-// Update is one incoming update (subset).
 type Update struct {
 	UpdateID          int64              `json:"update_id"`
 	Message           *Message           `json:"message,omitempty"`
@@ -159,14 +134,11 @@ type Update struct {
 	EditedChannelPost *Message           `json:"edited_channel_post,omitempty"`
 }
 
-// AllowedUpdates are the update types Kamerton asks for. my_chat_member is
-// delivered by default, but getUpdates remembers the last allowed_updates
-// setting of the bot, so it is requested explicitly. message and
-// channel_post carry migrations, title changes and reveal chats in which
-// someone talks to the bot.
+// AllowedUpdates are requested explicitly because getUpdates remembers the
+// last allowed_updates of the bot. message and channel_post carry migrations,
+// title changes and chats in which someone talks to the bot.
 var AllowedUpdates = []string{"my_chat_member", "message", "channel_post"}
 
-// Client calls the Bot API.
 type Client struct {
 	// BaseURL defaults to DefaultAPIURL. Tests point it at a fake server.
 	BaseURL string
@@ -191,7 +163,7 @@ type envelope struct {
 	} `json:"parameters"`
 }
 
-// call performs a Bot API method. Errors never contain the token.
+// call never returns an error that contains the token.
 func (c *Client) call(ctx context.Context, token, method string, params any, out any) error {
 	if !ValidTokenFormat(token) {
 		return ErrMalformedToken
@@ -247,7 +219,6 @@ func (c *Client) call(ctx context.Context, token, method string, params any, out
 	return nil
 }
 
-// GetMe returns the bot behind the token.
 func (c *Client) GetMe(ctx context.Context, token string) (*User, error) {
 	var u User
 	if err := c.call(ctx, token, "getMe", struct{}{}, &u); err != nil {
@@ -256,7 +227,6 @@ func (c *Client) GetMe(ctx context.Context, token string) (*User, error) {
 	return &u, nil
 }
 
-// GetChat returns a chat the bot can see.
 func (c *Client) GetChat(ctx context.Context, token string, chatID int64) (*Chat, error) {
 	var ch Chat
 	if err := c.call(ctx, token, "getChat", map[string]any{"chat_id": chatID}, &ch); err != nil {
@@ -265,7 +235,6 @@ func (c *Client) GetChat(ctx context.Context, token string, chatID int64) (*Chat
 	return &ch, nil
 }
 
-// GetChatMember returns the status of a user in a chat.
 func (c *Client) GetChatMember(ctx context.Context, token string, chatID, userID int64) (*ChatMember, error) {
 	var m ChatMember
 	if err := c.call(ctx, token, "getChatMember", map[string]any{"chat_id": chatID, "user_id": userID}, &m); err != nil {
@@ -274,7 +243,6 @@ func (c *Client) GetChatMember(ctx context.Context, token string, chatID, userID
 	return &m, nil
 }
 
-// SendMessage sends a message with HTML parse mode.
 func (c *Client) SendMessage(ctx context.Context, token string, chatID int64, html string) error {
 	return c.call(ctx, token, "sendMessage", map[string]any{
 		"chat_id": chatID, "text": html, "parse_mode": "HTML",
@@ -282,7 +250,6 @@ func (c *Client) SendMessage(ctx context.Context, token string, chatID int64, ht
 	}, nil)
 }
 
-// GetUpdates long-polls for updates after offset.
 func (c *Client) GetUpdates(ctx context.Context, token string, offset int64, timeout time.Duration) ([]Update, error) {
 	var ups []Update
 	params := map[string]any{"timeout": int(timeout / time.Second), "allowed_updates": AllowedUpdates}

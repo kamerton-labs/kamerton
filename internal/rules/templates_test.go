@@ -45,15 +45,12 @@ func meta() Meta {
 	return Meta{Service: "checkout", Severity: "critical", For: 5 * time.Minute, Labels: map[string]string{"environment": "demo"}}
 }
 
-// mustValidate renders the rules as a Prometheus rule file and parses it with
-// Prometheus' rulefmt package.
 func mustValidate(t *testing.T, rs ...rulefmt.Rule) string {
 	t.Helper()
 	out, err := RenderAndValidate(rulefmt.RuleGroups{Groups: []rulefmt.RuleGroup{{Name: "test", Rules: rs}}})
 	if err != nil {
 		t.Fatalf("generated rules rejected by Prometheus rulefmt: %v\n%s", err, out)
 	}
-	// Also make sure each expression is a boolean-filtered vector expression.
 	p := parser.NewParser(parser.Options{})
 	for _, r := range rs {
 		e, err := p.ParseExpr(r.Expr)
@@ -193,7 +190,6 @@ func TestQuotingOfHostileValues(t *testing.T) {
 	mustValidate(t, r)
 }
 
-// TestValidateRejectsBrokenRules makes sure validation is not a no-op.
 func TestValidateRejectsBrokenRules(t *testing.T) {
 	bad := []string{
 		"groups:\n- name: x\n  rules:\n  - alert: A\n    expr: sum(rate(foo[5m])\n",

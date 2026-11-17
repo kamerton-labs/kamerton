@@ -1,8 +1,7 @@
 // Copyright 2026 The Kamerton Authors
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// Package controller reconciles SystemDescription resources: validate,
-// generate, apply, and report the outcome in status conditions.
+// Package controller reconciles SystemDescription resources into rules and routing.
 package controller
 
 import (
@@ -31,24 +30,18 @@ import (
 	"github.com/kamerton-labs/kamerton/internal/stack"
 )
 
-// Condition types reported in status.
 const (
 	ConditionValid     = "Valid"
 	ConditionGenerated = "Generated"
 	ConditionApplied   = "Applied"
 )
 
-// SystemDescriptionReconciler reconciles a SystemDescription object.
-//
-// TODO: watch owned PrometheusRule/AlertmanagerConfig/ConfigMaps so manual
-// drift is corrected immediately, not only on the next change of the
-// description; periodic resync until then.
+// TODO: watch owned objects so manual drift is corrected before the next resync.
 type SystemDescriptionReconciler struct {
 	client.Client
 	Applier deployer.Applier
 	Options generator.Options
-	// Sets resolves the system's set of programs: its extra labels go on
-	// the PrometheusRule and AlertmanagerConfig. Nil: no extra labels.
+	// Sets supplies extra labels for the PrometheusRule and AlertmanagerConfig; nil means none.
 	Sets *stack.Sets
 	// SetsNamespace and SetsConfigMap name the ConfigMap holding the sets;
 	// a change of it re-reconciles every system. Empty: not watched.
@@ -72,7 +65,6 @@ type SystemDescriptionReconciler struct {
 // +kubebuilder:rbac:groups="",resources=pods;events,verbs=get;list
 // +kubebuilder:rbac:groups=apps,resources=replicasets;statefulsets,verbs=get;list
 
-// Reconcile implements reconcile.Reconciler.
 func (r *SystemDescriptionReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
@@ -164,9 +156,6 @@ func (r *SystemDescriptionReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	return finish(nil)
 }
 
-// SetupWithManager registers the reconciler with the manager. A change of
-// the sets ConfigMap re-reconciles every system: the systems using a changed
-// set get its new labels (unchanged systems re-apply the same objects).
 func (r *SystemDescriptionReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	b := ctrl.NewControllerManagedBy(mgr).
 		For(&v1alpha1.SystemDescription{}).
@@ -182,7 +171,6 @@ func (r *SystemDescriptionReconciler) isSetsConfigMap(o client.Object) bool {
 	return o.GetNamespace() == r.SetsNamespace && o.GetName() == r.SetsConfigMap
 }
 
-// allSystems lists every SystemDescription for re-reconciliation.
 func (r *SystemDescriptionReconciler) allSystems(ctx context.Context, _ client.Object) []reconcile.Request {
 	var list v1alpha1.SystemDescriptionList
 	if err := r.List(ctx, &list); err != nil {

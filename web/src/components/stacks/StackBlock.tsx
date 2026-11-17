@@ -1,10 +1,6 @@
 // Copyright 2026 The Kamerton Authors
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// One set of programs on the status page: six program cards (state,
-// address, where it comes from, version), the systems using the set and
-// what can be done with it.
-
 import { useState } from 'react'
 import { Link } from 'react-router'
 import { Activity, AlertTriangle, BellRing, ChartLine, FileText, Layers, MoreHorizontal, Pencil, Radio, Trash2, Waypoints, type LucideIcon } from 'lucide-react'
