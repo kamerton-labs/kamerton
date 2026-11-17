@@ -14,11 +14,8 @@ import (
 	"github.com/kamerton-labs/kamerton/internal/rules"
 )
 
-// The types below mirror the data Alertmanager passes to notification
-// templates (github.com/prometheus/alertmanager/template.Data), so the
-// generated templates can be executed exactly as Alertmanager executes them:
-// html/template for Telegram (parse mode HTML) and email html, text/template
-// for the email text body and headers.
+// The types below mirror alertmanager/template.Data, so the generated templates
+// run exactly as Alertmanager runs them.
 type kv map[string]string
 
 type amAlert struct {
@@ -73,8 +70,6 @@ func sampleData(n int, status string) amData {
 	return d
 }
 
-// amFuncs are the Alertmanager default template functions the templates use
-// (github.com/prometheus/alertmanager/template.DefaultFuncs).
 var amFuncs = map[string]any{
 	"reReplaceAll": func(pattern, repl, text string) string {
 		return regexp.MustCompile(pattern).ReplaceAllString(text, repl)
@@ -107,7 +102,6 @@ func execText(t *testing.T, tpl string, d amData) string {
 	return b.String()
 }
 
-// Telegram's HTML parse mode accepts only a few tags.
 var telegramTag = regexp.MustCompile(`</?([a-zA-Z-]+)[^>]*>`)
 
 func checkTelegramHTML(t *testing.T, out string) {
@@ -223,8 +217,6 @@ func TestSafeBaseURL(t *testing.T) {
 	}
 }
 
-// testNow is the generation time used by the tests.
 var testNow = time.Date(2026, 11, 16, 4, 0, 0, 0, time.UTC)
 
-// utc is the clock of a description without timeZone.
 var utc = newZoneClock("", testNow)

@@ -21,7 +21,6 @@ import (
 	"github.com/kamerton-labs/kamerton/internal/descstore"
 )
 
-// Exists only in tests; never a real password.
 const fakePassword = "fake-smtp-password-for-tests"
 
 type fakeSender struct {
@@ -131,7 +130,6 @@ func TestFlowKeepsDescriptionInSync(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// What the system editor does: add a receiver and route critical alerts to it.
 	full, _ := s.State.Get(ctx)
 	recv := ReceiverPrefix + rc.ID
 	if _, err := s.Descriptions.Update(ctx, "otel-demo", func(sd *v1alpha1.SystemDescription) error {
@@ -150,7 +148,6 @@ func TestFlowKeepsDescriptionInSync(t *testing.T) {
 		t.Errorf("usedIn: %+v", u)
 	}
 
-	// Changing addresses and the server rewrites the receiver.
 	if _, err := s.UpdateRecipient(ctx, rc.ID, RecipientInput{Name: "Дежурные", To: []string{"b@example.com", "c@example.com"}}); err != nil {
 		t.Fatal(err)
 	}
@@ -168,7 +165,6 @@ func TestFlowKeepsDescriptionInSync(t *testing.T) {
 	if strings.Contains(file, "a@example.com") {
 		t.Error("old address remains")
 	}
-	// Hand-written receiver (team-email) is left alone.
 	if !strings.Contains(file, "oncall@example.com") {
 		t.Error("hand-written receiver changed")
 	}

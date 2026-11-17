@@ -18,13 +18,10 @@ import (
 	"github.com/kamerton-labs/kamerton/internal/rules"
 )
 
-// maxOperations is how many failing operations are read.
 const maxOperations = 3
 
-// FailingOperations returns the operations of a service with the most failed
-// calls within the window, most first. The query selects the same span
-// metrics as the error-rate rules (generator.SpanTarget: metric and label
-// names, span kinds, excluded operations).
+// FailingOperations returns the operations with the most failed calls, most first,
+// selecting the same span metrics as the error-rate rules.
 func (c *Collector) FailingOperations(ctx context.Context, prom prometheus.Querier, sd *v1alpha1.SystemDescription, svc *v1alpha1.Service, now time.Time) ([]generator.OperationErrors, error) {
 	t := generator.SpanTarget(sd, svc)
 	if t.CallsMetric == description.DisabledMetric || t.CallsMetric == "" {

@@ -27,7 +27,6 @@ func generateYAML(t *testing.T, doc string) *Bundle {
 	return b
 }
 
-// trafficRules returns the "requests stopped arriving" rules by service.
 func trafficRules(b *Bundle) map[string]rulefmt.Rule {
 	out := map[string]rulefmt.Rule{}
 	for _, g := range b.RuleGroups.Groups {
@@ -43,9 +42,6 @@ func trafficRules(b *Bundle) map[string]rulefmt.Rule {
 func TestTrafficRuleDefaultsToCriticalHTTPAndGRPC(t *testing.T) {
 	b := loadExample(t)
 	got := trafficRules(b)
-	// Critical http/grpc services of the OTel Demo get the rule; quiet
-	// non-critical ones (email, accounting, fraud-detection…), the queue and
-	// the database do not.
 	for _, s := range []string{"frontend-proxy", "frontend", "checkout", "payment", "cart", "product-catalog"} {
 		r, ok := got[s]
 		if !ok {
@@ -64,11 +60,9 @@ func TestTrafficRuleDefaultsToCriticalHTTPAndGRPC(t *testing.T) {
 			t.Errorf("%s: traffic rule must be off by default", s)
 		}
 	}
-	// The telemetry guard lists every service of the system.
 	if !strings.Contains(got["payment"].Expr, `service_name=~"frontend-proxy|frontend|checkout|payment|cart|product-catalog|currency|ad|recommendation|shipping|quote|email|orders|fraud-detection|accounting|valkey-cart"`) {
 		t.Errorf("guard does not list the system's services:\n%s", got["payment"].Expr)
 	}
-	// Metric and label names come from spec.telemetry.
 	if !strings.Contains(got["payment"].Expr, `traces_span_metrics_calls_total{service_name="payment", span_kind=~"SPAN_KIND_SERVER|SPAN_KIND_CONSUMER", span_name!~"flagd\\.evaluation\\.v2\\.Service/EventStream"}`) {
 		t.Errorf("selector:\n%s", got["payment"].Expr)
 	}
@@ -151,7 +145,6 @@ func TestTrafficRuleLayersAndTypes(t *testing.T) {
 		!strings.HasPrefix(bill.Annotations[AnnotationMessageText], `Now {{ $value | printf "%.1f" }} per min (normally {{ range query`) {
 		t.Errorf("team's text: %v", bill.Annotations)
 	}
-	// The runbook lists the rule.
 	if !strings.Contains(b.Runbooks["billing.md"], "### KamertonRequestsStopped") {
 		t.Errorf("runbook:\n%s", b.Runbooks["billing.md"])
 	}

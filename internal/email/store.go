@@ -20,29 +20,23 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-// State is what Kamerton remembers about email. It holds no secret: the
-// SMTP password lives only in the password store (a Kubernetes Secret).
+// State holds no secret: the SMTP password lives only in the password store (a Secret).
 type State struct {
 	// Server is the mail server; nil until it is set up.
-	Server *ServerSettings `json:"server,omitempty"`
-	// Recipients are shared by all systems, keyed by ID.
+	Server     *ServerSettings       `json:"server,omitempty"`
 	Recipients map[string]*Recipient `json:"recipients,omitempty"`
 }
 
-// ServerSettings is the SMTP server Kamerton (Alertmanager) sends mail through.
 type ServerSettings struct {
 	// Smarthost is host:port.
 	Smarthost string `json:"smarthost"`
-	// From is the sender address.
-	From string `json:"from"`
+	From      string `json:"from"`
 	// Username is the SMTP login; empty means no authentication.
-	Username string `json:"username,omitempty"`
-	// HasPassword is true when a password is stored in the Secret.
+	Username    string    `json:"username,omitempty"`
 	HasPassword bool      `json:"hasPassword"`
 	UpdatedAt   time.Time `json:"updatedAt"`
 }
 
-// Recipient is a named set of addresses ("On call": a@x, b@x).
 type Recipient struct {
 	ID        string    `json:"id"`
 	Name      string    `json:"name"`
@@ -50,7 +44,6 @@ type Recipient struct {
 	CreatedAt time.Time `json:"createdAt"`
 }
 
-// SortedRecipients returns the recipients ordered by name.
 func (s *State) SortedRecipients() []*Recipient {
 	out := make([]*Recipient, 0, len(s.Recipients))
 	for _, r := range s.Recipients {
@@ -89,20 +82,17 @@ func cloneState(s *State) (*State, error) {
 	return &out, nil
 }
 
-// MemoryStateStore keeps state in memory (tests).
 type MemoryStateStore struct {
 	mu sync.Mutex
 	s  State
 }
 
-// Get implements StateStore.
 func (m *MemoryStateStore) Get(context.Context) (*State, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return cloneState(&m.s)
 }
 
-// Update implements StateStore.
 func (m *MemoryStateStore) Update(_ context.Context, mutate func(*State) error) (*State, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -120,12 +110,9 @@ func (m *MemoryStateStore) Update(_ context.Context, mutate func(*State) error) 
 	return cloneState(&m.s)
 }
 
-// StateConfigMapKey is the data key holding the JSON state.
 const StateConfigMapKey = "state.json"
 
-// ConfigMapStateStore keeps state as JSON in a ConfigMap in Kamerton's
-// namespace (same reasons as the Telegram state: shared by replicas,
-// survives restarts, nothing secret).
+// ConfigMapStateStore keeps state as JSON in a ConfigMap, shared by replicas and kept across restarts.
 type ConfigMapStateStore struct {
 	// Client should be uncached.
 	Client    client.Client
@@ -133,7 +120,6 @@ type ConfigMapStateStore struct {
 	Name      string
 }
 
-// Get implements StateStore.
 func (c *ConfigMapStateStore) Get(ctx context.Context) (*State, error) {
 	s, _, err := c.read(ctx)
 	return s, err
@@ -159,7 +145,6 @@ func (c *ConfigMapStateStore) read(ctx context.Context) (*State, *corev1.ConfigM
 	return out, &cm, err
 }
 
-// Update implements StateStore.
 func (c *ConfigMapStateStore) Update(ctx context.Context, mutate func(*State) error) (*State, error) {
 	var result *State
 	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
@@ -210,7 +195,6 @@ type PasswordStore interface {
 	Get(ctx context.Context) (string, error)
 	Set(ctx context.Context, password string) error
 	Delete(ctx context.Context) error
-	// Ref names where the password lives, for receivers in the description.
 	Ref() (name, key string)
 }
 
@@ -221,20 +205,17 @@ const (
 	DefaultSecretKey  = "password"
 )
 
-// MemoryPasswordStore keeps the password in memory (tests).
 type MemoryPasswordStore struct {
 	mu sync.Mutex
 	pw string
 }
 
-// Get implements PasswordStore.
 func (m *MemoryPasswordStore) Get(context.Context) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.pw, nil
 }
 
-// Set implements PasswordStore.
 func (m *MemoryPasswordStore) Set(_ context.Context, pw string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -242,8 +223,6 @@ func (m *MemoryPasswordStore) Set(_ context.Context, pw string) error {
 	return nil
 }
 
-// Delete implements PasswordStore.
 func (m *MemoryPasswordStore) Delete(ctx context.Context) error { return m.Set(ctx, "") }
 
-// Ref implements PasswordStore.
 func (m *MemoryPasswordStore) Ref() (string, string) { return DefaultSecretName, DefaultSecretKey }

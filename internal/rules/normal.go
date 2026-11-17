@@ -11,9 +11,6 @@ import (
 	"github.com/prometheus/prometheus/model/rulefmt"
 )
 
-// Rules that work without a threshold written by the team: a container
-// killed for running out of memory, usage close to the container limit, CPU
-// and latency far above their own normal, a queue nobody reads.
 const (
 	AlertOOMKilled            = "KamertonOOMKilled"
 	AlertMemoryNearLimit      = "KamertonMemoryNearLimit"
@@ -23,52 +20,42 @@ const (
 	AlertQueueConsumerStopped = "KamertonQueueConsumerStopped"
 )
 
-// Fixed parts of these rules. They are not settings: they define what
-// "normal" and "recent" mean.
+// These are not settings: they define what "normal" and "recent" mean.
 const (
-	// NormalRange is the history the normal is taken from, and NormalOffset
-	// how long before now it ends, so a spike that has just started does
-	// not raise its own normal.
+	// NormalOffset ends the normal history before now, so a spike that has just
+	// started does not raise its own normal.
 	NormalRange  = time.Hour
 	NormalOffset = 10 * time.Minute
-	// normalStep is the resolution of the CPU normal, and normalMinPoints
-	// the steps with data it needs (half the range): a service seen for the
-	// first time a few minutes ago has no normal and no alert.
+	// normalMinPoints is half the range: a service first seen a few minutes ago
+	// has no normal and no alert.
 	normalStep      = time.Minute
 	normalMinPoints = 30
 	// CPUAboveNormalMinCores: below half a core no CPU spike is worth an alert.
 	CPUAboveNormalMinCores = 0.5
-	// LatencyAboveNormalMinMs: a quantile under 100 ms is never "slow",
-	// however many times its normal it is.
+	// LatencyAboveNormalMinMs: a quantile under 100 ms is never "slow".
 	LatencyAboveNormalMinMs = 100
-	// latencyNormalMinCalls is the calls the normal hour must hold.
-	latencyNormalMinCalls = 30
+	latencyNormalMinCalls   = 30
 	// OOMRecent is how long the out-of-memory alert lasts after the restart.
 	OOMRecent = 10 * time.Minute
-	// MemoryTrendRange and MemoryTrendHorizon: memory close to the limit
-	// alerts only while the trend over the last hour reaches the limit
-	// within 30 minutes.
+	// Memory close to the limit alerts only while the trend over MemoryTrendRange
+	// reaches the limit within MemoryTrendHorizon.
 	MemoryTrendRange   = time.Hour
 	MemoryTrendHorizon = 30 * time.Minute
 	// MinCallsInWindow is the calls (latency) or failed calls (errors per
 	// operation) the rate window must hold.
 	MinCallsInWindow = 3
-	// QueueNoMembersRange is how long a consumer group must have had no
-	// members to count as stopped. A restart of a single consumer pod
-	// usually leaves the group for less than that.
+	// QueueNoMembersRange: a restart of a single consumer pod usually leaves the
+	// group for less than that.
 	QueueNoMembersRange = time.Minute
-	// QueueStalledRange is how long messages must wait while the committed
-	// offset of the group stays where it was. A slow consumer that still
-	// commits in batches (the demo's kafkaQueueProblems fault: one commit
-	// every 200 s) must not look stopped; with the pending period of a
-	// minute the offset has to stand still for 4 minutes.
+	// QueueStalledRange: a consumer that commits in batches (every 200 s) must not
+	// look stopped. With the one-minute pending period the offset has to stand
+	// still for 4 minutes.
 	QueueStalledRange = 3 * time.Minute
-	// queueFreshRange: the offset series must have a sample this recent, so
-	// the last samples before a gap in the data do not look like a stopped
-	// offset.
+	// queueFreshRange: the offset series must have a sample this recent, so the
+	// last samples before a gap do not look like a stopped offset.
 	queueFreshRange = 2 * time.Minute
-	// queueGroupsRange: without a list of consumer groups, the groups of
-	// the topic are those that had lag series during the last hour.
+	// queueGroupsRange: without a list of groups, the groups of the topic are
+	// those that had lag series in this range.
 	queueGroupsRange = time.Hour
 )
 
@@ -76,16 +63,13 @@ func (t PodTarget) withContainer() []string {
 	return []string{t.NamespaceLabel, t.PodLabel, t.ContainerLabel}
 }
 
-// OOMKilledParams parameterize the out-of-memory kill template.
 type OOMKilledParams struct {
 	Meta
 	Target PodTarget
 }
 
-// OOMKilled renders an alert on a container whose last termination was an
-// out-of-memory kill and that restarted within OOMRecent. It fires at once
-// (one kill is already an outage of the container) and resolves OOMRecent
-// after the restart. The value is the number of restarts in that time.
+// OOMKilled fires at once (one kill is already an outage of the container) and
+// resolves OOMRecent after the restart. The value is the restart count.
 func OOMKilled(p OOMKilledParams) rulefmt.Rule {
 	t := p.Target
 	cby := by(t.withContainer()...)
@@ -103,18 +87,16 @@ func OOMKilled(p OOMKilledParams) rulefmt.Rule {
 	return r
 }
 
-// NearLimitParams parameterize the "close to the container limit" templates.
 type NearLimitParams struct {
 	Meta
 	Target PodTarget
-	// Share of the limit (0..1) above which the alert fires.
+	// Share is a fraction of the limit, 0..1.
 	Share float64
 }
 
-// limit renders the pod limit of a resource: the sum of the container limits,
-// only where every container of the pod has one (otherwise the pod has no
-// limit as a whole). Containers are counted by the restarts metric, which
-// has one series per container.
+// limit is the sum of the container limits, only where every container of the
+// pod has one. Containers are counted by the restarts metric, which has one
+// series per container.
 func (t PodTarget) limit(resource string) string {
 	pby := by(t.NamespaceLabel, t.PodLabel)
 	lim := t.matchers().Eq("resource", resource).Selector(t.LimitsMetric)
@@ -126,12 +108,8 @@ func (t PodTarget) limit(resource string) string {
 	return out
 }
 
-// MemoryNearLimit renders an alert on pod memory above Share of its limit
-// that is still growing: the trend over MemoryTrendRange reaches the limit
-// within MemoryTrendHorizon. Runtimes that size their heap to the limit (JVM,
-// .NET) sit at 90-95% of it for days without harm; memory that keeps growing
-// towards the limit ends in an out-of-memory kill. The value is the share of
-// the limit.
+// MemoryNearLimit also requires memory to be still growing: runtimes that size
+// their heap to the limit (JVM, .NET) sit at 90-95% for days without harm.
 func MemoryNearLimit(p NearLimitParams) rulefmt.Rule {
 	t := p.Target
 	pod := joinComma([]string{t.NamespaceLabel, t.PodLabel})
@@ -148,7 +126,6 @@ func MemoryNearLimit(p NearLimitParams) rulefmt.Rule {
 	return r
 }
 
-// CPUNearLimit renders an alert on pod CPU usage above Share of its limit.
 func CPUNearLimit(p NearLimitParams) rulefmt.Rule {
 	t := p.Target
 	expr := fmt.Sprintf("max %s (rate(%s[%s]))\n/ on (%s)\n  %s\n> %s",
@@ -163,20 +140,14 @@ func CPUNearLimit(p NearLimitParams) rulefmt.Rule {
 	return r
 }
 
-// CPUAboveNormalParams parameterize the "CPU far above normal" template.
 type CPUAboveNormalParams struct {
 	Meta
 	Target PodTarget
-	// Factor: the alert fires above Factor × normal.
 	Factor float64
 }
 
-// CPUAboveNormal renders an alert on a pod using more than
-// CPUAboveNormalMinCores and more than Factor times the normal CPU of the
-// service: the average over NormalRange ending NormalOffset ago of the
-// busiest pod, taken per namespace so it survives pods being replaced. A
-// service without half an hour of history has no normal and no alert. The
-// value is the current usage in cores.
+// CPUAboveNormal takes the normal per namespace so it survives pods being
+// replaced. The value is in cores.
 func CPUAboveNormal(p CPUAboveNormalParams) rulefmt.Rule {
 	t := p.Target
 	ns := t.NamespaceLabel
@@ -199,21 +170,14 @@ func CPUAboveNormal(p CPUAboveNormalParams) rulefmt.Rule {
 	return r
 }
 
-// LatencyAboveNormalParams parameterize the "slower than normal" template.
 type LatencyAboveNormalParams struct {
 	Meta
 	Target SpanTarget
-	// Quantile, for example 0.95.
+	// Quantile is a fraction, for example 0.95.
 	Quantile float64
-	// Factor: the alert fires above Factor × normal.
-	Factor float64
+	Factor   float64
 }
 
-// LatencyAboveNormal renders an alert on a service whose latency quantile is
-// above LatencyAboveNormalMinMs and more than Factor times its normal: the
-// same quantile over NormalRange ending NormalOffset ago (with at least 30
-// calls in that hour). The window must hold MinCallsInWindow calls. The
-// value is the current quantile.
 func LatencyAboveNormal(p LatencyAboveNormalParams) rulefmt.Rule {
 	t := p.Target
 	groupBy := t.groupBy(false)
@@ -251,30 +215,18 @@ func LatencyAboveNormal(p LatencyAboveNormalParams) rulefmt.Rule {
 	return r
 }
 
-// QueueConsumerStoppedParams parameterize the "nobody reads the queue" template.
 type QueueConsumerStoppedParams struct {
 	Meta
-	// Target selects the topic and its consumer groups. MembersMetric and
-	// OffsetMetric turn on the two conditions; at least one must be set.
+	// MembersMetric and OffsetMetric turn on the two conditions; at least one
+	// must be set.
 	Target QueueTarget
 }
 
 func metricOn(name string) bool { return name != "" && name != "-" }
 
-// QueueConsumerStopped renders an alert on a consumer group that stopped
-// reading the topic, whatever the lag threshold and the load: either
-//
-//   - the group has had no members for QueueNoMembersRange (the consumer is
-//     down or left the group), or
-//   - messages have been waiting (lag above zero) for all of
-//     QueueStalledRange and no partition of the group moved its committed
-//     offset in that time (the consumer is hung).
-//
-// A group without members may stop reporting lag and offsets, so the first
-// condition uses only the members series; with a list of consumer groups it
-// does not need any series of the topic at all. The offset series must have
-// a recent sample, so a gap in the data does not look like a stopped offset.
-// The value is the lag of the group, or 0 when the lag series is gone.
+// QueueConsumerStopped: a group without members may stop reporting lag and
+// offsets, so the no-members condition uses only the members series. The
+// value is the lag, or 0 when it is gone.
 func QueueConsumerStopped(p QueueConsumerStoppedParams) rulefmt.Rule {
 	t := p.Target
 	g, tp := t.GroupLabel, t.TopicLabel
@@ -285,7 +237,7 @@ func QueueConsumerStopped(p QueueConsumerStoppedParams) rulefmt.Rule {
 	if metricOn(t.MembersMetric) {
 		zero := fmt.Sprintf("max by (%s) (max_over_time(%s[%s])) == 0", g, Matchers{}.Re(g, quoteAll(t.Groups)...).Selector(t.MembersMetric), dur(QueueNoMembersRange))
 		if len(t.Groups) > 0 {
-			// The members series has no topic label: the groups are listed, so the topic is added as is.
+			// The members series has no topic label, so the topic is added as is.
 			noMembers = fmt.Sprintf("label_replace(%s, %q, %q, \"\", \"\")", zero, tp, t.Topic)
 		} else {
 			noMembers = fmt.Sprintf("group by (%s) (last_over_time(%s[%s]))\n    and on (%s)\n    %s", gt, topic.Selector(t.LagMetric), dur(queueGroupsRange), g, zero)

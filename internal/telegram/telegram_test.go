@@ -40,7 +40,6 @@ const (
 	otherTok  = "987654321:BBOtherFakeTokenForTests_abcdefghijklm"
 )
 
-// fakeTelegram is a fake Bot API. Handlers are keyed by method name.
 type fakeTelegram struct {
 	t   *testing.T
 	srv *httptest.Server
@@ -185,7 +184,6 @@ func (h *harness) description(t *testing.T) *v1alpha1.SystemDescription {
 	return snap.SD
 }
 
-// assertNoToken fails if the token or its secret part appears in s.
 func assertNoToken(t *testing.T, what, s string) {
 	t.Helper()
 	_, secret, _ := strings.Cut(testToken, ":")
@@ -193,8 +191,6 @@ func assertNoToken(t *testing.T, what, s string) {
 		t.Errorf("%s contains the bot token:\n%s", what, s)
 	}
 }
-
-// ---- Token validation ----
 
 func TestSetTokenValidatesWithGetMe(t *testing.T) {
 	h := newHarness(t, baseDescription)
@@ -283,8 +279,6 @@ func TestClientErrorsNeverContainTheToken(t *testing.T) {
 	assertNoToken(t, "api error", err.Error())
 }
 
-// ---- Chat discovery ----
-
 func groupChat(id int64, title string) Chat { return Chat{ID: id, Type: "group", Title: title} }
 
 func member(status string) ChatMember {
@@ -295,23 +289,19 @@ func TestApplyUpdateAddedRemovedMigrated(t *testing.T) {
 	st := &State{}
 	now := time.Now()
 
-	// Added to a group.
 	ApplyUpdate(st, Update{UpdateID: 1, MyChatMember: &ChatMemberUpdated{Chat: groupChat(-100, "Ops"), OldChatMember: member("left"), NewChatMember: member("member")}}, testBotID, now)
 	if c := st.Chats[-100]; c == nil || !c.Available || c.Title != "Ops" || c.Type != "group" {
 		t.Fatalf("added: %+v", c)
 	}
-	// Promoted to administrator: still available.
 	ApplyUpdate(st, Update{UpdateID: 2, MyChatMember: &ChatMemberUpdated{Chat: groupChat(-100, "Ops"), NewChatMember: member("administrator")}}, testBotID, now)
 	if !st.Chats[-100].Available {
 		t.Fatal("administrator must be available")
 	}
-	// Added to a second chat, then removed from it.
 	ApplyUpdate(st, Update{UpdateID: 3, MyChatMember: &ChatMemberUpdated{Chat: groupChat(-200, "Dev"), NewChatMember: member("member")}}, testBotID, now)
 	ApplyUpdate(st, Update{UpdateID: 4, MyChatMember: &ChatMemberUpdated{Chat: groupChat(-200, "Dev"), NewChatMember: member("left")}}, testBotID, now)
 	if c := st.Chats[-200]; c.Available || c.Problem == "" {
 		t.Fatalf("removed chat must be unavailable with a reason: %+v", c)
 	}
-	// Kicked.
 	ApplyUpdate(st, Update{UpdateID: 5, MyChatMember: &ChatMemberUpdated{Chat: groupChat(-200, "Dev"), NewChatMember: member("kicked")}}, testBotID, now)
 	if st.Chats[-200].Available || st.Chats[-200].Status != "kicked" {
 		t.Fatalf("kicked: %+v", st.Chats[-200])
@@ -322,8 +312,8 @@ func TestApplyUpdateAddedRemovedMigrated(t *testing.T) {
 	if !st.Chats[-300].Available {
 		t.Fatal("restricted member must be available")
 	}
-	// The group becomes a supergroup: the old group reports migrate_to_chat_id,
-	// the new supergroup reports migrate_from_chat_id. Both are idempotent.
+	// Migration: the old group reports migrate_to_chat_id, the supergroup migrate_from_chat_id.
+	// Both are idempotent.
 	migs := ApplyUpdate(st, Update{UpdateID: 7, Message: &Message{Chat: groupChat(-100, "Ops"), MigrateToChatID: -1001000}}, testBotID, now)
 	migs = append(migs, ApplyUpdate(st, Update{UpdateID: 8, Message: &Message{Chat: Chat{ID: -1001000, Type: "supergroup", Title: "Ops"}, MigrateFromChatID: -100}}, testBotID, now)...)
 	if _, still := st.Chats[-100]; still {
@@ -341,12 +331,10 @@ func TestApplyUpdateAddedRemovedMigrated(t *testing.T) {
 	if _, back := st.Chats[-100]; back {
 		t.Error("the old group came back")
 	}
-	// A title change is picked up.
 	ApplyUpdate(st, Update{UpdateID: 10, Message: &Message{Chat: Chat{ID: -1001000, Type: "supergroup", Title: "Ops 24/7"}, NewChatTitle: "Ops 24/7"}}, testBotID, now)
 	if st.Chats[-1001000].Title != "Ops 24/7" {
 		t.Error("title not updated")
 	}
-	// A private chat appears when a user writes to the bot.
 	ApplyUpdate(st, Update{UpdateID: 11, Message: &Message{Chat: Chat{ID: 555, Type: "private", FirstName: "Анна"}}}, testBotID, now)
 	if c := st.Chats[555]; c == nil || c.Title != "Анна" || !c.Available {
 		t.Errorf("private chat: %+v", c)
@@ -369,7 +357,6 @@ func TestPollingDiscoversChatsAndFollowsMigration(t *testing.T) {
 	if err := h.tokens.Set(ctx, testToken); err != nil {
 		t.Fatal(err)
 	}
-	// getChat is used to probe the chat from the description before polling.
 	h.tg.handle("getChat", func(_ string, p map[string]any) (int, string) {
 		return 200, `{"ok":true,"result":{"id":-100,"type":"group","title":"Ops"}}`
 	})
@@ -475,8 +462,6 @@ func TestAddChatByIDFollowsMigration(t *testing.T) {
 	}
 }
 
-// ---- Test message ----
-
 func TestSendTest(t *testing.T) {
 	h := newHarness(t, baseDescription)
 	ctx := context.Background()
@@ -516,7 +501,6 @@ func TestSendTest(t *testing.T) {
 	}
 }
 
-// The test message follows the notification language of the description.
 func TestSendTestLanguage(t *testing.T) {
 	h := newHarness(t, strings.Replace(baseDescription, "spec:\n", "spec:\n  notifications:\n    language: ru\n", 1))
 	ctx := context.Background()
@@ -529,8 +513,6 @@ func TestSendTestLanguage(t *testing.T) {
 		t.Errorf("sendMessage calls: %+v", calls)
 	}
 }
-
-// ---- Routing and cleanup ----
 
 func TestSaveRoutingWritesDescriptionAndCleansUp(t *testing.T) {
 	h := newHarness(t, baseDescription)
@@ -563,7 +545,6 @@ func TestSaveRoutingWritesDescriptionAndCleansUp(t *testing.T) {
 	raw, _ := os.ReadFile(h.file)
 	assertNoToken(t, "description file", string(raw))
 
-	// The generated AlertmanagerConfig routes per severity and per service.
 	b, err := generator.Generate(sd, generator.Options{})
 	if err != nil {
 		t.Fatal(err)
@@ -576,7 +557,7 @@ func TestSaveRoutingWritesDescriptionAndCleansUp(t *testing.T) {
 	}
 	assertNoToken(t, "AlertmanagerConfig", string(amc))
 
-	// Status reflects the routing; the token is not in it.
+	// The token is not in the status.
 	st, err := h.svc.Status(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -599,7 +580,6 @@ func TestSaveRoutingWritesDescriptionAndCleansUp(t *testing.T) {
 		t.Errorf("chat routing in status: %+v", st.Chats)
 	}
 
-	// Deleting a chat removes its receiver and route.
 	if err := h.svc.DeleteChat(ctx, -1002); err != nil {
 		t.Fatal(err)
 	}
@@ -608,7 +588,6 @@ func TestSaveRoutingWritesDescriptionAndCleansUp(t *testing.T) {
 		t.Errorf("after DeleteChat: %+v", sd.Spec.Notifications)
 	}
 
-	// Deleting the token removes every receiver that uses it, the token and the chats.
 	_, _ = h.state.Update(ctx, func(st *State) error {
 		st.Chats[-1001] = &KnownChat{ID: -1001, Available: true}
 		return nil
@@ -663,8 +642,6 @@ func TestSaveRoutingKeepsHandWrittenReceiverAndOtherSecrets(t *testing.T) {
 		t.Error("unknown service must be rejected by validation")
 	}
 }
-
-// ---- Secret store ----
 
 func newFakeClient(t *testing.T, objs ...client.Object) client.Client {
 	t.Helper()
@@ -745,7 +722,6 @@ func TestConfigMapStateStoreSurvivesRestart(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	// A new store (a restarted core or another replica) sees the same state.
 	b := &ConfigMapStateStore{Client: c, Namespace: "kamerton", Name: "kamerton-telegram-state"}
 	st, err := b.Get(ctx)
 	if err != nil {

@@ -42,20 +42,17 @@ func cloneState(s *State) (*State, error) {
 	return &out, nil
 }
 
-// MemoryStateStore keeps sets in memory (no storage, tests).
 type MemoryStateStore struct {
 	mu sync.Mutex
 	s  State
 }
 
-// Get implements StateStore.
 func (m *MemoryStateStore) Get(context.Context) (*State, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return cloneState(&m.s)
 }
 
-// Update implements StateStore.
 func (m *MemoryStateStore) Update(_ context.Context, mutate func(*State) error) (*State, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -70,14 +67,12 @@ func (m *MemoryStateStore) Update(_ context.Context, mutate func(*State) error) 
 	return cloneState(&m.s)
 }
 
-// FileStateStore keeps sets as JSON in a file (local mode, next to the
-// descriptions). A missing file is an empty state.
+// FileStateStore is used in local mode. A missing file is an empty state.
 type FileStateStore struct {
 	Path string
 	mu   sync.Mutex
 }
 
-// Get implements StateStore.
 func (f *FileStateStore) Get(context.Context) (*State, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -99,7 +94,6 @@ func (f *FileStateStore) read() (*State, error) {
 	return cloneState(&s)
 }
 
-// Update implements StateStore. The file is replaced atomically.
 func (f *FileStateStore) Update(_ context.Context, mutate func(*State) error) (*State, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -134,23 +128,19 @@ func (f *FileStateStore) Update(_ context.Context, mutate func(*State) error) (*
 	return cloneState(s)
 }
 
-// StateConfigMapKey is the data key holding the JSON state.
 const StateConfigMapKey = "stacks.json"
 
-// DefaultConfigMapName is the ConfigMap holding the sets in Kamerton's namespace.
 const DefaultConfigMapName = "kamerton-stacks"
 
-// ConfigMapStateStore keeps sets as JSON in a ConfigMap in Kamerton's
-// namespace: shared by replicas, survives restarts, watched by the
-// controller (a change re-reconciles the systems), nothing secret.
+// ConfigMapStateStore is shared by replicas and watched by the controller.
+// Nothing in it is secret.
 type ConfigMapStateStore struct {
-	// Client should be uncached.
+	// Client should be uncached, so a retry after a conflict reads the latest version.
 	Client    client.Client
 	Namespace string
 	Name      string
 }
 
-// Get implements StateStore.
 func (c *ConfigMapStateStore) Get(ctx context.Context) (*State, error) {
 	s, _, err := c.read(ctx)
 	return s, err
@@ -176,7 +166,6 @@ func (c *ConfigMapStateStore) read(ctx context.Context) (*State, *corev1.ConfigM
 	return out, &cm, err
 }
 
-// Update implements StateStore.
 func (c *ConfigMapStateStore) Update(ctx context.Context, mutate func(*State) error) (*State, error) {
 	var result *State
 	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {

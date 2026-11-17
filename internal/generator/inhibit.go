@@ -11,31 +11,12 @@ import (
 	"github.com/kamerton-labs/kamerton/internal/triage"
 )
 
-// inhibitRules groups notifications by cause (spec.notifications.groupByCause,
-// on by default): while a service has a symptom alert (rules.SymptomAlerts:
-// errors, latency, requests stopped), the symptom alerts of the services that
-// call it directly are muted. A muted alert still counts as a source in
-// Alertmanager, so a chain frontend -> checkout -> payment collapses to the
-// alert of payment. Resource, queue, SLO and custom alerts are neither muted
-// nor muting.
-//
-// How the rules match:
-//
-//   - Every matcher names kamerton_managed and kamerton_system: inhibit rules
-//     of an AlertmanagerConfig apply to all alerts of the Alertmanager, and
-//     must not touch alerts of other systems.
-//   - Source and target name different services (a service never depends on
-//     itself, and links inside a dependency cycle are dropped, see
-//     triage.MutingEdges), so no alert can inhibit itself and two services in
-//     a cycle cannot mute each other.
-//   - Severity: a critical source mutes callers of any severity, a warning
-//     source mutes only warnings. A warning that may go nowhere (routing
-//     sends only critical alerts) must not hide a critical alert.
-//   - The Prometheus Operator adds a namespace="<namespace>" matcher to both
-//     sides unless alertmanagerConfigMatcherStrategy is None. Span-metric
-//     alerts carry no namespace label, so with that strategy neither these
-//     rules nor the routes of the same AlertmanagerConfig match; the bundled
-//     chart sets None for this reason.
+// inhibitRules mutes the symptom alerts of a service's direct callers while it has one.
+// A muted alert still counts as a source, so a chain collapses to the alert of its root.
+// Matchers name kamerton_managed and kamerton_system because inhibit rules apply to every
+// alert of the Alertmanager. A warning mutes only warnings, since a warning may be routed
+// nowhere. Span-metric alerts have no namespace label, so the chart sets
+// alertmanagerConfigMatcherStrategy to None.
 func (g *gen) inhibitRules() []any {
 	if !g.spec.Notifications.GroupsByCause() {
 		return nil

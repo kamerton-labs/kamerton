@@ -1,11 +1,9 @@
 // Copyright 2026 The Kamerton Authors
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// Rules of a system in plain words. The rule library (internal/rules) turns
-// policies of the description into alerting rules; this module mirrors how
-// the generator merges defaults, service and operation policies
-// (internal/generator) so the UI can show and edit each rule as a card.
-// The built-in values below must match internal/generator/generator.go.
+// Rules of a system as editable cards. Merging of defaults, service and
+// operation policies mirrors internal/generator; the built-in values below
+// must match internal/generator/generator.go.
 
 import { getLang, t as tr, tl, tn, type Lang } from '@/i18n'
 import { clone, type CustomRule, type Description, type ErrorRatePolicy, type LatencyPolicy, type Service, type Severity, type TrafficDropPolicy } from './types'
@@ -26,16 +24,16 @@ export const BUILTIN = {
   trafficMinRPS: 0.02,
   trafficFor: '2m',
   latencyFactor: 5,
-  /** Fixed parts of the library (internal/rules/normal.go). */
+  /** Fixed in the library: internal/rules/normal.go. */
   latencyAboveNormalMinMs: 100,
   cpuAboveNormalMinCores: 0.5,
   memoryLimitShare: 0.95,
   cpuLimitShare: 0.9,
   cpuFactor: 3,
-  /** Own pending periods of these rules; a shorter latency "for" wins (internal/generator). */
+  /** Own pending periods; a shorter latency "for" wins (internal/generator). */
   opLatencyFor: '30s',
   aboveNormalFor: '1m',
-  /** "Nobody reads the queue" (internal/rules/normal.go): no members for 1m, or the offset stands still for 3m; own pending period 1m. */
+  /** Queue stopped (internal/rules/normal.go): no members for 1m or offset still for 3m. */
   queueStoppedFor: '1m',
   queueNoMembers: '1m',
   queueStalled: '3m',
@@ -127,19 +125,17 @@ const thresholdBase: Record<RuleKind, Omit<ThresholdSpec, 'unit' | 'label'> | nu
   custom: null,
 }
 
-/** Unit of a rule's threshold in a language (the interface's, or the notification's for message previews). */
+/** Unit of a threshold in a language: the interface's, or the notification's in previews. */
 export const thresholdUnit = (kind: RuleKind, lang: Lang = getLang()): string => (thresholdBase[kind] ? tl(lang, `rule.unit.${kind as ThresholdKind}` as const) : '')
 
 type ThresholdKind = Exclude<RuleKind, 'oomKilled' | 'queueStopped' | 'custom'>
 
-/** Threshold input of a rule kind (null: the rule has no threshold), with unit and label in the interface language. */
+/** Threshold input of a rule kind, or null when the rule has no threshold. */
 export function thresholdSpec(kind: RuleKind): ThresholdSpec | null {
   const b = thresholdBase[kind]
   if (!b) return null
   return { ...b, unit: thresholdUnit(kind), label: tr(`rule.threshold.${kind as ThresholdKind}` as const) }
 }
-
-// ---- Formatting ----
 
 type DurUnit = 'ms' | 's' | 'm' | 'h' | 'd' | 'w' | 'y'
 
@@ -175,8 +171,6 @@ export function formatMiB(mib: number): string {
 }
 
 const cores = (n: number) => tr(n === 1 ? 'rule.cores.one' : 'rule.cores.other', { n: trim(n) })
-
-// ---- Merging (mirrors internal/generator) ----
 
 const isOn = (...flags: (boolean | undefined)[]) => flags.reduce<boolean>((acc, f) => (f === undefined ? acc : f), true)
 
@@ -220,8 +214,6 @@ function during(forD: string): string {
   const f = formatDuration(forD)
   return f === tr('dur.immediately') || !f ? '' : tr('rule.during', { d: f })
 }
-
-// ---- Derivation ----
 
 /** All rules of a system, in the order of services. */
 export function deriveRules(desc: Description): RuleItem[] {
@@ -610,7 +602,6 @@ export function customSentence(cr: CustomRule): string {
   return `${cr.title}${f}`
 }
 
-/** Kinds that can still be added to a service. */
 export function addableKinds(desc: Description, service: string): RuleKind[] {
   const s = desc.spec.services.find((x) => x.name === service)
   if (!s) return []
@@ -627,8 +618,6 @@ export function addableKinds(desc: Description, service: string): RuleKind[] {
   out.push('custom')
   return out
 }
-
-// ---- Editing ----
 
 export interface RulePatch {
   enabled?: boolean
@@ -658,7 +647,6 @@ function applySeverity<T extends { severity?: Severity }>(layer: T, sev: Severit
   else layer.severity = sev
 }
 
-/** Applies a change to one rule and returns the new description. */
 export function setRule(desc: Description, id: string, patch: RulePatch): Description {
   const next = clone(desc)
   const [service, kind, ...rest] = id.split('/')
@@ -837,7 +825,6 @@ export interface NewRule {
   custom?: CustomRule
 }
 
-/** Adds a rule to a service and returns the new description. */
 export function addRule(desc: Description, service: string, r: NewRule): Description {
   let next = clone(desc)
   const s = next.spec.services.find((x) => x.name === service)
@@ -960,8 +947,6 @@ export function nextCustomName(s: Service): string {
   const taken = new Set((s.customRules ?? []).map((c) => c.name))
   for (let i = 1; ; i++) if (!taken.has(`rule-${i}`)) return `rule-${i}`
 }
-
-// ---- Live state ----
 
 export type RuleState = 'ok' | 'pending' | 'warning' | 'firing' | 'unknown'
 

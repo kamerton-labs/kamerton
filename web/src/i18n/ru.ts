@@ -8,7 +8,6 @@
 import type { Messages } from './en'
 
 export const ru: Messages = {
-  // ---- format ----
   'time.justNow': 'только что',
   'time.minutesAgo': { one: '{n} минуту назад', few: '{n} минуты назад', many: '{n} минут назад' },
   'time.hoursAgo': { one: '{n} час назад', few: '{n} часа назад', many: '{n} часов назад' },
@@ -22,14 +21,12 @@ export const ru: Messages = {
   'system.state.invalid': 'ошибка в описании',
   'system.state.unknown': 'нет данных об оповещениях',
 
-  // ---- auth ----
   'login.error.wrong': 'Неверный логин или пароль',
   'login.error.tooMany': 'Слишком много попыток, подождите {s} с',
   'login.error.noCore': 'Ядро Kamerton недоступно',
   'login.error.failed': 'Не удалось войти',
   'login.error.failedWith': 'Не удалось войти: {reason}',
 
-  // ---- stacks-lib ----
   'stacks.role.prometheus': 'хранит метрики и проверяет правила',
   'stacks.role.alertmanager': 'отправляет оповещения',
   'stacks.role.grafana': 'графики',
@@ -56,7 +53,6 @@ export const ru: Messages = {
   'stacks.draft.name': 'Программы {ns}',
   'stacks.draft.note': 'Заполнено само: {notes}.',
 
-  // ---- model-small ----
   'service.type.http': 'HTTP-сервис',
   'service.type.grpc': 'gRPC-сервис',
   'service.type.queue': 'Очередь',
@@ -71,7 +67,6 @@ export const ru: Messages = {
   'yaml.error.dependsOn': 'Сервис {name}: dependsOn должен быть списком имён сервисов',
   'tz.withSummer': '{std}, летом {dst}',
 
-  // ---- routing ----
   'count.services': { one: '{n} сервис', few: '{n} сервиса', many: '{n} сервисов' },
   'routing.chip.nothing': 'Ничего не отправляется',
   'routing.chip.critical': 'Критичные',
@@ -93,7 +88,6 @@ export const ru: Messages = {
   'routing.scope.one': 'по сервису {name}',
   'routing.scope.many': { one: 'по {n} сервису', few: 'по {n} сервисам', many: 'по {n} сервисам' },
 
-  // ---- rules-lib ----
   'rule.kind.errors': 'Ошибки',
   'rule.kind.errorsPerOp': 'Ошибки в каждой операции',
   'rule.kind.opErrors': 'Ошибки одной операции',
@@ -208,7 +202,6 @@ export const ru: Messages = {
   'rule.state.firing': 'сработало',
   'rule.state.unknown': 'нет данных',
 
-  // ---- message-lib ----
   'message.ph.value': 'текущее значение',
   'message.ph.threshold': 'порог',
   'message.ph.service': 'сервис',
@@ -244,7 +237,6 @@ export const ru: Messages = {
   'msg.word.threshold': 'порог',
   'msg.word.since': 'с',
 
-  // ---- schema ----
   'schema.type.string': 'строка',
   'schema.type.integer': 'целое число',
   'schema.type.number': 'число',
@@ -252,7 +244,6 @@ export const ru: Messages = {
   'schema.type.array': 'список',
   'schema.type.object': 'раздел',
 
-  // ---- shell ----
   'nav.systems': 'Системы',
   'nav.alerts': 'Оповещения',
   'nav.channels': 'Каналы',
@@ -265,7 +256,6 @@ export const ru: Messages = {
   'shell.version': 'версия {v}',
   'shell.coreDown': 'ядро недоступно',
 
-  // ---- pages-simple ----
   'common.home': 'На главную',
   'word.services': { one: 'сервис', few: 'сервиса', many: 'сервисов' },
   'word.rules': { one: 'правило', few: 'правила', many: 'правил' },
@@ -291,7 +281,6 @@ export const ru: Messages = {
   'channels.title': 'Каналы уведомлений',
   'channels.description': 'Куда Kamerton может присылать оповещения. Каналы общие для всех систем; что именно отправлять, выбирается в каждой системе.',
 
-  // ---- login ----
   'login.required': 'Введите логин и пароль',
   'login.title': 'Вход',
   'login.description': 'Введите логин и пароль, заданные администратором Kamerton.',
@@ -300,7 +289,6 @@ export const ru: Messages = {
   'login.busy': 'Вход…',
   'login.submit': 'Войти',
 
-  // ---- alerts ----
   'alerts.title': 'Оповещения',
   'alerts.description': 'Что сработало сейчас во всех системах',
   'alerts.filtered': 'Только: {what}',
@@ -319,7 +307,6 @@ export const ru: Messages = {
   'alerts.emptyFilteredHint': 'Скорее всего, проблема уже ушла.',
   'alerts.emptyHint': 'Когда правило сработает, оповещение появится здесь.',
 
-  // ---- status ----
   'status.mode.cluster': 'в кластере Kubernetes',
   'status.mode.file': 'в локальных файлах',
   'status.mode.none': 'нигде (только просмотр)',
@@ -344,7 +331,6 @@ export const ru: Messages = {
   'status.authOn': 'включён',
   'status.authOff': 'нет - открывайте Kamerton только через port-forward или прокси с аутентификацией',
 
-  // ---- system ----
   'common.more': 'Ещё',
   'system.view.schema': 'Схема',
   'system.view.rules': 'Правила',
@@ -381,7 +367,6 @@ export const ru: Messages = {
   'system.unreadable': 'Описание не читается',
   'system.unreadableHint': 'Откройте режим YAML и исправьте ошибку - после этого появится схема.',
 
-  // ---- runbook ----
   'runbook.unavailable': 'Инструкция недоступна',
   'runbook.unavailableHint': 'Возможно, сервис «{service}» убрали из системы.',
   'runbook.title': 'Что делать: {name}',
@@ -421,7 +406,6 @@ export const ru: Messages = {
   'runbook.adviceAlert.queueStopped': 'Группа потребителей перестала читать топик: в ней нет участников (поды потребителя упали, перезапускаются или вышли из группы), или сообщения ждут, а смещение группы не двигается (потребитель завис или раз за разом падает на одном сообщении).\nПроверьте поды и логи потребителя, затем саму группу: kafka-consumer-groups --describe --group <группа>.\nСообщения копятся, даже если отставание ещё меньше порога правила «Очередь не разбирается»: при малой нагрузке оно растёт медленно.',
   'runbook.adviceAlert.latencyAboveNormal': 'Ответы во много раз медленнее обычного (за прошлый час), даже если порог времени ответа ещё не достигнут.\nПроверьте зависимости сервиса (кэш, база, внешние API): так выглядит, например, отказавший кэш.\nПосмотрите медленные трассы за время оповещения.',
 
-  // ---- common ----
   'unit.sec': 'сек',
   'unit.min': 'мин',
   'unit.hour': 'ч',
@@ -438,7 +422,6 @@ export const ru: Messages = {
   'yaml.syntax': 'Ошибка YAML: {message}',
   'yaml.intro': 'Описание системы целиком. Подсказки - по мере ввода или по Ctrl+Пробел, пояснение - при наведении на поле; ошибки отмечены на полях. Положение сервисов на схеме хранится в metadata.annotations и на работу правил не влияет.',
 
-  // ---- create ----
   'create.nameFormat': 'Латиница в нижнем регистре, цифры и дефис, например shop',
   'create.nameTaken': 'Система с таким именем уже есть',
   'create.title': 'Новая система',
@@ -459,7 +442,6 @@ export const ru: Messages = {
   'create.notWritable': 'Kamerton запущен без хранилища описаний.',
   'create.submit': 'Создать',
 
-  // ---- orient ----
   'orient.stack': 'Prometheus и Alertmanager',
   'orient.checking': 'Проверяю…',
   'orient.stackOk': 'Работают: правила проверяются, оповещения отправляются',
@@ -485,7 +467,6 @@ export const ru: Messages = {
   'orient.title': 'С чего начать',
   'orient.collapse': 'Свернуть',
 
-  // ---- nodes ----
   'canvas.typeShort.http': 'HTTP',
   'canvas.typeShort.grpc': 'gRPC',
   'canvas.typeShort.queue': 'Очередь',
@@ -501,7 +482,6 @@ export const ru: Messages = {
   'node.handle': 'Протяните к сервису, от которого этот зависит',
   'node.deleteEdge': 'Удалить связь',
 
-  // ---- palette ----
   'palette.addService': 'Добавить сервис',
   'palette.found': 'Найдены в телеметрии',
   'palette.promDown': 'Prometheus недоступен, найденные сервисы показать нельзя.',
@@ -510,7 +490,6 @@ export const ru: Messages = {
   'palette.noRequests': 'нет запросов',
   'palette.inSystems': 'уже в {list}',
 
-  // ---- canvas ----
   'canvas.panel': 'Оповещения и сервисы',
   'canvas.hidePanel': 'Скрыть панель',
   'canvas.showPanel': 'Показать панель',
@@ -519,7 +498,6 @@ export const ru: Messages = {
   'canvas.emptyHint': 'Добавьте сервисы слева и соедините их: линия от сервиса к тому, кого он вызывает.',
   'canvas.addTitle': 'Добавить на схему',
 
-  // ---- service ----
   'common.close': 'Закрыть',
   'common.add': 'Добавить',
   'service.nameTaken': 'Такой сервис уже есть',
@@ -554,7 +532,6 @@ export const ru: Messages = {
   'service.remove.confirm': 'Убрать',
   'service.remove': 'Убрать сервис из системы',
 
-  // ---- dest ----
   'common.done': 'Готово',
   'common.nothingFound': 'Ничего не найдено.',
   'count.addresses': { one: '{n} адрес', few: '{n} адреса', many: '{n} адресов' },
@@ -595,7 +572,6 @@ export const ru: Messages = {
   'dest.addInChannels': 'Добавить чат или адрес - в разделе «Каналы»',
   'dest.connectInChannels': 'Подключить Telegram или почту - в разделе «Каналы»',
 
-  // ---- notify-small ----
   'chat.type.private': 'Личный чат',
   'chat.type.group': 'Группа',
   'chat.type.supergroup': 'Супергруппа',
@@ -620,7 +596,6 @@ export const ru: Messages = {
   'notice.links.offTitle': 'Ссылки в уведомлениях отключены',
   'notice.links.offText': 'Не задан внешний адрес Kamerton, поэтому сообщения приходят без ссылок (внутренние адреса кластера с телефона не открываются). Задайте значение {value} в Helm (например, {example} при работе через port-forward) или флаг {flag}.',
 
-  // ---- parts ----
   'parts.hidePassword': 'Скрыть пароль',
   'parts.showPassword': 'Показать пароль',
   'parts.whereStored': 'Где хранится {what}',
@@ -630,7 +605,6 @@ export const ru: Messages = {
   'parts.testSent': 'Тестовое сообщение отправлено',
   'parts.testFailed': 'Не отправлено: {error}',
 
-  // ---- telegram ----
   'common.test': 'Тест',
   'common.deleteFailed': 'Не удалось удалить',
   'channel.unavailable': 'недоступно',
@@ -684,7 +658,6 @@ export const ru: Messages = {
   'tg.loadError': 'Не удалось получить состояние Telegram',
   'tg.unavailable': 'Настройка Telegram недоступна',
 
-  // ---- email ----
   'common.edit': 'Изменить',
   'count.recipients': { one: '{n} получатель', few: '{n} получателя', many: '{n} получателей' },
   'email.smarthostFormat': 'Укажите сервер и порт через двоеточие, например smtp.yandex.ru:465',
@@ -737,7 +710,6 @@ export const ru: Messages = {
   'email.unavailable': 'Настройка почты недоступна',
   'email.unavailableHint': 'Получателя можно описать вручную в режиме YAML системы (notifications.receivers).',
 
-  // ---- rules-view ----
   'rules.enabledOf': { one: '{n} правило включено из {total}', few: '{n} правила включено из {total}', many: '{n} правил включено из {total}' },
   'rules.firing': 'сработало: {n}',
   'rules.nothingFiring': 'сейчас ничего не сработало',
@@ -775,7 +747,6 @@ export const ru: Messages = {
   'backtest.times': { one: '{n} раз', few: '{n} раза', many: '{n} раз' },
   'backtest.ongoing': ', и сейчас условие выполняется',
 
-  // ---- rulecard ----
   'ruleCard.perMinute.one': '{n} запроса в минуту',
   'ruleCard.perMinute.other': '{n} запросов в минуту',
   'ruleCard.threshold': 'Порог',
@@ -787,7 +758,6 @@ export const ru: Messages = {
   'ruleCard.editCondition': 'Изменить условие',
   'ruleCard.delete': 'Удалить правило',
 
-  // ---- addrule ----
   'addRule.title': 'Новое правило',
   'addRule.description': 'Правило появится на схеме и в списке сразу, а начнёт работать после сохранения системы.',
   'addRule.services': 'Сервисы',
@@ -802,7 +772,6 @@ export const ru: Messages = {
   'addRule.previewFor': 'Будет так (на примере {service}):',
   'addRule.addFor': { one: 'Добавить для {n} сервисов', few: 'Добавить для {n} сервисов', many: 'Добавить для {n} сервисов' },
 
-  // ---- custom ----
   'custom.fn.none': 'Значение как есть',
   'custom.fn.rate': 'Скорость роста в секунду (для счётчиков)',
   'custom.fn.increase': 'Прирост за окно (для счётчиков)',
@@ -844,7 +813,6 @@ export const ru: Messages = {
   'custom.apply': 'Применить',
   'custom.add': 'Добавить правило',
 
-  // ---- message ----
   'message.heading': 'Текст оповещения',
   'message.own': 'свой',
   'message.default': 'по умолчанию',
@@ -862,7 +830,6 @@ export const ru: Messages = {
   'message.previewTitle': 'Так придёт в Telegram и на почту',
   'message.previewHint': '«…» - значение в момент срабатывания. Если в одном сообщении несколько оповещений, для каждого показываются только заголовок и значение.',
 
-  // ---- stacks ----
   'stackBlock.noAddress': 'адрес не задан',
   'stackBlock.atInstall': 'При установке: {url}',
   'stackBlock.notSet': 'не задан',
@@ -887,7 +854,6 @@ export const ru: Messages = {
   'stackPicker.row': 'Набор программ:',
   'stackPicker.missing': '«{name}» не найден, используется основной',
 
-  // ---- stackform ----
   'stackForm.newTitle': 'Новый набор программ',
   'stackForm.editDescription': 'Название видно в списке систем и в их настройках. Адреса программ меняются на карточках набора.',
   'stackForm.newDescription': 'Например, Prometheus и Alertmanager одной команды. Систему переключают на набор в её настройках; пустой адрес - программа не подключена.',
@@ -898,7 +864,6 @@ export const ru: Messages = {
   'stackForm.ruleLabels': 'Метки правил (PrometheusRule)',
   'stackForm.routeLabels': 'Метки маршрутов (AlertmanagerConfig)',
 
-  // ---- address ----
   'common.failed': 'Не получилось: {error}',
   'address.latency': 'ответ за {ms} мс',
   'address.title': '{program} - набор «{set}»',
@@ -909,7 +874,6 @@ export const ru: Messages = {
   'address.checkError': 'Не удалось проверить: {error}',
   'address.resetBuiltin': 'Вернуть адрес установки',
 
-  // ---- discover ----
   'discover.select': 'Отметить {service} в {ns}',
   'discover.namespace': 'пространство имён {ns}',
   'discover.inSet': 'уже в наборе «{name}»',

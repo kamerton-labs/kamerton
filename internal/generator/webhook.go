@@ -7,30 +7,20 @@ import (
 	"github.com/kamerton-labs/kamerton/api/v1alpha1"
 )
 
-// webhookReceiver is the receiver that notifies Kamerton about firing and
-// resolved groups, so it can follow up with evidence. The base notification
-// still goes from Alertmanager straight to Telegram and email.
+// webhookReceiver only triggers follow-ups; the notification goes straight from Alertmanager.
 const webhookReceiver = "kamerton-webhook"
 
-// WebhookOptions wire the follow-up webhook into generated Alertmanager
-// routing.
 type WebhookOptions struct {
 	// URL of Kamerton's webhook endpoint as Alertmanager reaches it, for
 	// example http://kamerton.kamerton.svc:8080/api/v1/hooks/alertmanager.
-	URL string
-	// Secret holds the bearer token Alertmanager sends. It lives in
-	// Namespace, Kamerton's namespace.
+	URL    string
 	Secret v1alpha1.SecretKeyRef
-	// Namespace is Kamerton's namespace. An AlertmanagerConfig can reference
-	// Secrets only in its own namespace, and the Prometheus Operator drops a
-	// whole AlertmanagerConfig whose Secret it cannot read, so the webhook is
-	// added only to descriptions in this namespace (empty: any).
+	// Namespace is Kamerton's namespace (empty: any). The webhook is added only to
+	// descriptions in it: an AlertmanagerConfig can reference Secrets only in its own
+	// namespace, and the operator drops one whose Secret it cannot read.
 	Namespace string
 }
 
-// webhookReceiver returns the webhook receiver of the description, or nil
-// when the webhook is not wired (no options, follow-up turned off, or the
-// description lives outside Kamerton's namespace).
 func (g *gen) webhookReceiver() map[string]any {
 	w := g.opts.Webhook
 	if w == nil || w.URL == "" || w.Secret.Name == "" || !g.spec.Notifications.SendsEvidence() {

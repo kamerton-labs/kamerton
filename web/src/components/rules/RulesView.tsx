@@ -1,10 +1,6 @@
 // Copyright 2026 The Kamerton Authors
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// Every rule of the system in one list: service, what it checks, severity,
-// state, where its alerts go, on/off. A row opens the same editor as the
-// service panel of the canvas.
-
 import { Fragment, useMemo, useState } from 'react'
 import { ChevronDown, Plus } from 'lucide-react'
 import { cn } from 'cn'
@@ -29,8 +25,7 @@ export default function RulesView() {
   const [open, setOpen] = useState<string | null>(null)
   const [creating, setCreating] = useState(false)
   const { t, tn, lang } = useT()
-  // Sentences are built in the interface language, so they follow a switch.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- sentences use the interface language, so recompute on a switch
   const all = useMemo(() => deriveRules(desc), [desc, lang])
   const kinds = useMemo(() => [...new Set(all.map((r) => r.kind))], [all])
   const rows = all.filter((r) => {

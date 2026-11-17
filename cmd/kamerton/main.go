@@ -1,14 +1,7 @@
 // Copyright 2026 The Kamerton Authors
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// Command kamerton is the Kamerton core: an HTTP server with the embedded UI
-// and API, an optional Kubernetes controller, and a few CLI helpers.
-//
-//	kamerton [serve] [flags]          run the server (and the controller with --enable-controller)
-//	kamerton validate -f FILE         validate a description
-//	kamerton generate -f FILE [-o DIR] print or write generated rules, dashboards, runbooks
-//	kamerton schema                   print the JSON Schema of the description
-//	kamerton version
+// Command kamerton is the Kamerton core: the HTTP server with UI and API, the controller and CLI helpers.
 package main
 
 import (
@@ -111,13 +104,11 @@ func serve(args []string) error {
 		return err
 	}
 	if cfg.RunbookBaseURL != "" {
-		// The external URL goes into links of rules and notifications.
 		if problem := description.CheckLinkURL(cfg.RunbookBaseURL); problem != "" {
 			return fmt.Errorf("--external-url: %s", problem)
 		}
 	}
 	if cfg.GrafanaExternalURL != "" {
-		// The Grafana address goes into links of follow-up messages.
 		if problem := description.CheckLinkURL(cfg.GrafanaExternalURL); problem != "" {
 			return fmt.Errorf("--grafana-external-url: %s", problem)
 		}
@@ -290,7 +281,6 @@ func serve(args []string) error {
 	return g.Wait()
 }
 
-// stackFlags are the install-time addresses: the built-in set of programs.
 func stackFlags(cfg config.Config) stack.Flags {
 	return stack.Flags{
 		URLs: map[string]string{
@@ -305,7 +295,6 @@ func stackFlags(cfg config.Config) stack.Flags {
 	}
 }
 
-// kamertonNamespace is --namespace, else the service account namespace.
 func kamertonNamespace(cfg config.Config) string {
 	if cfg.Namespace != "" {
 		return cfg.Namespace
@@ -318,16 +307,8 @@ func kamertonNamespace(cfg config.Config) string {
 	return "default"
 }
 
-// newManager builds the controller manager and an uncached client. The
-// uncached client is used for the API (descriptions) and for the one Secret
-// and ConfigMap of the Telegram setup: a cached client would start
-// cluster-wide informers for Secrets, which RBAC deliberately does not allow.
-// setupWebhook prepares follow-up messages in cluster mode: it makes sure the
-// webhook token Secret exists (creating it with a random token) and returns
-// the generator options of the webhook and the token store. It returns nil
-// and the reason when the webhook is turned off or the Secret cannot be
-// prepared; generated routing then has no webhook, so Alertmanager never
-// calls an endpoint that would reject it.
+// setupWebhook ensures the webhook token Secret exists. On failure it returns nil
+// and the reason, so generated routing has no webhook Alertmanager would call in vain.
 func setupWebhook(cfg config.Config, log *slog.Logger, c client.Client, ns string) (*generator.WebhookOptions, *telegram.SecretTokenStore, string) {
 	if cfg.AlertmanagerWebhookURL == "" {
 		return nil, nil, "Follow-up messages are turned off in this installation (Helm: incidents.followUp.enabled=false, flag --alertmanager-webhook-url is empty)."
@@ -357,6 +338,8 @@ func setupWebhook(cfg config.Config, log *slog.Logger, c client.Client, ns strin
 	}, store, ""
 }
 
+// newManager also returns an uncached client: a cached one would start
+// cluster-wide Secret informers, which RBAC deliberately does not allow.
 func newManager(cfg config.Config, log *slog.Logger, sets *stack.Sets, ns string) (ctrl.Manager, client.Client, *controller.SystemDescriptionReconciler, error) {
 	ctrl.SetLogger(logr.FromSlogHandler(log.Handler()))
 	scheme := runtime.NewScheme()

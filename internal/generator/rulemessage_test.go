@@ -105,8 +105,6 @@ func TestMessagesInRuleAnnotations(t *testing.T) {
 	if _, ok := byKey[rules.AlertLatency+"/"][AnnotationMessageTitle]; ok {
 		t.Error("latency has no message and must keep the default text")
 	}
-	// The rule file with these annotations passes Prometheus' own checks
-	// (Generate validates it; repeat explicitly for clarity).
 	if err := rules.Validate(b.RulesYAML); err != nil {
 		t.Fatal(err)
 	}

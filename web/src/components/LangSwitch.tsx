@@ -30,7 +30,6 @@ function Flag({ lang }: { lang: Lang }) {
   )
 }
 
-/** The interface language, remembered in this browser. */
 export default function LangSwitch() {
   const { t, lang } = useT()
   return (

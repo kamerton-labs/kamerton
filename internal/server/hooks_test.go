@@ -141,7 +141,6 @@ func TestAlertmanagerHookAuth(t *testing.T) {
 			t.Errorf("%s: %d %s", name, resp.StatusCode, body)
 		}
 	}
-	// The right token: no session cookie and no X-Requested-With needed.
 	resp, body := call(t, "POST", url, hookBody, withHeader("Authorization", "Bearer s3cret-token"))
 	if resp.StatusCode != http.StatusOK || !strings.Contains(body, `"ok":true`) {
 		t.Fatalf("authorized call: %d %s", resp.StatusCode, body)
@@ -150,7 +149,6 @@ func TestAlertmanagerHookAuth(t *testing.T) {
 	if len(tg.sent) != 1 || !strings.Contains(tg.sent[0], "Also affected: api.") {
 		t.Errorf("follow-up = %v", tg.sent)
 	}
-	// Everything else under /api still needs the session and the header.
 	if resp, _ := call(t, "POST", srv.URL+"/api/v1/systems", "x", withHeader("Authorization", "Bearer s3cret-token")); resp.StatusCode != http.StatusForbidden {
 		t.Errorf("the webhook token opens other endpoints: %d", resp.StatusCode)
 	}

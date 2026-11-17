@@ -1,8 +1,7 @@
 // Copyright 2026 The Kamerton Authors
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// Package discovery finds services that already send telemetry, so the UI can
-// propose them for the description.
+// Package discovery finds services that already send telemetry so the UI can propose them.
 package discovery
 
 import (
@@ -19,10 +18,8 @@ import (
 	"github.com/kamerton-labs/kamerton/internal/rules"
 )
 
-// ErrNotConfigured means no Prometheus is configured, so nothing can be discovered.
 var ErrNotConfigured = errors.New("discovery: Prometheus is not configured")
 
-// Service is one discovered service.
 type Service struct {
 	// Name is the value of the service label in span metrics.
 	Name string `json:"name"`
@@ -30,11 +27,9 @@ type Service struct {
 	RequestsPerSecond float64 `json:"requestsPerSecond"`
 	// ErrorRatio is the current share of failed calls (0..1).
 	ErrorRatio float64 `json:"errorRatio"`
-	// Described is true when the service is already in the description.
-	Described bool `json:"described"`
+	Described  bool    `json:"described"`
 }
 
-// Discoverer reads service names from span metrics in Prometheus.
 type Discoverer struct {
 	Prom      prometheus.Querier // nil means not configured
 	Telemetry description.ResolvedTelemetry
@@ -42,11 +37,7 @@ type Discoverer struct {
 	Now       func() time.Time
 }
 
-// Discover lists services that emitted spans during the window, marking the
-// ones whose names are in described.
-//
-// TODO: infer dependencies from service graph metrics
-// (traces_service_graph_request_total{client,server}) to pre-fill dependsOn.
+// TODO: infer dependsOn from service graph metrics.
 func (d *Discoverer) Discover(ctx context.Context, described map[string]bool) ([]Service, error) {
 	if d.Prom == nil {
 		return nil, ErrNotConfigured

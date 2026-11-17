@@ -89,7 +89,6 @@ func TestStacksAPI(t *testing.T) {
 		t.Errorf("billing now uses team-b: %s", body)
 	}
 
-	// Change and reset an address of the built-in set.
 	if code, body := do(t, "PUT", api+"/main/programs/grafana", `{"url":"http://grafana.monitoring:3000"}`); code != 200 || !strings.Contains(body, `"overridden":true`) || !strings.Contains(body, `"origin":"own"`) {
 		t.Errorf("override: %d %s", code, body)
 	}
@@ -106,7 +105,6 @@ func TestStacksAPI(t *testing.T) {
 		t.Errorf("unknown set: %d", code)
 	}
 
-	// A used set and the built-in set cannot be deleted.
 	if code, body := do(t, "DELETE", api+"/team-b", ""); code != 409 || !strings.Contains(body, `"in_use"`) || !strings.Contains(body, "billing") {
 		t.Errorf("delete used: %d %s", code, body)
 	}
@@ -114,7 +112,6 @@ func TestStacksAPI(t *testing.T) {
 		t.Errorf("delete built-in: %d %s", code, body)
 	}
 
-	// Systems show their set; an unknown set is a warning, not an error.
 	_, body = get(t, srv.URL+"/api/v1/systems")
 	if !strings.Contains(body, `"stack":"team-b","stackName":"Команда Б (prod)"`) || !strings.Contains(body, `"stacks":2`) {
 		t.Errorf("systems: %s", body)
@@ -131,7 +128,6 @@ func TestStacksAPI(t *testing.T) {
 	if !strings.Contains(body, `"unknown":"nope"`) || !strings.Contains(body, `"id":"main"`) {
 		t.Errorf("system with unknown set: %s", body)
 	}
-	// Free the set and delete it.
 	if code, _ := do(t, "PUT", srv.URL+"/api/v1/systems/billing", strings.Replace(shopYAML, "name: shop", "name: billing", 1)); code != 200 {
 		t.Fatal("save billing")
 	}
@@ -139,7 +135,6 @@ func TestStacksAPI(t *testing.T) {
 		t.Errorf("delete: %d %s", code, body)
 	}
 
-	// Discovery is not available in file mode, with the reason.
 	if _, body := get(t, api+"/discover"); !strings.Contains(body, `"available":false`) || !strings.Contains(body, "только в кластере") {
 		t.Errorf("discover: %s", body)
 	}
@@ -173,7 +168,6 @@ func TestStackCheckEndpoint(t *testing.T) {
 	}
 }
 
-// recorder notes which client (by address) was asked.
 type recorder struct {
 	mu    sync.Mutex
 	asked []string
@@ -230,8 +224,6 @@ func alert(fp, system string) alertmanager.Alert {
 	return alertmanager.Alert{Fingerprint: fp, Labels: map[string]string{"alertname": "KamertonErrorRateHigh", "service": "api", "severity": "critical", "kamerton_system": system, "kamerton_managed": "true"}}
 }
 
-// Every read of Prometheus and Alertmanager for a system goes to the
-// programs of that system's set.
 func TestPerSetClients(t *testing.T) {
 	rec := &recorder{}
 	sets := &stack.Sets{Store: &stack.MemoryStateStore{}, Flags: stack.Flags{URLs: map[string]string{stack.KindPrometheus: "http://prom-main", stack.KindAlertmanager: "http://am-main"}}}
@@ -278,7 +270,6 @@ func TestPerSetClients(t *testing.T) {
 	get(t, sys+"shop/alerts")
 	expect("shop alerts", "am-main")
 
-	// All alerts: every Alertmanager in use, merged without duplicates.
 	_, body = get(t, srv.URL+"/api/v1/alerts")
 	if got := rec.take(); len(got) != 2 {
 		t.Errorf("all alerts must ask both Alertmanagers: %v", got)
@@ -287,7 +278,6 @@ func TestPerSetClients(t *testing.T) {
 		t.Errorf("want 3 distinct alerts (shop, billing, billing-2), got %d: %s", n, body)
 	}
 
-	// The system list counts each system from its own Alertmanager.
 	var list systemList
 	_, body = get(t, srv.URL+"/api/v1/systems")
 	decode(t, body, &list)
@@ -297,7 +287,6 @@ func TestPerSetClients(t *testing.T) {
 			t.Errorf("%s: %s", s.ID, body)
 		}
 	}
-	// The legacy stack endpoint reports a chosen set.
 	if _, body := get(t, srv.URL+"/api/v1/stack?set=team-b"); !strings.Contains(body, `"set":"team-b"`) || !strings.Contains(body, `"url":"http://prom-b"`) {
 		t.Errorf("stack?set=: %s", body)
 	}

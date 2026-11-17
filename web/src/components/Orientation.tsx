@@ -39,7 +39,6 @@ export default function Orientation({ onAddSystem }: { onAddSystem: () => void }
 
   const steps: Step[] = []
 
-  // 1. The stack: Prometheus and Alertmanager of every set in use.
   if (stacks.isLoading) steps.push({ title: t('orient.stack'), state: 'loading', text: t('orient.checking') })
   else {
     const health = coreHealth(stacks.data?.sets)
@@ -51,7 +50,6 @@ export default function Orientation({ onAddSystem }: { onAddSystem: () => void }
     })
   }
 
-  // 2. Services seen in telemetry.
   if (disc.isLoading) steps.push({ title: t('orient.services'), state: 'loading', text: t('orient.searching') })
   else if (!disc.data?.configured || disc.isError) steps.push({ title: t('orient.services'), state: 'todo', text: t('orient.servicesNoProm') })
   else {
@@ -63,7 +61,6 @@ export default function Orientation({ onAddSystem }: { onAddSystem: () => void }
     })
   }
 
-  // 3. Systems with rules.
   const list = systems.data?.systems ?? []
   const rules = list.reduce((n, s) => n + s.rules, 0)
   if (systems.isLoading) steps.push({ title: t('orient.rules'), state: 'loading', text: '…' })
@@ -78,7 +75,6 @@ export default function Orientation({ onAddSystem }: { onAddSystem: () => void }
       onClick: list.length === 0 ? onAddSystem : undefined,
     })
 
-  // 4. Where alerts go.
   const receivers = list.reduce((n, s) => n + s.receivers, 0)
   const tgStatus = tg.data?.available ? tg.data.status : undefined
   const routedChats = tgStatus?.chats.filter((c) => c.usedIn.length > 0).length ?? 0

@@ -36,9 +36,7 @@ describe('rule "nobody reads the queue"', () => {
     })
     expect(r.threshold).toBeNaN()
     expect(r.sentence).toBe('Nobody reads queue orders: no consumers in the group for 1 min or the offset stands still for 3 min with unread messages for 1 min')
-    // Only services with a queue have it.
     expect(deriveRules(d).filter((x) => x.kind === 'queueStopped').map((x) => x.service)).toEqual(['orders'])
-    // The demo: 162 rules in the list.
     expect(deriveRules(d)).toHaveLength(162)
   })
 
@@ -55,7 +53,6 @@ describe('rule "nobody reads the queue"', () => {
     expect(queue(d).consumerStoppedEnabled).toBe(false)
     expect(stopped(d)!.enabled).toBe(false)
     expect(writeDescriptionYaml(exampleText, d)).toContain('consumerStoppedEnabled: false')
-    // The lag rule stays on.
     expect(deriveRules(d).find((r) => r.id === 'orders/queueLag')!.enabled).toBe(true)
     d = setRule(d, 'orders/queueStopped', { enabled: true })
     expect(queue(d)).not.toHaveProperty('consumerStoppedEnabled')

@@ -13,23 +13,13 @@ import (
 	"github.com/prometheus/prometheus/promql/parser"
 )
 
-// Custom rules are written by the user for cases the templates above do not
-// cover. They are generated next to library rules with the same labels,
-// plain-words annotations and runbook link, so notifications and the UI
-// treat them the same way.
-
-// AlertCustomPrefix starts the alert name of a custom rule:
-// KamertonCustom<Name in CamelCase>, one alert name per rule so runbook
-// links and silences can address it.
+// Each custom rule gets its own alert name so runbook links and silences can address it.
 const AlertCustomPrefix = "KamertonCustom"
 
-// SignalCustom marks rules written by the user.
 const SignalCustom Signal = "custom"
 
-// LabelRule carries the name of a custom rule.
 const LabelRule = "kamerton_rule"
 
-// CustomCondition is a threshold condition on one metric.
 type CustomCondition struct {
 	Metric string
 	// Labels are exact-match selectors.
@@ -38,18 +28,16 @@ type CustomCondition struct {
 	Function string
 	// Aggregation: max (default), min, avg, sum or count.
 	Aggregation string
-	// By are the labels kept after aggregation.
-	By []string
+	By          []string
 	// Operator: gt, gte, lt, lte, eq, ne.
 	Operator  string
 	Threshold float64
-	// Window for rate/increase.
+	// Window for rate/increase; 5m when zero.
 	Window time.Duration
 }
 
 var operatorSymbols = map[string]string{"gt": ">", "gte": ">=", "lt": "<", "lte": "<=", "eq": "==", "ne": "!="}
 
-// OperatorSymbol returns the PromQL comparison for an operator name.
 func OperatorSymbol(op string) string {
 	if s, ok := operatorSymbols[op]; ok {
 		return s
@@ -57,7 +45,6 @@ func OperatorSymbol(op string) string {
 	return ">"
 }
 
-// Expr renders the condition as PromQL.
 func (c CustomCondition) Expr() string {
 	names := make([]string, 0, len(c.Labels))
 	for k := range c.Labels {
@@ -91,21 +78,17 @@ func (c CustomCondition) Expr() string {
 	return fmt.Sprintf("%s%s (%s) %s %s", agg, group, inner, OperatorSymbol(c.Operator), num(c.Threshold))
 }
 
-// CustomParams parameterize a custom rule.
 type CustomParams struct {
 	Meta
 	// Name is the rule identifier (lowercase, dashes).
-	Name string
-	// Title is what is wrong, in plain words.
+	Name  string
 	Title string
 	// Expr is the PromQL expression; when empty, Condition is rendered.
 	Expr      string
 	Condition *CustomCondition
-	// Unit is appended to the value and threshold in notifications.
-	Unit string
+	Unit      string
 }
 
-// CustomAlertName is the alert name of a custom rule.
 func CustomAlertName(name string) string {
 	var b strings.Builder
 	b.WriteString(AlertCustomPrefix)
@@ -125,7 +108,6 @@ func CustomAlertName(name string) string {
 	return b.String()
 }
 
-// Custom renders a user-written rule.
 func Custom(p CustomParams) rulefmt.Rule {
 	expr := p.Expr
 	threshold := ""
@@ -149,8 +131,7 @@ func Custom(p CustomParams) rulefmt.Rule {
 	return r
 }
 
-// ValidateExpr parses a PromQL expression with Prometheus' parser and
-// checks that it returns an instant vector (alerting rules need one).
+// ValidateExpr also requires an instant vector, which an alerting rule needs.
 func ValidateExpr(expr string) error {
 	e, err := parser.NewParser(parser.Options{}).ParseExpr(expr)
 	if err != nil {

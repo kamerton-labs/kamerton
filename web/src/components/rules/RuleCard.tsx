@@ -1,9 +1,8 @@
 // Copyright 2026 The Kamerton Authors
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// One rule as a card: what it checks in plain words, on/off, and when
-// opened, threshold, duration, severity and the backtest. The same editor is
-// used in the service panel of the canvas and in the rules list.
+// One rule as a card. The same editor is used in the canvas service panel and
+// in the rules list.
 
 import { useState } from 'react'
 import { ChevronDown, Pencil, Trash2 } from 'lucide-react'
@@ -113,7 +112,6 @@ export default function RuleCard({ rule }: { rule: RuleItem }) {
   )
 }
 
-/** Threshold, duration, severity, backtest and removal of one rule. */
 export function RuleEditor({ rule, className }: { rule: RuleItem; className?: string }) {
   const { edit, readOnly, desc } = useEditor()
   const [editing, setEditing] = useState(false)

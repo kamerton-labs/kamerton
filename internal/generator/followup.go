@@ -14,67 +14,43 @@ import (
 	"github.com/kamerton-labs/kamerton/internal/rules"
 )
 
-// The follow-up message: what Kamerton found about the probable cause of a
-// firing notification. Alertmanager delivers the notification itself; the
-// core sends this second message (internal/followup) through the same bot
-// and mail server. Unlike the Alertmanager templates in message.go it is
-// rendered here, in Go, from the evidence collected at the time.
-//
-// Telegram parse mode HTML allows only a few tags; the message uses <b>, <i>
-// and <a href>, and every value is escaped with html.EscapeString. The email
-// HTML is the same text in a pre-line block, like the alert email; the plain
-// text has no tags.
+// Telegram HTML parse mode allows only a few tags: the follow-up uses <b>, <i> and
+// <a href> and escapes every value.
 
-// FollowUp is the evidence about one incident.
 type FollowUp struct {
 	System      string
 	Environment string
-	// Alerting are the services of the notification that are not roots
-	// (their alert is a consequence of a root). Empty when the notification
-	// is about a root itself.
+	// Alerting are the services of the notification that are not roots; empty
+	// when the notification is about a root itself.
 	Alerting []string
-	// Roots are the probable causes with their evidence.
-	Roots []RootEvidence
-	// Affected are the other services whose alerts follow from the roots.
+	Roots    []RootEvidence
 	Affected []string
-	// Window is how far back "what changed" looks.
-	Window time.Duration
+	Window   time.Duration
 }
 
-// RootEvidence is what was found about one root service. Every part is
-// optional.
+// RootEvidence parts are all optional.
 type RootEvidence struct {
-	Service string
-	// Title is the plain-words title of the root's alert, Since its start.
-	Title string
-	Since time.Time
-	// Changes in the workload of the service within the window.
-	Changes WorkloadChanges
-	// Operations with the most failed calls in the window.
+	Service    string
+	Title      string
+	Since      time.Time
+	Changes    WorkloadChanges
 	Operations []OperationErrors
-	// LogLine is one error line from the logs of the service.
-	LogLine string
-	// TraceURL opens failing traces of the service in Grafana.
-	TraceURL string
+	LogLine    string
+	TraceURL   string
 }
 
-// WorkloadChanges is what changed in the pods of a service.
 type WorkloadChanges struct {
-	Rollouts []Rollout
-	Restarts []Restart
-	// NotReady of Pods are not ready.
+	Rollouts       []Rollout
+	Restarts       []Restart
 	NotReady, Pods int
 	Warnings       []Warning
 }
 
-// Empty reports whether nothing changed.
 func (c WorkloadChanges) Empty() bool {
 	return len(c.Rollouts) == 0 && len(c.Restarts) == 0 && c.NotReady == 0 && len(c.Warnings) == 0
 }
 
-// Rollout is a new version of a Deployment or StatefulSet.
 type Rollout struct {
-	// Workload is the Deployment or StatefulSet name.
 	Workload string
 	At       time.Time
 	// OldImage and NewImage are image tags (or short digests); OldImage is
@@ -82,33 +58,27 @@ type Rollout struct {
 	OldImage, NewImage string
 }
 
-// Restart is a container that restarted within the window.
 type Restart struct {
 	Pod, Container string
 	Count          int
-	// Reason is the last termination reason (OOMKilled, Error, ...).
-	Reason string
+	Reason         string
 	// ExitCode of the last termination; 0 when unknown.
-	ExitCode int32
-	// CrashLoop: the container is waiting in CrashLoopBackOff now.
+	ExitCode  int32
 	CrashLoop bool
 }
 
-// Warning is a Kubernetes Warning event.
 type Warning struct {
 	Reason, Message string
 	Count           int32
 }
 
-// OperationErrors is the number of failed calls of one operation.
 type OperationErrors struct {
 	Operation string
 	Failed    float64
 }
 
-// Worth reports whether the evidence says more than the notification did:
-// other affected services, a change in the workload, a failing operation or
-// a log line. A trace link alone is not worth a message.
+// Worth reports whether the evidence says more than the notification did.
+// A trace link alone is not worth a message.
 func (f *FollowUp) Worth() bool {
 	if f == nil {
 		return false
@@ -124,7 +94,6 @@ func (f *FollowUp) Worth() bool {
 	return false
 }
 
-// FollowUpMessage is the rendered follow-up in every format.
 type FollowUpMessage struct {
 	TelegramHTML string
 	EmailSubject string
@@ -167,11 +136,8 @@ var followUpTexts = map[string]followUpWords{
 	},
 }
 
-// maxLogLine caps the log line quoted in a message.
 const maxLogLine = 300
 
-// RenderFollowUp renders the follow-up in the language and time zone of the
-// description (spec.notifications.language and timeZone).
 func RenderFollowUp(f *FollowUp, lang, timeZone string) FollowUpMessage {
 	w, ok := followUpTexts[lang]
 	if !ok {
@@ -235,7 +201,6 @@ func followUpBody(f *FollowUp, w followUpWords, loc *time.Location, htmlMode boo
 	}
 	t.WriteString("\n")
 
-	// Cause by graph.
 	var roots, details []string
 	for _, r := range f.Roots {
 		roots = append(roots, b(esc(r.Service)))
@@ -341,7 +306,6 @@ func changeParts(c WorkloadChanges, w followUpWords, at func(time.Time) string, 
 	return parts
 }
 
-// trimLogLine makes one short line of a log line.
 func trimLogLine(s string) string { return trimLine(s, maxLogLine) }
 
 func trimLine(s string, max int) string {

@@ -188,9 +188,8 @@ func TestFollowUpSentOnceToTheSameRecipients(t *testing.T) {
 		t.Errorf("waited %v, want %s after the notification", h.slept, DefaultDelay)
 	}
 
-	// Alertmanager repeats the group, and the muted caller's group arrives
-	// later (grouping off for a moment, or a resource alert): same incident,
-	// nothing new is sent.
+	// A repeat of the group and the muted caller's later group are the same
+	// incident: nothing new is sent.
 	res = h.svc.Process(context.Background(), hookFor(h.active[0]), received.Add(4*time.Hour))
 	res2 := h.svc.Process(context.Background(), hookFor(h.active[1]), received.Add(time.Minute))
 	if len(res) != 1 || res[0].Skipped != "already sent" || len(res2) != 1 || res2[0].Skipped != "already sent" || len(h.tg.sent) != 1 {
@@ -273,8 +272,7 @@ func TestFollowUpNotSent(t *testing.T) {
 		})
 	}
 
-	// Turned off in the description, resolved notifications, unknown
-	// systems: nothing at all.
+	// Turned off, resolved, or an unknown system: nothing is sent.
 	h := newHarness(description("", &off))
 	if res := h.svc.Process(context.Background(), hookFor(amAlert("payment", rules.AlertErrorRate, 0, false)), t0); res != nil {
 		t.Errorf("evidenceFollowUp false: %+v", res)

@@ -1,10 +1,8 @@
 // Copyright 2026 The Kamerton Authors
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// A rule the library does not cover: a simple builder (metric, how to count,
-// how to combine, comparison, threshold) or, for people who know PromQL, a
-// raw expression. The core validates the expression with Prometheus' parser;
-// its error is shown next to the field.
+// A rule the library does not cover: a simple builder or a raw PromQL
+// expression, which the core validates with Prometheus' parser.
 
 import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
@@ -99,7 +97,7 @@ function toRule(name: string, f: FormState): CustomRule {
   return r
 }
 
-/** Mirrors rules.CustomCondition.Expr in the core, for the preview line. */
+/** Mirrors CustomCondition.Expr in internal/rules/custom.go, for the preview line. */
 function previewExpr(f: FormState, window: string): string {
   const labels = f.labels.filter((l) => l.k.trim()).sort((a, b) => a.k.localeCompare(b.k))
   let inner = labels.length ? `${f.metric}{${labels.map((l) => `${l.k.trim()}=${JSON.stringify(l.v)}`).join(', ')}}` : f.metric

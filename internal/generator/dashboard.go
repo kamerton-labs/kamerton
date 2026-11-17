@@ -11,13 +11,6 @@ import (
 	"github.com/kamerton-labs/kamerton/internal/rules"
 )
 
-// dashboard renders one Grafana dashboard for the system: a row per service
-// with request rate, error ratio and latency panels (for services with span
-// metrics) and a memory panel. Queries use the same metric mapping as the
-// alert rules.
-//
-// TODO: richer panels (saturation per pod, queue lag, SLO budget), links from
-// alerts to panels, Loki/Tempo panels.
 func (g *gen) dashboard() ([]byte, error) {
 	s := g.tel.Spans
 	w := rules.FormatDuration(g.window)

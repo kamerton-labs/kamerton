@@ -1,9 +1,9 @@
 // Copyright 2026 The Kamerton Authors
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// Confirmation in the app's own style instead of window.confirm, which blocks
-// UI tests and looks foreign. Focus starts on "Cancel", so Enter never
-// confirms a deletion by accident.
+// Confirmation in the app's style instead of window.confirm, which blocks UI
+// tests. Focus starts on "Cancel", so Enter never confirms a deletion by
+// accident.
 
 import { useCallback, useRef, useState, type ReactNode } from 'react'
 import { Button } from '@/components/ui/button'
@@ -13,7 +13,6 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 export interface ConfirmOptions {
   /** A question: "Delete system \"shop\"?" */
   title: ReactNode
-  /** What will happen. */
   description?: ReactNode
   confirmLabel?: string
   cancelLabel?: string
@@ -25,10 +24,7 @@ interface Pending extends ConfirmOptions {
   resolve: (ok: boolean) => void
 }
 
-/**
- * Returns the dialog element to render and confirm(), which resolves to true
- * when the user confirms and false when they cancel or close the dialog.
- */
+/** Returns the dialog element to render and confirm(), which resolves to true only when confirmed. */
 export function useConfirm(): [ReactNode, (opts: ConfirmOptions) => Promise<boolean>] {
   const [pending, setPending] = useState<Pending | null>(null)
   const [open, setOpen] = useState(false)

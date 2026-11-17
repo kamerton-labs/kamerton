@@ -144,7 +144,6 @@ func TestWorkload(t *testing.T) {
 }
 
 func TestWorkloadQuiet(t *testing.T) {
-	// A long-running pod without changes: nothing to report.
 	objs := []client.Object{
 		rs("payment-old", "4", 48*time.Hour, "ghcr.io/shop/payment:v1.4.2"),
 		&corev1.Pod{

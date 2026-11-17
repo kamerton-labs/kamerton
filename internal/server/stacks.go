@@ -22,24 +22,18 @@ import (
 	"github.com/kamerton-labs/kamerton/internal/stack"
 )
 
-// ---- Sets of programs ----
-//
-// Every read of Prometheus or Alertmanager for a system goes through the
-// clients of that system's set (clientsFor); nothing reads a global client.
+// Every read of Prometheus or Alertmanager for a system goes through its set's clients (clientsFor).
 
-// setClients are the clients of one system's set of programs.
 type setClients struct {
 	Set stack.Resolved
-	// Unknown is the set ID the system asked for when no such set exists
-	// (the built-in set is used instead).
+	// Unknown is the set ID asked for when no such set exists; the built-in set is used instead.
 	Unknown string
 	// Prom and AM are nil when the set has no such program.
 	Prom prometheus.Querier
 	AM   alertmanager.Reader
 }
 
-// clientsFor returns the clients of a set by the ID a system asks for
-// ("" is the built-in set; an unknown ID falls back to it).
+// clientsFor treats "" as the built-in set; an unknown ID falls back to it.
 func (s *Server) clientsFor(ctx context.Context, stackID string) setClients {
 	set, unknown, err := s.resolveSet(ctx, stackID)
 	if err != nil {
@@ -54,9 +48,8 @@ func (s *Server) clientsFor(ctx context.Context, stackID string) setClients {
 	return c
 }
 
-// setList returns the sets, remembered for two seconds: one page load
-// resolves the set of every system several times, and in a cluster each
-// read is a request to the API server. Changes through the API forget it.
+// setList is remembered for two seconds: one page load resolves every system's set several
+// times, and in a cluster each read hits the API server. API changes forget it.
 func (s *Server) setList(ctx context.Context) ([]stack.Resolved, error) {
 	s.setsMu.Lock()
 	if s.setsCache != nil && time.Since(s.setsAt) < 2*time.Second {
@@ -75,14 +68,12 @@ func (s *Server) setList(ctx context.Context) ([]stack.Resolved, error) {
 	return l, nil
 }
 
-// forgetSets drops the remembered sets after a change.
 func (s *Server) forgetSets() {
 	s.setsMu.Lock()
 	s.setsCache = nil
 	s.setsMu.Unlock()
 }
 
-// resolveSet is Sets.Resolve over the remembered list.
 func (s *Server) resolveSet(ctx context.Context, id string) (stack.Resolved, bool, error) {
 	list, err := s.setList(ctx)
 	if err != nil {
@@ -103,8 +94,7 @@ func (s *Server) resolveSet(ctx context.Context, id string) (stack.Resolved, boo
 	return builtin, true, nil
 }
 
-// promFor returns a Prometheus client for an address. The install-time
-// address uses the client given in Options (also in tests).
+// promFor uses the client from Options for the install-time address.
 func (s *Server) promFor(u string) prometheus.Querier {
 	if u == s.sets.FlagURL(stack.KindPrometheus) && s.opts.Prometheus != nil {
 		return s.opts.Prometheus
@@ -130,7 +120,6 @@ func (s *Server) promFor(u string) prometheus.Querier {
 	return c
 }
 
-// amFor returns an Alertmanager client for an address (see promFor).
 func (s *Server) amFor(u string) alertmanager.Reader {
 	if u == s.sets.FlagURL(stack.KindAlertmanager) && s.opts.Alertmanager != nil {
 		return s.opts.Alertmanager
@@ -152,8 +141,7 @@ func (s *Server) amFor(u string) alertmanager.Reader {
 	return c
 }
 
-// stackOf is the set ID a stored system asks for, also for a document
-// that does not pass validation.
+// stackOf also works for a document that does not pass validation.
 func stackOf(snap *descstore.Snapshot) string {
 	if snap == nil {
 		return ""
@@ -172,7 +160,6 @@ func stackOf(snap *descstore.Snapshot) string {
 	return ""
 }
 
-// stackWarnings warns about an unknown set in a (draft) description.
 func (s *Server) stackWarnings(ctx context.Context, id string) []description.Issue {
 	if id == "" || id == stack.BuiltinID {
 		return nil
@@ -184,9 +171,8 @@ func (s *Server) stackWarnings(ctx context.Context, id string) []description.Iss
 	return nil
 }
 
-// usage maps a set ID to the systems that use it: what systems ask for
-// (asked) and which set they really use (resolved; unknown sets resolve to
-// the built-in one).
+// usage maps a set ID to the systems that ask for it (asked) and that really use it
+// (resolved, where unknown sets resolve to the built-in one).
 func (s *Server) usage(ctx context.Context, sets []stack.Resolved) (asked, resolved map[string][]string) {
 	asked, resolved = map[string][]string{}, map[string][]string{}
 	list, err := s.opts.Descriptions.List(ctx)
@@ -218,8 +204,7 @@ type stackView struct {
 	Warnings []string       `json:"warnings"`
 }
 
-// operator returns the Prometheus Operator resources, remembered for a
-// minute (they are read for warnings on every status page refresh).
+// operator is remembered for a minute: every status page refresh reads it for warnings.
 func (s *Server) operator(ctx context.Context) *stack.Operator {
 	if s.opts.Discoverer == nil {
 		return nil
@@ -278,8 +263,6 @@ func (s *Server) listStacks(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"sets": out, "discovery": s.discoveryState(), "warnings": warnings})
 }
 
-// stackStatus is the health of one set (?set=, default the built-in one),
-// in the shape of earlier versions.
 func (s *Server) stackStatus(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
@@ -394,8 +377,7 @@ func (s *Server) resetStackProgram(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"set": set})
 }
 
-// checkStackAddress probes one address for one program kind before it is
-// saved. It only reads (GET requests to the given address).
+// checkStackAddress only sends GET requests to the given address.
 func (s *Server) checkStackAddress(w http.ResponseWriter, r *http.Request) {
 	body, ok := readBody(w, r)
 	if !ok {
@@ -422,8 +404,6 @@ func (s *Server) checkStackAddress(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, stack.Check(ctx, httpc, req.Kind, req.URL))
 }
 
-// discoverStacks looks for programs running in the cluster (Kubernetes API
-// only) and marks those already used by a set.
 func (s *Server) discoverStacks(w http.ResponseWriter, r *http.Request) {
 	if s.opts.Discoverer == nil {
 		writeJSON(w, http.StatusOK, s.discoveryState())
@@ -458,7 +438,6 @@ func (s *Server) discoverStacks(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"available": true, "found": res.Found, "operator": res.Operator, "warnings": res.Warnings})
 }
 
-// sameAddress compares an address in a set with a found one.
 func sameAddress(a, b, ns string) bool { return stack.SameAddress(a, b, ns) }
 
 func writeStackErr(w http.ResponseWriter, err error) {
@@ -479,16 +458,12 @@ func writeStackErr(w http.ResponseWriter, err error) {
 	}
 }
 
-// ---- Alerts from several Alertmanagers ----
-
-// amSource is one Alertmanager used by at least one system.
 type amSource struct {
 	url string
 	am  alertmanager.Reader
 }
 
-// alertmanagersInUse returns the distinct Alertmanagers of the sets used by
-// systems (the built-in set's when there are no systems).
+// alertmanagersInUse falls back to the built-in set when there are no systems.
 func (s *Server) alertmanagersInUse(ctx context.Context, list []*descstore.Snapshot) []amSource {
 	seen := map[string]bool{}
 	var out []amSource
@@ -509,8 +484,7 @@ func (s *Server) alertmanagersInUse(ctx context.Context, list []*descstore.Snaps
 	return out
 }
 
-// fetchAlerts asks several Alertmanagers concurrently for active alerts,
-// including those muted by inhibit rules when the reader can list them.
+// fetchAlerts includes alerts muted by inhibit rules when the reader can list them.
 func fetchAlerts(ctx context.Context, sources []amSource, filter map[string]string) (lists [][]alertmanager.Alert, errs []error) {
 	lists = make([][]alertmanager.Alert, len(sources))
 	errs = make([]error, len(sources))
@@ -530,9 +504,8 @@ func fetchAlerts(ctx context.Context, sources []amSource, filter map[string]stri
 	return lists, errs
 }
 
-// mergeAlerts joins alerts from several Alertmanagers: the same alert
-// (same fingerprint, else same labels) reported by more than one is kept
-// once, with the earliest start.
+// mergeAlerts keeps an alert reported by several Alertmanagers once (same fingerprint, else
+// same labels), with the earliest start.
 func mergeAlerts(lists ...[]alertmanager.Alert) []alertmanager.Alert {
 	idx := map[string]int{}
 	var out []alertmanager.Alert

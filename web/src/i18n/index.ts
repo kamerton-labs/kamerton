@@ -1,13 +1,9 @@
 // Copyright 2026 The Kamerton Authors
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// Interface language. English is the default; Russian is the second
-// language. The dictionaries are plain objects (en.ts, ru.ts): ru has the
-// type of en, so a key missing in one of them fails the type check.
-//
-// The current language lives in a small module-level store, so code outside
-// React (lib/model, validators) reads it through t() as well; components
-// subscribe with useT() and re-render when the language changes.
+// Interface language. The current language lives in a module-level store so
+// code outside React (lib/model, validators) can call t(); components
+// subscribe with useT() and re-render on a switch.
 
 import { createElement, Fragment, useSyncExternalStore, type ReactNode } from 'react'
 import { en, type PluralEn, type PluralRu } from './en'
@@ -100,16 +96,12 @@ export function tnl(lang: Lang, key: PluralKey, n: number, vars?: Vars): string 
   return interpolate(form, { n, ...vars })
 }
 
-/** A string in the current language. */
 export const t = (key: MsgKey, vars?: Vars): string => tl(current, key, vars)
 
 /** A plural form in the current language. */
 export const tn = (key: PluralKey, n: number, vars?: Vars): string => tnl(current, key, n, vars)
 
-/**
- * A string with React nodes in place of {name}: rich('rules.firedTimes', { n: <b>3</b> }).
- * Returns a fragment, so it can be put anywhere a node goes.
- */
+/** A string with React nodes in place of {name}, returned as a fragment. */
 export function richl(lang: Lang, key: MsgKey, nodes: Record<string, ReactNode>): ReactNode {
   const s = tl(lang, key)
   const parts: ReactNode[] = []

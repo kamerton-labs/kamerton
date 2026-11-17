@@ -28,7 +28,7 @@ export const router = createBrowserRouter([
       { path: 'status', lazy: lazyPage(() => import('@/pages/StatusPage')) },
       // Links in notifications that were already sent carry no system.
       { path: 'runbooks/:service/:alert?', lazy: runbook },
-      // Screens of earlier versions.
+      // Redirects for addresses that may still be bookmarked.
       { path: 'setup/channels', element: <Navigate to="/channels" replace /> },
       { path: 'setup/stack', element: <Navigate to="/status" replace /> },
       { path: 'setup/*', element: <Navigate to="/" replace /> },

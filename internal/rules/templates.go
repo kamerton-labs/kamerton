@@ -1,14 +1,7 @@
 // Copyright 2026 The Kamerton Authors
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// Package rules is Kamerton's rule library: templates that render Prometheus
-// alerting rules for the four signal types (error rate, latency, resource
-// saturation, queue lag), an SLO burn-rate template and a "requests stopped
-// arriving" template (traffic.go).
-//
-// Templates take plain parameter structs, not the description types, so the
-// library can be reused and tested on its own. Every metric and label name is
-// a parameter; nothing is tied to a particular demo.
+// Package rules renders Prometheus alerting rules from plain parameter structs.
 package rules
 
 import (
@@ -21,8 +14,8 @@ import (
 	"github.com/prometheus/prometheus/model/rulefmt"
 )
 
-// Alert names produced by the library. One alert name per signal type, with
-// the service in labels, keeps Alertmanager grouping and silencing simple.
+// One alert name per signal type, with the service in labels, keeps
+// Alertmanager grouping and silencing simple.
 const (
 	AlertErrorRate          = "KamertonErrorRateHigh"
 	AlertOperationErrorRate = "KamertonOperationErrorRateHigh"
@@ -36,7 +29,6 @@ const (
 	AlertSLOBurnSlow        = "KamertonSLOBurnRateSlow"
 )
 
-// Labels set on every generated alert.
 const (
 	LabelService   = "service"
 	LabelOperation = "operation"
@@ -45,7 +37,6 @@ const (
 	LabelManaged   = "kamerton_managed"
 )
 
-// Signal identifies the template that produced a rule.
 type Signal string
 
 const (
@@ -56,22 +47,15 @@ const (
 	SignalSLO        Signal = "slo_burn_rate"
 )
 
-// Meta is common to all templates.
 type Meta struct {
-	// Service is the logical service name (the "service" label of the alert).
 	Service string
 	// Severity: "critical" or "warning".
-	Severity string
-	// For is the pending period of the alert.
-	For time.Duration
-	// RunbookURL is added as the runbook_url annotation when not empty.
-	RunbookURL string
-	// Labels are extra static labels (for example environment).
-	Labels map[string]string
-	// RunbookPerAlert appends "/<alert name>" to RunbookURL, so the link
-	// opens the section of that rule in Kamerton's runbook page.
+	Severity        string
+	For             time.Duration
+	RunbookURL      string
+	Labels          map[string]string
 	RunbookPerAlert bool
-	// Language of the plain-words annotations (see AnnotationTitle): en (default) or ru.
+	// Language: en (default) or ru.
 	Language string
 }
 
@@ -109,7 +93,6 @@ func (m Meta) annotate(r *rulefmt.Rule, summary, description string) {
 	}
 }
 
-// SpanTarget selects span metrics of one service (and optionally one operation).
 type SpanTarget struct {
 	CallsMetric       string
 	BucketMetric      string
@@ -120,7 +103,7 @@ type SpanTarget struct {
 	StatusCodeLabel   string
 	ErrorStatusValue  string
 	SpanKinds         []string // empty means all kinds
-	ServiceValue      string   // value of ServiceLabel
+	ServiceValue      string
 	Operation         string   // exact operation; empty means all operations
 	ExcludeOperations []string // RE2 regular expressions, ignored when Operation is set
 	Window            time.Duration
@@ -154,9 +137,9 @@ func (t SpanTarget) callIncrease(m Matchers, groupBy []string, window time.Durat
 	return fmt.Sprintf("sum %s (increase(%s[%s]))", by(groupBy...), m.Selector(t.CallsMetric), dur(window))
 }
 
-// unlessSingleOperation drops services that had only one operation in the
-// window (and, when minRPS > 0, more traffic than minRPS): for them the
-// per-operation rule would repeat the service rule on the same calls.
+// unlessSingleOperation drops services with only one operation in the window
+// (and traffic above minRPS when it is set): for them the per-operation rule
+// would repeat the service rule on the same calls.
 func (t SpanTarget) unlessSingleOperation(minRPS float64) string {
 	svc := t.ServiceLabel
 	all := t.matchers()
@@ -167,35 +150,27 @@ func (t SpanTarget) unlessSingleOperation(minRPS float64) string {
 	return fmt.Sprintf("unless on (%s)\n(\n  %s\n)", svc, single)
 }
 
-// errorRatio renders failed calls / all calls over window.
 func (t SpanTarget) errorRatio(groupBy []string, window time.Duration) string {
 	all := t.matchers()
 	failed := all.clone().Eq(t.StatusCodeLabel, t.ErrorStatusValue)
 	return fmt.Sprintf("(\n  %s\n/\n  %s\n)", t.callRate(failed, groupBy, window), t.callRate(all, groupBy, window))
 }
 
-// ErrorRateParams parameterize the error rate template.
 type ErrorRateParams struct {
 	Meta
 	Target SpanTarget
-	// Threshold is the maximum share of failed calls (0..1).
-	Threshold float64
-	// MinRequestsPerSecond is the traffic below which the alert stays silent.
+	// Threshold is a share of failed calls, 0..1.
+	Threshold            float64
 	MinRequestsPerSecond float64
-	// PerOperation evaluates every operation separately.
-	PerOperation bool
-	// MinErrors, when above zero, is the number of failed calls the window
-	// must hold (a single failure of a rare operation is not 100%).
+	PerOperation         bool
+	// MinErrors, when above zero, is the failed calls the window must hold: a
+	// single failure of a rare operation is not 100%.
 	MinErrors float64
-	// SingleOperationRPS, for a per-operation rule, leaves services with only
-	// one operation in the window and traffic above this rate to the service
-	// rule, which then alerts on exactly the same calls. Negative: off.
+	// SingleOperationRPS leaves services with one operation and traffic above
+	// this rate to the service rule, which alerts on the same calls. Negative: off.
 	SingleOperationRPS float64
 }
 
-// ErrorRate renders an error-rate alert: failed/all calls above a threshold,
-// guarded by a minimum-traffic condition so idle services do not alert on a
-// single failure.
 func ErrorRate(p ErrorRateParams) rulefmt.Rule {
 	t := p.Target
 	groupBy := t.groupBy(p.PerOperation)
@@ -241,30 +216,22 @@ func ErrorRate(p ErrorRateParams) rulefmt.Rule {
 	return r
 }
 
-// LatencyParams parameterize the latency template.
 type LatencyParams struct {
 	Meta
 	Target SpanTarget
-	// Quantile, for example 0.95.
-	Quantile float64
-	// ThresholdMs is the latency threshold in milliseconds.
-	ThresholdMs float64
-	// MinRequestsPerSecond is the traffic below which the alert stays silent; 0: no such condition.
+	// Quantile is a fraction, for example 0.95.
+	Quantile             float64
+	ThresholdMs          float64
 	MinRequestsPerSecond float64
-	// MinCalls is the number of calls the window must hold, so a quantile
-	// is not computed from one or two requests; 0: no such condition.
+	// MinCalls keeps the quantile from being computed from one or two requests;
+	// 0: off.
 	MinCalls float64
-	// PerOperation evaluates every operation separately. It alerts only on
-	// operations that were faster than the threshold during the normal hour
-	// (see NormalRange, with at least 30 calls): operations that are slow by
-	// design, or seen for the first time, are left to the service rule and to
-	// the team's own operations[] thresholds. Services with one operation in
-	// the window are left to the service rule, which sees the same calls.
+	// PerOperation alerts only on operations that were faster than the threshold
+	// during the normal hour, so operations slow by design or new are left to the
+	// service rule.
 	PerOperation bool
 }
 
-// Latency renders a latency alert: histogram quantile above a threshold,
-// guarded by a minimum-traffic condition.
 func Latency(p LatencyParams) rulefmt.Rule {
 	t := p.Target
 	groupBy := t.groupBy(p.PerOperation)
@@ -319,14 +286,11 @@ func Latency(p LatencyParams) rulefmt.Rule {
 	return r
 }
 
-// quantile renders histogram_quantile over fn (rate or increase) of the
-// duration buckets.
 func (t SpanTarget) quantile(q float64, groupBy []string, fn string, window time.Duration, offset string) string {
 	bucketBy := append(append([]string{}, groupBy...), "le")
 	return fmt.Sprintf("histogram_quantile(%s, sum %s (%s(%s[%s]%s)))", num(q), by(bucketBy...), fn, t.matchers().Selector(t.BucketMetric), dur(window), offset)
 }
 
-// PodTarget selects container metrics of the pods of one service.
 type PodTarget struct {
 	MemoryMetric     string
 	CPUMetric        string
@@ -349,17 +313,14 @@ func (t PodTarget) matchers() Matchers {
 	return m.Re(t.PodLabel, t.PodRegex)
 }
 
-// MemoryParams parameterize the memory saturation template.
 type MemoryParams struct {
 	Meta
 	Target PodTarget
-	// Bytes is the per-pod memory threshold.
-	Bytes float64
+	Bytes  float64
 }
 
-// Memory renders a per-pod memory alert. max() is used rather than sum()
-// because cAdvisor also exports a pod-level series next to per-container
-// ones; max picks the pod total without double counting.
+// Memory uses max rather than sum: cAdvisor exports a pod-level series next to
+// the per-container ones, and max picks the pod total without double counting.
 func Memory(p MemoryParams) rulefmt.Rule {
 	t := p.Target
 	expr := fmt.Sprintf("max %s (%s) > %s",
@@ -372,15 +333,13 @@ func Memory(p MemoryParams) rulefmt.Rule {
 	return r
 }
 
-// CPUParams parameterize the CPU saturation template.
 type CPUParams struct {
 	Meta
 	Target PodTarget
-	// Cores is the per-pod CPU threshold.
-	Cores float64
+	Cores  float64
 }
 
-// CPU renders a per-pod CPU usage alert (see Memory for why max is used).
+// CPU uses max for the same reason as Memory.
 func CPU(p CPUParams) rulefmt.Rule {
 	t := p.Target
 	expr := fmt.Sprintf("max %s (rate(%s[%s])) > %s",
@@ -393,15 +352,12 @@ func CPU(p CPUParams) rulefmt.Rule {
 	return r
 }
 
-// RestartsParams parameterize the restarts template.
 type RestartsParams struct {
 	Meta
-	Target PodTarget
-	// MaxPerHour is the number of restarts per hour above which the alert fires.
+	Target     PodTarget
 	MaxPerHour int
 }
 
-// Restarts renders an alert on container restarts during the last hour.
 func Restarts(p RestartsParams) rulefmt.Rule {
 	t := p.Target
 	expr := fmt.Sprintf("sum %s (increase(%s[1h])) > %d",
@@ -414,7 +370,6 @@ func Restarts(p RestartsParams) rulefmt.Rule {
 	return r
 }
 
-// QueueTarget selects consumer series of one topic.
 type QueueTarget struct {
 	LagMetric     string
 	MembersMetric string // members of a consumer group, group label only; "" or "-": not used
@@ -425,15 +380,12 @@ type QueueTarget struct {
 	Groups        []string // empty means all consumer groups
 }
 
-// QueueLagParams parameterize the queue lag template.
 type QueueLagParams struct {
 	Meta
 	Target QueueTarget
-	// MaxLag is the maximum allowed consumer lag.
 	MaxLag float64
 }
 
-// QueueLag renders a consumer lag alert per consumer group and topic.
 func QueueLag(p QueueLagParams) rulefmt.Rule {
 	t := p.Target
 	m := Matchers{}.Eq(t.TopicLabel, t.Topic).Re(t.GroupLabel, quoteAll(t.Groups)...)
@@ -446,31 +398,26 @@ func QueueLag(p QueueLagParams) rulefmt.Rule {
 	return r
 }
 
-// SLOParams parameterize the SLO burn-rate template.
 type SLOParams struct {
 	Meta
 	Target SpanTarget
-	// Objective is the target share of successful calls in percent, e.g. 99.5.
+	// Objective is the share of successful calls in percent, for example 99.5.
 	Objective float64
-	// Window is the SLO window, e.g. 30 days.
-	Window time.Duration
+	Window    time.Duration
 }
 
 // burnWindow is one multiwindow pair from the Google SRE workbook.
 type burnWindow struct {
 	long, short time.Duration
-	// budget is the share of the error budget consumed over the long window
-	// that should trigger the alert.
+	// budget is the share of the error budget spent over long that fires the alert.
 	budget float64
 	alert  string
 	pend   time.Duration
 }
 
-// SLOBurnRate renders multiwindow, multi-burn-rate alerts (Google SRE
-// workbook, chapter 5): a fast-burn alert (2% of the budget in 1h, confirmed
-// over 5m) and a slow-burn alert (5% of the budget in 6h, confirmed over
-// 30m). Burn-rate factors are derived from the SLO window, so 30d gives the
-// classic 14.4 and 6.
+// SLOBurnRate renders multiwindow, multi-burn-rate alerts (Google SRE workbook,
+// chapter 5). Burn-rate factors are derived from the SLO window, so 30d gives
+// the classic 14.4 and 6.
 func SLOBurnRate(p SLOParams) []rulefmt.Rule {
 	t := p.Target
 	errorBudget := round((100-p.Objective)/100, 10)
@@ -513,7 +460,6 @@ func quoteAll(values []string) []string {
 	return out
 }
 
-// QuoteOperation turns an exact operation name into a regular expression.
 func QuoteOperation(name string) string { return regexp.QuoteMeta(name) }
 
 func labelRef(name string) string { return fmt.Sprintf(`{{ index $labels %q }}`, name) }

@@ -22,7 +22,6 @@ const nav = [
   { to: '/channels', label: 'nav.channels', icon: Send, end: true, match: (p: string) => p.startsWith('/channels') },
 ] as const
 
-/** One click switches light ↔ dark. */
 function ThemeToggle() {
   const { theme, toggle } = useTheme()
   const { t } = useT()
@@ -43,7 +42,7 @@ const subscribeDesktop = (cb: () => void) => {
 /** Matches Tailwind's md breakpoint, so that the user box is rendered once (sidebar or mobile header). */
 const useIsDesktop = () => useSyncExternalStore(subscribeDesktop, () => window.matchMedia(desktopQuery).matches)
 
-/** Signed-in user and the logout button; shown only when login is enabled. */
+/** Signed-in user and logout; shown only when login is enabled. */
 function UserBox({ user, compact }: { user: string; compact?: boolean }) {
   const qc = useQueryClient()
   const navigate = useNavigate()
@@ -80,7 +79,7 @@ function AlertCount() {
   return <span className={cn('ml-auto rounded-full px-1.5 text-xs font-medium tabular-nums', critical ? 'bg-firing/15 text-firing' : 'bg-warn/15 text-warn')}>{n}</span>
 }
 
-/** Prometheus and Alertmanager of every set that systems use. */
+/** Link to the health of Prometheus and Alertmanager of every set in use. */
 function StackLink({ compact }: { compact?: boolean }) {
   const stacks = useStacks()
   const { t } = useT()

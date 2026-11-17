@@ -8,7 +8,6 @@ export type PluralEn = { one: string; other: string }
 export type PluralRu = { one: string; few: string; many: string }
 
 export const en = {
-  // ---- format ----
   'time.justNow': 'just now',
   'time.minutesAgo': { one: '{n} minute ago', other: '{n} minutes ago' },
   'time.hoursAgo': { one: '{n} hour ago', other: '{n} hours ago' },
@@ -22,14 +21,12 @@ export const en = {
   'system.state.invalid': 'error in the description',
   'system.state.unknown': 'no alert data',
 
-  // ---- auth ----
   'login.error.wrong': 'Wrong username or password',
   'login.error.tooMany': 'Too many attempts, wait {s} s',
   'login.error.noCore': 'Kamerton core is unreachable',
   'login.error.failed': 'Could not sign in',
   'login.error.failedWith': 'Could not sign in: {reason}',
 
-  // ---- stacks-lib ----
   'stacks.role.prometheus': 'stores metrics and evaluates rules',
   'stacks.role.alertmanager': 'sends notifications',
   'stacks.role.grafana': 'dashboards',
@@ -56,7 +53,6 @@ export const en = {
   'stacks.draft.name': 'Programs in {ns}',
   'stacks.draft.note': 'Filled in automatically: {notes}.',
 
-  // ---- model-small ----
   'service.type.http': 'HTTP service',
   'service.type.grpc': 'gRPC service',
   'service.type.queue': 'Queue',
@@ -71,7 +67,6 @@ export const en = {
   'yaml.error.dependsOn': 'Service {name}: dependsOn must be a list of service names',
   'tz.withSummer': '{std}, summer {dst}',
 
-  // ---- routing ----
   'count.services': { one: '{n} service', other: '{n} services' },
   'routing.chip.nothing': 'Nothing is sent',
   'routing.chip.critical': 'Critical',
@@ -93,7 +88,6 @@ export const en = {
   'routing.scope.one': 'for service {name}',
   'routing.scope.many': { one: 'for {n} service', other: 'for {n} services' },
 
-  // ---- rules-lib ----
   'rule.kind.errors': 'Errors',
   'rule.kind.errorsPerOp': 'Errors per operation',
   'rule.kind.opErrors': 'Errors of one operation',
@@ -208,7 +202,6 @@ export const en = {
   'rule.state.firing': 'firing',
   'rule.state.unknown': 'no data',
 
-  // ---- message-lib ----
   'message.ph.value': 'current value',
   'message.ph.threshold': 'threshold',
   'message.ph.service': 'service',
@@ -244,7 +237,6 @@ export const en = {
   'msg.word.threshold': 'threshold',
   'msg.word.since': 'since',
 
-  // ---- schema ----
   'schema.type.string': 'string',
   'schema.type.integer': 'integer',
   'schema.type.number': 'number',
@@ -252,7 +244,6 @@ export const en = {
   'schema.type.array': 'list',
   'schema.type.object': 'section',
 
-  // ---- shell ----
   'nav.systems': 'Systems',
   'nav.alerts': 'Alerts',
   'nav.channels': 'Channels',
@@ -265,7 +256,6 @@ export const en = {
   'shell.version': 'version {v}',
   'shell.coreDown': 'core unreachable',
 
-  // ---- pages-simple ----
   'common.home': 'Go to home page',
   'word.services': { one: 'service', other: 'services' },
   'word.rules': { one: 'rule', other: 'rules' },
@@ -291,7 +281,6 @@ export const en = {
   'channels.title': 'Notification channels',
   'channels.description': 'Where Kamerton can send alerts. Channels are shared by all systems; what to send is chosen in each system.',
 
-  // ---- login ----
   'login.required': 'Enter username and password',
   'login.title': 'Sign in',
   'login.description': 'Enter the username and password set by your Kamerton administrator.',
@@ -300,7 +289,6 @@ export const en = {
   'login.busy': 'Signing in…',
   'login.submit': 'Sign in',
 
-  // ---- alerts ----
   'alerts.title': 'Alerts',
   'alerts.description': 'What is firing right now in all systems',
   'alerts.filtered': 'Only: {what}',
@@ -319,7 +307,6 @@ export const en = {
   'alerts.emptyFilteredHint': 'The problem has most likely gone away.',
   'alerts.emptyHint': 'When a rule fires, the alert shows up here.',
 
-  // ---- status ----
   'status.mode.cluster': 'in the Kubernetes cluster',
   'status.mode.file': 'in local files',
   'status.mode.none': 'nowhere (view only)',
@@ -344,7 +331,6 @@ export const en = {
   'status.authOn': 'on',
   'status.authOff': 'off: open Kamerton only through port-forward or an authenticating proxy',
 
-  // ---- system ----
   'common.more': 'More',
   'system.view.schema': 'Diagram',
   'system.view.rules': 'Rules',
@@ -381,7 +367,6 @@ export const en = {
   'system.unreadable': 'The description cannot be read',
   'system.unreadableHint': 'Open YAML mode and fix the error; the diagram appears after that.',
 
-  // ---- runbook ----
   'runbook.unavailable': 'Runbook unavailable',
   'runbook.unavailableHint': 'Service "{service}" may have been removed from the system.',
   'runbook.title': 'Runbook: {name}',
@@ -421,7 +406,6 @@ export const en = {
   'runbook.adviceAlert.queueStopped': 'The consumer group stopped reading the topic: it has no members (consumer pods crashed, are restarting or left the group), or messages wait while the group offset does not move (the consumer hangs or keeps failing on one message).\nCheck the consumer pods and logs, then the group itself: kafka-consumer-groups --describe --group <group>.\nMessages pile up even while the lag is below the threshold of the "Queue lag" rule: under low load it grows slowly.',
   'runbook.adviceAlert.latencyAboveNormal': 'Responses are many times slower than normal (over the previous hour), even if the latency threshold is not reached yet.\nCheck the dependencies of the service (cache, database, external APIs): a failed cache looks like this, for example.\nLook at slow traces for the time of the alert.',
 
-  // ---- common ----
   'unit.sec': 'sec',
   'unit.min': 'min',
   'unit.hour': 'h',
@@ -438,7 +422,6 @@ export const en = {
   'yaml.syntax': 'YAML error: {message}',
   'yaml.intro': 'The whole system description. Suggestions appear as you type or on Ctrl+Space, a hint on hovering a field; errors are marked on the fields. Service positions on the diagram are kept in metadata.annotations and do not affect the rules.',
 
-  // ---- create ----
   'create.nameFormat': 'Lowercase Latin letters, digits and hyphens, for example shop',
   'create.nameTaken': 'A system with this name already exists',
   'create.title': 'New system',
@@ -459,7 +442,6 @@ export const en = {
   'create.notWritable': 'Kamerton runs without description storage.',
   'create.submit': 'Create',
 
-  // ---- orient ----
   'orient.stack': 'Prometheus and Alertmanager',
   'orient.checking': 'Checking…',
   'orient.stackOk': 'Running: rules are evaluated, alerts are sent',
@@ -485,7 +467,6 @@ export const en = {
   'orient.title': 'Getting started',
   'orient.collapse': 'Collapse',
 
-  // ---- nodes ----
   'canvas.typeShort.http': 'HTTP',
   'canvas.typeShort.grpc': 'gRPC',
   'canvas.typeShort.queue': 'Queue',
@@ -501,7 +482,6 @@ export const en = {
   'node.handle': 'Drag to the service this one depends on',
   'node.deleteEdge': 'Remove link',
 
-  // ---- palette ----
   'palette.addService': 'Add service',
   'palette.found': 'Found in telemetry',
   'palette.promDown': 'Prometheus is unreachable, found services cannot be shown.',
@@ -510,7 +490,6 @@ export const en = {
   'palette.noRequests': 'no requests',
   'palette.inSystems': 'already in {list}',
 
-  // ---- canvas ----
   'canvas.panel': 'Alerts and services',
   'canvas.hidePanel': 'Hide panel',
   'canvas.showPanel': 'Show panel',
@@ -519,7 +498,6 @@ export const en = {
   'canvas.emptyHint': 'Add services on the left and link them: a line goes from a service to the one it calls.',
   'canvas.addTitle': 'Add to diagram',
 
-  // ---- service ----
   'common.close': 'Close',
   'common.add': 'Add',
   'service.nameTaken': 'This service already exists',
@@ -554,7 +532,6 @@ export const en = {
   'service.remove.confirm': 'Remove',
   'service.remove': 'Remove service from system',
 
-  // ---- dest ----
   'common.done': 'Done',
   'common.nothingFound': 'Nothing found.',
   'count.addresses': { one: '{n} address', other: '{n} addresses' },
@@ -595,7 +572,6 @@ export const en = {
   'dest.addInChannels': 'Add a chat or address on the Channels page',
   'dest.connectInChannels': 'Connect Telegram or email on the Channels page',
 
-  // ---- notify-small ----
   'chat.type.private': 'Private chat',
   'chat.type.group': 'Group',
   'chat.type.supergroup': 'Supergroup',
@@ -620,7 +596,6 @@ export const en = {
   'notice.links.offTitle': 'Links in notifications are off',
   'notice.links.offText': 'The external address of Kamerton is not set, so messages come without links (in-cluster addresses do not open on a phone). Set the {value} value in Helm (for example {example} when working through port-forward) or the {flag} flag.',
 
-  // ---- parts ----
   'parts.hidePassword': 'Hide password',
   'parts.showPassword': 'Show password',
   'parts.whereStored': 'Where the {what} is stored',
@@ -630,7 +605,6 @@ export const en = {
   'parts.testSent': 'Test message sent',
   'parts.testFailed': 'Not sent: {error}',
 
-  // ---- telegram ----
   'common.test': 'Test',
   'common.deleteFailed': 'Could not delete',
   'channel.unavailable': 'unavailable',
@@ -684,7 +658,6 @@ export const en = {
   'tg.loadError': 'Could not get the Telegram state',
   'tg.unavailable': 'Telegram setup is unavailable',
 
-  // ---- email ----
   'common.edit': 'Edit',
   'count.recipients': { one: '{n} recipient', other: '{n} recipients' },
   'email.smarthostFormat': 'Enter the server and port separated by a colon, for example smtp.example.com:465',
@@ -737,7 +710,6 @@ export const en = {
   'email.unavailable': 'Email setup is unavailable',
   'email.unavailableHint': 'A recipient can be described by hand in the system YAML mode (notifications.receivers).',
 
-  // ---- rules-view ----
   'rules.enabledOf': { one: '{n} of {total} rule enabled', other: '{n} of {total} rules enabled' },
   'rules.firing': 'firing: {n}',
   'rules.nothingFiring': 'nothing is firing now',
@@ -775,7 +747,6 @@ export const en = {
   'backtest.times': { one: '{n} time', other: '{n} times' },
   'backtest.ongoing': ', and the condition holds right now',
 
-  // ---- rulecard ----
   'ruleCard.perMinute.one': '{n} request per minute',
   'ruleCard.perMinute.other': '{n} requests per minute',
   'ruleCard.threshold': 'Threshold',
@@ -787,7 +758,6 @@ export const en = {
   'ruleCard.editCondition': 'Edit condition',
   'ruleCard.delete': 'Delete rule',
 
-  // ---- addrule ----
   'addRule.title': 'New rule',
   'addRule.description': 'The rule shows up on the diagram and in the list right away, and starts working after you save the system.',
   'addRule.services': 'Services',
@@ -802,7 +772,6 @@ export const en = {
   'addRule.previewFor': 'Result (for {service}):',
   'addRule.addFor': { one: 'Add for {n} service', other: 'Add for {n} services' },
 
-  // ---- custom ----
   'custom.fn.none': 'Value as is',
   'custom.fn.rate': 'Per-second rate (for counters)',
   'custom.fn.increase': 'Increase over the window (for counters)',
@@ -844,7 +813,6 @@ export const en = {
   'custom.apply': 'Apply',
   'custom.add': 'Add rule',
 
-  // ---- message ----
   'message.heading': 'Alert text',
   'message.own': 'custom',
   'message.default': 'default',
@@ -862,7 +830,6 @@ export const en = {
   'message.previewTitle': 'How it arrives in Telegram and email',
   'message.previewHint': '"…" is the value when the alert fires. When one message holds several alerts, each shows only its title and value.',
 
-  // ---- stacks ----
   'stackBlock.noAddress': 'address not set',
   'stackBlock.atInstall': 'At install: {url}',
   'stackBlock.notSet': 'not set',
@@ -887,7 +854,6 @@ export const en = {
   'stackPicker.row': 'Program set:',
   'stackPicker.missing': '"{name}" not found, the main set is used',
 
-  // ---- stackform ----
   'stackForm.newTitle': 'New program set',
   'stackForm.editDescription': 'The name shows in the list of systems and in their settings. Program addresses are changed on the set cards.',
   'stackForm.newDescription': 'For example, the Prometheus and Alertmanager of one team. A system is switched to a set in its settings; an empty address means the program is not connected.',
@@ -898,7 +864,6 @@ export const en = {
   'stackForm.ruleLabels': 'Rule labels (PrometheusRule)',
   'stackForm.routeLabels': 'Route labels (AlertmanagerConfig)',
 
-  // ---- address ----
   'common.failed': 'Failed: {error}',
   'address.latency': 'answered in {ms} ms',
   'address.title': '{program}, set "{set}"',
@@ -909,7 +874,6 @@ export const en = {
   'address.checkError': 'Check failed: {error}',
   'address.resetBuiltin': 'Back to the install address',
 
-  // ---- discover ----
   'discover.select': 'Select {service} in {ns}',
   'discover.namespace': 'namespace {ns}',
   'discover.inSet': 'already in set "{name}"',

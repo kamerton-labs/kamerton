@@ -8,14 +8,12 @@ import (
 	"fmt"
 	"strings"
 	"time"
-	// Go's time-zone database inside the binary: zone names are validated and
-	// resolved the same way in any container image, with or without
-	// /usr/share/zoneinfo.
+	// Embedded zone database: names resolve the same way in any image, with or
+	// without /usr/share/zoneinfo.
 	_ "time/tzdata"
 )
 
-// LoadTimeZone loads the time zone of notification messages
-// (spec.notifications.timeZone): an IANA name such as Asia/Almaty; "" is UTC.
+// LoadTimeZone loads spec.notifications.timeZone, an IANA name; "" is UTC.
 func LoadTimeZone(name string) (*time.Location, error) {
 	switch {
 	case name == "":

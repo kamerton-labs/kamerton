@@ -1,8 +1,6 @@
 // Copyright 2026 The Kamerton Authors
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// First screen: what is set up, and the systems Kamerton watches.
-
 import { useState } from 'react'
 import { Link } from 'react-router'
 import { Plus } from 'lucide-react'

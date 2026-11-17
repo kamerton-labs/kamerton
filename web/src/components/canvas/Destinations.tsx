@@ -1,11 +1,9 @@
 // Copyright 2026 The Kamerton Authors
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// "Where to send alerts" on the canvas. Routing is "severity × set of services ->
-// channel"; drawn as edges it would be a line from almost every service to
-// every channel, so it is a compact list docked on the canvas instead: each
-// channel with what it receives as chips, changed in a small dialog.
-// Selecting a service shows, in its panel, which channels get its alerts.
+// "Where to send alerts" on the canvas. Routing drawn as edges would link
+// almost every service to every channel, so it is a compact list docked on
+// the canvas instead, edited in a small dialog.
 
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router'
@@ -262,12 +260,12 @@ function DestinationDialog({ target, onClose }: { target: Target; onClose: () =>
   )
 }
 
-/** "Time in messages": the zone of the times in Telegram and email messages. */
+/** Zone of the times in Telegram and email messages. */
 function TimeZoneDialog({ onClose }: { onClose: () => void }) {
   const { desc, edit, readOnly } = useEditor()
   const { t, lang } = useT()
   const current = getTimeZone(desc)
-  // First time: the browser's zone is proposed.
+  // The browser's zone is proposed when none is set.
   const [chosen, setChosen] = useState(current || browserTimeZone())
   const [query, setQuery] = useState('')
   // eslint-disable-next-line react-hooks/exhaustive-deps -- labels follow the interface language

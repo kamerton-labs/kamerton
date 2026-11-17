@@ -1,11 +1,9 @@
 // Copyright 2026 The Kamerton Authors
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// "What goes where": every receiver of the description with the severities
-// and services it gets. Same model as the Telegram setup in the core
-// (internal/telegram applyRouting/routingByChat): a receiver listed under
-// routing.critical / routing.warning gets those alerts of every service; a
-// route limits it to some services.
+// Every receiver of the description with the severities and services it gets.
+// Same model as internal/telegram applyRouting/routingByChat: routing.critical
+// and routing.warning cover every service, a route limits it to some services.
 
 import { t, tn } from '@/i18n'
 import { clone, type Description, type Receiver, type SecretKeyRef, type Severity } from './types'
@@ -59,7 +57,6 @@ export function deriveDestinations(desc: Description): Destination[] {
   })
 }
 
-/** Receivers that get alerts of a service with a severity. */
 export function receiversFor(dests: Destination[], service: string, severity: Severity): Destination[] {
   return dests.filter((d) => d.severities.includes(severity) && (d.services.length === 0 || d.services.includes(service)))
 }
@@ -78,7 +75,7 @@ function dropRefs(desc: Description, name: string) {
   for (const k of Object.keys(r) as (keyof typeof r)[]) if (r[k] === undefined) delete r[k]
 }
 
-/** Sets what one receiver gets. No severities: the receiver gets nothing. */
+/** Sets what one receiver gets. No severities means it gets nothing. */
 export function setDestination(desc: Description, receiver: string, sel: { severities: Severity[]; services: string[] }): Description {
   const next = clone(desc)
   if (!next.spec.notifications?.receivers?.some((r) => r.name === receiver)) return desc
@@ -135,11 +132,7 @@ export interface EmailServerRef {
   secretKey: string
 }
 
-/**
- * Adds an email recipient (managed by the Channels page) as a receiver and
- * routes to it. The receiver name comes from the core (email-<id>), so the
- * core can keep addresses and the server in sync later.
- */
+/** Adds an email recipient as a receiver. The name (email-<id>) comes from the core so it can keep the address in sync. */
 export function addEmailDestination(
   desc: Description,
   recipient: { receiver: string; to: string[] },
@@ -204,10 +197,7 @@ export function channelUseLabel(u: { severities: Severity[]; services: string[] 
   return u.services.length ? `${sev} · ${servicesLabel(u.services)}` : sev
 }
 
-/**
- * One sentence for the bottom of the condition dialog:
- * "This chat gets: critical alerts for 3 services."
- */
+/** One sentence for the bottom of the condition dialog. */
 export function conditionSentence(sel: { severities: Severity[]; services: string[]; only: boolean }, target: 'chat' | 'email' = 'chat'): string {
   const chat = target === 'chat'
   if (sel.severities.length === 0) return t(chat ? 'routing.sentence.nothingChat' : 'routing.sentence.nothingEmail')

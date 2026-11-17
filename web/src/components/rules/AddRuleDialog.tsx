@@ -1,11 +1,6 @@
 // Copyright 2026 The Kamerton Authors
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// "Create rule": pick services, pick what to check from the library (or
-// a custom rule), set threshold / duration / severity, see the backtest,
-// add it to the draft. The rule appears on the canvas, in the list and in
-// YAML right away and is stored with the system on save.
-
 import { useMemo, useState } from 'react'
 import { DurationInput, Field, SeverityPicker } from '@/components/common'
 import { Button } from '@/components/ui/button'
@@ -132,7 +127,7 @@ function Body({ service, initialKind, onDone }: { service?: string; initialKind?
       severity: v.severity ?? undefined,
     })
 
-  const candidate = useMemo(() => (first && thresholdOk && (!needsOp || operation.trim()) && kind !== 'custom' ? apply(desc, first) : null), [desc, first, kind, v, operation, thresholdOk]) // eslint-disable-line react-hooks/exhaustive-deps
+  const candidate = useMemo(() => (first && thresholdOk && (!needsOp || operation.trim()) && kind !== 'custom' ? apply(desc, first) : null), [desc, first, kind, v, operation, thresholdOk]) // eslint-disable-line react-hooks/exhaustive-deps -- apply only closes over the listed values
   const preview = candidate ? deriveRules(candidate).find((r) => r.id === ruleId(first, kind, needsOp ? operation.trim() : undefined)) : undefined
 
   return (

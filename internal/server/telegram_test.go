@@ -34,7 +34,6 @@ import (
 	"github.com/kamerton-labs/kamerton/internal/telegram"
 )
 
-// Exists only in tests; never a real token.
 const fakeToken = "123456789:AAFakeTokenForServerTests_abcdefghijkl"
 
 // do sends a request the way the UI does (with the CSRF header).
@@ -123,8 +122,6 @@ func TestTelegramUnavailableWithoutCluster(t *testing.T) {
 	}
 }
 
-// TestTelegramFlowNeverReturnsToken walks the whole UI flow over HTTP and
-// checks every response body and every log line for the token.
 func TestTelegramFlowNeverReturnsToken(t *testing.T) {
 	tgAPI := fakeTelegramAPI(t)
 	path := writeDesc(t)
@@ -246,8 +243,6 @@ func clusterClient(t *testing.T, objs ...client.Object) client.Client {
 	return fake.NewClientBuilder().WithScheme(s).WithObjects(objs...).Build()
 }
 
-// In a cluster the server reads the description from the custom resource,
-// so discovery marks described services correctly.
 func TestClusterModeDescriptionAndDiscovery(t *testing.T) {
 	sd, _, err := description.LoadFile("../../testdata/otel-demo/system.yaml")
 	if err != nil {
@@ -280,7 +275,6 @@ func TestClusterModeDescriptionAndDiscovery(t *testing.T) {
 		t.Errorf("description: %s", body)
 	}
 
-	// PUT updates the resource; the controller would then regenerate.
 	raw, _ := description.ToYAML(sd)
 	changed := strings.Replace(string(raw), "environment: demo", "environment: prod", 1)
 	if code, body := do(t, "PUT", srv.URL+"/api/v1/description", changed); code != 200 {
@@ -294,7 +288,6 @@ func TestClusterModeDescriptionAndDiscovery(t *testing.T) {
 		t.Errorf("resource not updated: %q", got2.Spec.Environment)
 	}
 
-	// A new description is created in Kamerton's namespace.
 	newDesc := "apiVersion: kamerton.dev/v1alpha1\nkind: SystemDescription\nmetadata: {name: other}\nspec:\n  services:\n    - {name: api, type: http}\n"
 	if code, body := do(t, "PUT", srv.URL+"/api/v1/description", newDesc); code != 200 {
 		t.Fatalf("create: %d %s", code, body)
@@ -315,15 +308,12 @@ func TestRunbookEndpoint(t *testing.T) {
 	if code, _ := get(t, srv.URL+"/api/v1/runbooks/nope"); code != 404 {
 		t.Errorf("unknown service: %d", code)
 	}
-	// The UI route behind runbook_url is served by the SPA, not a 404.
 	_, settings := get(t, srv.URL+"/api/v1/settings")
 	if !strings.Contains(settings, `"externalURL":"http://localhost:8080"`) || !strings.Contains(settings, `"linksEnabled":true`) {
 		t.Errorf("settings: %s", settings)
 	}
 }
 
-// Secrets used by the UI flow live in Kamerton's namespace under the
-// existing convention, so an existing Secret keeps working.
 func TestExistingSecretIsRecognized(t *testing.T) {
 	tgAPI := fakeTelegramAPI(t)
 	c := clusterClient(t, &corev1.Secret{

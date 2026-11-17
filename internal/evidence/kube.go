@@ -27,7 +27,6 @@ import (
 	"github.com/kamerton-labs/kamerton/internal/rules"
 )
 
-// Bounds of what is read and reported.
 const (
 	maxPods     = 200
 	maxEvents   = 500
@@ -36,16 +35,11 @@ const (
 	// revisionAnnotation is the revision the Deployment controller writes
 	// on each of its ReplicaSets.
 	revisionAnnotation = "deployment.kubernetes.io/revision"
-	// revisionHashLabel is the StatefulSet revision of a pod.
-	revisionHashLabel = "controller-revision-hash"
+	revisionHashLabel  = "controller-revision-hash"
 )
 
-// Workload reports what changed in the pods of a service within the window
-// before now. The pods are found the way the saturation rules find them
-// (generator.PodTarget): the namespace of the workload (or defaults), and
-// the pod name regex. Without a namespace in the description, the namespace
-// is taken from the container metrics in Prometheus (the namespace label of
-// the series of those pods), as the rules see it.
+// Workload reports what changed in a service's pods within the window, finding pods
+// as the saturation rules do; without a namespace it comes from container metrics.
 func (c *Collector) Workload(ctx context.Context, sd *v1alpha1.SystemDescription, svc *v1alpha1.Service, prom prometheus.Querier, now time.Time) (generator.WorkloadChanges, error) {
 	var out generator.WorkloadChanges
 	pt := generator.PodTarget(sd, svc)
@@ -139,8 +133,7 @@ func (c *Collector) Workload(ctx context.Context, sd *v1alpha1.SystemDescription
 	return out, errors.Join(errs...)
 }
 
-// namespaceFromMetrics finds the namespace of the pods of a service in the
-// container metrics (restarts, else memory).
+// namespaceFromMetrics reads the pods' namespace from restart metrics, else memory metrics.
 func namespaceFromMetrics(ctx context.Context, prom prometheus.Querier, pt rules.PodTarget) (string, error) {
 	if prom == nil {
 		return "", nil
@@ -209,9 +202,8 @@ func restarts(p *corev1.Pod, recent func(time.Time) bool) []generator.Restart {
 	return out
 }
 
-// deploymentRollouts finds Deployments of the pods' ReplicaSets whose newest
-// ReplicaSet was created within the window, with the image tags of the
-// previous and the new ReplicaSet. It also returns the Deployment names.
+// deploymentRollouts finds Deployments whose newest ReplicaSet was created within
+// the window, with old and new image tags. It also returns the Deployment names.
 func (c *Collector) deploymentRollouts(ctx context.Context, ns string, podRS map[string]bool, recent func(time.Time) bool) ([]generator.Rollout, map[string]bool, error) {
 	deps := map[string]bool{}
 	if len(podRS) == 0 {
@@ -280,8 +272,6 @@ func (c *Collector) statefulSetRollout(ctx context.Context, ns, name string, pod
 	return r, nil
 }
 
-// warnings returns the most frequent Warning events of the given objects
-// within the window.
 func (c *Collector) warnings(ctx context.Context, ns string, objects map[string]bool, recent func(time.Time) bool) ([]generator.Warning, error) {
 	var list corev1.EventList
 	if err := c.Kube.List(ctx, &list, client.InNamespace(ns), client.Limit(maxEvents)); err != nil {
@@ -376,9 +366,8 @@ func images(cs []corev1.Container) []containerImage {
 	return out
 }
 
-// changedTags returns the tags of the first container whose image changed,
-// or the new tag of the first container when no image changed (a change of
-// the configuration only).
+// changedTags returns the tags of the first container whose image changed, or the
+// new tag of the first container when only the configuration changed.
 func changedTags(old, cur []containerImage) (string, string) {
 	prev := map[string]string{}
 	for _, c := range old {

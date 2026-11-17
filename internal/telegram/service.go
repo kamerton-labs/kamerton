@@ -20,7 +20,6 @@ import (
 	"github.com/kamerton-labs/kamerton/internal/descstore"
 )
 
-// Errors returned to the API.
 var (
 	ErrNoToken      = errors.New("the bot token is not configured")
 	ErrNotBot       = errors.New("the token belongs to an account that is not a bot")
@@ -28,23 +27,20 @@ var (
 	ErrInvalidInput = errors.New("invalid input")
 )
 
-// Service implements Telegram setup. One Service runs in every replica; only
-// the leader runs the polling loop (Start), the others serve the UI from the
-// shared state store.
+// Service runs in every replica. Only the leader polls (Start); the others serve the UI
+// from the shared state store.
 type Service struct {
 	API          *Client
 	Tokens       TokenStore
 	State        StateStore
 	Descriptions descstore.Store
-	// Namespace is Kamerton's namespace, where the token Secret lives.
-	Namespace string
+	Namespace    string
 	// Identity names this replica in the poll status (the pod name).
 	Identity string
 	Logger   *slog.Logger
 	// PollTimeout is the getUpdates long-poll timeout. Default 25s.
 	PollTimeout time.Duration
-	// Now is replaceable in tests.
-	Now func() time.Time
+	Now         func() time.Time
 
 	once sync.Once
 	wake chan struct{}
@@ -75,7 +71,6 @@ func (s *Service) init() {
 	})
 }
 
-// Wake makes a sleeping polling loop re-read the token now.
 func (s *Service) Wake() {
 	s.init()
 	select {
@@ -84,9 +79,6 @@ func (s *Service) Wake() {
 	}
 }
 
-// ---- Views returned by the API (never contain the token) ----
-
-// Status is the state shown in the UI.
 type Status struct {
 	Token       TokenStatus     `json:"token"`
 	Polling     PollingStatus   `json:"polling"`
@@ -104,31 +96,27 @@ type TokenStatus struct {
 	Namespace  string   `json:"namespace"`
 }
 
-// PollingStatus is the health of chat discovery.
 type PollingStatus struct {
 	PollStatus
 	// Active means an update poll succeeded within the last two minutes.
 	Active bool `json:"active"`
 }
 
-// ChatView is a chat with its routing from the description.
 type ChatView struct {
 	KnownChat
 	// Verified is false for chats known only from the description.
 	Verified bool        `json:"verified"`
 	Receiver string      `json:"receiver,omitempty"`
 	Routing  ChatRouting `json:"routing"`
-	// UsedIn lists the systems that send notifications to this chat.
-	UsedIn []ChatUse `json:"usedIn"`
+	UsedIn   []ChatUse   `json:"usedIn"`
 }
 
-// ChatUse is what one system sends to a chat.
 type ChatUse struct {
 	System string `json:"system"`
 	ChatRouting
 }
 
-// system returns one system, or the default system for "".
+// system returns the default system for an empty id.
 func (s *Service) system(ctx context.Context, id string) (*descstore.Snapshot, error) {
 	if id == "" {
 		return descstore.Default(ctx, s.Descriptions)
@@ -140,7 +128,6 @@ func (s *Service) system(ctx context.Context, id string) (*descstore.Snapshot, e
 	return snap, err
 }
 
-// usesByChat collects, for every chat, the systems routing alerts to it.
 func (s *Service) usesByChat(ctx context.Context) map[int64][]ChatUse {
 	out := map[int64][]ChatUse{}
 	list, err := s.Descriptions.List(ctx)
@@ -161,7 +148,6 @@ func (s *Service) usesByChat(ctx context.Context) map[int64][]ChatUse {
 	return out
 }
 
-// ChatRouting is what the chat receives.
 type ChatRouting struct {
 	Severities []string `json:"severities"`
 	// Services limits delivery to these services; empty means all services.
@@ -171,7 +157,6 @@ type ChatRouting struct {
 	Custom bool `json:"custom,omitempty"`
 }
 
-// DescriptionInfo tells the UI what can be routed.
 type DescriptionInfo struct {
 	Loaded    bool     `json:"loaded"`
 	Mode      string   `json:"mode"`
@@ -180,16 +165,11 @@ type DescriptionInfo struct {
 	Namespace string   `json:"namespace,omitempty"`
 	Services  []string `json:"services"`
 	Writable  bool     `json:"writable"`
-	// Problem explains why routing cannot be saved.
-	Problem string `json:"problem,omitempty"`
+	Problem   string   `json:"problem,omitempty"`
 }
 
-// Status assembles the UI state for the default system.
 func (s *Service) Status(ctx context.Context) (*Status, error) { return s.StatusFor(ctx, "") }
 
-// StatusFor assembles the UI state: the bot and the chats (shared by all
-// systems) with the routing of one system ("" means the default system)
-// and, per chat, every system that uses it.
 func (s *Service) StatusFor(ctx context.Context, systemID string) (*Status, error) {
 	s.init()
 	name, key := s.Tokens.Ref()
@@ -276,9 +256,8 @@ func (s *Service) StatusFor(ctx context.Context, systemID string) (*Status, erro
 	return out, nil
 }
 
-// namespaceProblem explains when the description cannot use the token
-// Secret: AlertmanagerConfig is created in the namespace of the description
-// and Secret references cannot cross namespaces.
+// namespaceProblem: AlertmanagerConfig lives in the namespace of the description, and
+// Secret references cannot cross namespaces.
 func (s *Service) namespaceProblem(sd *v1alpha1.SystemDescription) string {
 	if s.Descriptions.Mode() != descstore.ModeCluster || s.Namespace == "" || sd.Namespace == "" || sd.Namespace == s.Namespace {
 		return ""
@@ -288,8 +267,7 @@ func (s *Service) namespaceProblem(sd *v1alpha1.SystemDescription) string {
 		sd.Namespace, sd.Name, s.Namespace, s.Namespace, secret, s.Namespace)
 }
 
-// checkBot validates a token found in the store and records the bot. It
-// calls Telegram at most once a minute per bot.
+// checkBot calls Telegram at most once a minute per bot.
 func (s *Service) checkBot(ctx context.Context, token string, botID int64) string {
 	s.mu.Lock()
 	if s.lastCheckBot == botID && s.Now().Sub(s.lastCheck) < time.Minute {
@@ -313,8 +291,7 @@ func (s *Service) checkBot(ctx context.Context, token string, botID int64) strin
 	return p
 }
 
-// recordBot calls getMe and stores the bot. A different bot than before
-// resets discovered chats: they belonged to the old bot.
+// recordBot resets discovered chats when the bot changes: they belonged to the old bot.
 func (s *Service) recordBot(ctx context.Context, token string) (*BotInfo, error) {
 	me, err := s.API.GetMe(ctx, token)
 	if err != nil {
@@ -336,7 +313,6 @@ func (s *Service) recordBot(ctx context.Context, token string) (*BotInfo, error)
 	return info, err
 }
 
-// SetToken validates a token with getMe and stores it.
 func (s *Service) SetToken(ctx context.Context, token string) (*BotInfo, error) {
 	s.init()
 	token = strings.TrimSpace(token)
@@ -366,8 +342,7 @@ func (s *Service) SetToken(ctx context.Context, token string) (*BotInfo, error) 
 	return info, nil
 }
 
-// DeleteToken removes the Telegram receivers that use the token from the
-// description, then the token, then the discovered chats.
+// DeleteToken also removes the Telegram receivers that use the token and the discovered chats.
 func (s *Service) DeleteToken(ctx context.Context) error {
 	s.init()
 	if err := s.updateAll(ctx, func(sd *v1alpha1.SystemDescription) (bool, error) {
@@ -389,8 +364,7 @@ func (s *Service) DeleteToken(ctx context.Context) error {
 	return nil
 }
 
-// AddChat checks a chat by ID (for chats the bot joined before polling
-// started, whose updates are gone) and remembers it.
+// AddChat is for chats the bot joined before polling started, whose updates are gone.
 func (s *Service) AddChat(ctx context.Context, chatID int64) (*KnownChat, error) {
 	s.init()
 	token, botID, err := s.token(ctx)
@@ -404,8 +378,7 @@ func (s *Service) AddChat(ctx context.Context, chatID int64) (*KnownChat, error)
 	return kc, nil
 }
 
-// checkChat calls getChat/getChatMember and stores the result. It follows a
-// group-to-supergroup migration reported by Telegram.
+// checkChat follows a group-to-supergroup migration.
 func (s *Service) checkChat(ctx context.Context, token string, botID, chatID int64, source string) (*KnownChat, error) {
 	ch, err := s.API.GetChat(ctx, token, chatID)
 	var ae *APIError
@@ -442,8 +415,7 @@ func (s *Service) checkChat(ctx context.Context, token string, botID, chatID int
 	return out, err
 }
 
-// DeleteChat removes the chat's receivers from the description and forgets
-// the chat. The bot stays in the chat until someone removes it there.
+// DeleteChat leaves the bot in the chat until someone removes it there.
 func (s *Service) DeleteChat(ctx context.Context, chatID int64) error {
 	s.init()
 	if err := s.updateAll(ctx, func(sd *v1alpha1.SystemDescription) (bool, error) {
@@ -461,21 +433,16 @@ func (s *Service) DeleteChat(ctx context.Context, chatID int64) error {
 	return err
 }
 
-// TestResult is the outcome of a test message.
 type TestResult struct {
-	OK    bool   `json:"ok"`
-	Error string `json:"error,omitempty"`
-	// MigratedTo is set when the group became a supergroup with a new ID.
-	MigratedTo int64 `json:"migratedTo,omitempty"`
+	OK         bool   `json:"ok"`
+	Error      string `json:"error,omitempty"`
+	MigratedTo int64  `json:"migratedTo,omitempty"`
 }
 
-// testWords is the text of a test message in one language.
 type testWords struct {
 	head, anyChat, oneSystem, systems string
 }
 
-// testTexts are the test messages by notification language (see
-// spec.notifications.language).
 var testTexts = map[string]testWords{
 	languageEnglish: {
 		head:      "✅ <b>Kamerton</b>: test message.\n",
@@ -530,7 +497,6 @@ func (s *Service) language(ctx context.Context, systems []string) string {
 	return lang
 }
 
-// SendTest sends a test message to a chat.
 func (s *Service) SendTest(ctx context.Context, chatID int64) (*TestResult, error) {
 	s.init()
 	token, _, err := s.token(ctx)
@@ -588,21 +554,18 @@ func (s *Service) SendTest(ctx context.Context, chatID int64) (*TestResult, erro
 	return res, nil
 }
 
-// RoutingInput is the routing chosen for one chat.
 type RoutingInput struct {
 	ChatID     int64    `json:"chatID"`
 	Severities []string `json:"severities"`
 	Services   []string `json:"services"`
 }
 
-// SaveRouting is SaveRoutingFor the default system.
 func (s *Service) SaveRouting(ctx context.Context, in []RoutingInput) (*descstore.Snapshot, error) {
 	return s.SaveRoutingFor(ctx, "", in)
 }
 
-// SaveRoutingFor writes receivers and routes for the given chats into the
-// description of one system ("" means the default system). Chats not
-// listed are left as they are. A chat with no severities loses its receiver.
+// SaveRoutingFor leaves chats that are not listed as they are. A chat with no severities
+// loses its receiver.
 func (s *Service) SaveRoutingFor(ctx context.Context, systemID string, in []RoutingInput) (*descstore.Snapshot, error) {
 	s.init()
 	if _, _, err := s.token(ctx); err != nil {
@@ -636,8 +599,6 @@ func (s *Service) SaveRoutingFor(ctx context.Context, systemID string, in []Rout
 	return snap, err
 }
 
-// ---- Description editing ----
-
 func (s *Service) managed(r *v1alpha1.Receiver) bool {
 	if r.Telegram == nil {
 		return false
@@ -660,7 +621,7 @@ func (s *Service) updateDescription(ctx context.Context, id string, mutate func(
 	if cur.SD == nil {
 		return nil, &descstore.InvalidError{Result: *cur.Invalid}
 	}
-	// Dry run first: do not write when nothing changes.
+	// Dry run: do not write when nothing changes.
 	if changed, err := mutate(cur.SD.DeepCopy()); err != nil || !changed {
 		return cur, err
 	}
@@ -670,8 +631,7 @@ func (s *Service) updateDescription(ctx context.Context, id string, mutate func(
 	})
 }
 
-// updateAll applies mutate to every valid system (receivers and chats are
-// shared by all systems).
+// updateAll changes every valid system: receivers and chats are shared by all systems.
 func (s *Service) updateAll(ctx context.Context, mutate func(*v1alpha1.SystemDescription) (bool, error)) error {
 	list, err := s.Descriptions.List(ctx)
 	if err != nil {
@@ -689,8 +649,7 @@ func (s *Service) updateAll(ctx context.Context, mutate func(*v1alpha1.SystemDes
 	return errors.Join(errs...)
 }
 
-// removeReceivers deletes managed Telegram receivers matching match, and all
-// references to them in routing. It reports whether anything changed.
+// removeReceivers also drops all references to the removed receivers in routing.
 func (s *Service) removeReceivers(sd *v1alpha1.SystemDescription, match func(*v1alpha1.TelegramReceiver) bool) bool {
 	n := sd.Spec.Notifications
 	if n == nil {
@@ -744,7 +703,6 @@ func dropRefs(n *v1alpha1.Notifications, names map[string]bool) {
 	r.Routes = routes
 }
 
-// ReceiverName is the receiver name used for a chat added from the UI.
 func ReceiverName(chatID int64) string {
 	if chatID < 0 {
 		return "telegram-n" + strconv.FormatInt(-chatID, 10)
@@ -829,7 +787,6 @@ type chatRouting struct {
 	routing  ChatRouting
 }
 
-// routingByChat reads what each chat receives from the description.
 func (s *Service) routingByChat(sd *v1alpha1.SystemDescription) map[int64]chatRouting {
 	out := map[int64]chatRouting{}
 	if sd == nil || sd.Spec.Notifications == nil {
@@ -898,13 +855,10 @@ func (s *Service) routingByChat(sd *v1alpha1.SystemDescription) map[int64]chatRo
 	return out
 }
 
-// ---- Polling ----
-
 // NeedLeaderElection makes controller-runtime run Start only on the leader,
 // so two replicas never consume getUpdates of the same bot.
 func (s *Service) NeedLeaderElection() bool { return true }
 
-// Start runs the polling loop until ctx ends (manager.Runnable).
 func (s *Service) Start(ctx context.Context) error {
 	s.init()
 	s.Logger.Info("telegram chat discovery started", "replica", s.Identity)
@@ -991,10 +945,8 @@ func (s *Service) recordPollError(ctx context.Context, err error) {
 	})
 }
 
-// Migration is a group that became a supergroup with a new ID.
 type Migration struct{ From, To int64 }
 
-// process applies updates to the state, then migrations to the description.
 func (s *Service) process(ctx context.Context, ups []Update, botID int64) error {
 	var migs []Migration
 	_, err := s.State.Update(ctx, func(st *State) error {
@@ -1019,8 +971,7 @@ func (s *Service) process(ctx context.Context, ups []Update, botID int64) error 
 	return nil
 }
 
-// ApplyUpdate changes the state for one update and returns the chat
-// migrations it reports. Exported for tests.
+// ApplyUpdate is exported for tests.
 func ApplyUpdate(st *State, u Update, botID int64, now time.Time) []Migration {
 	if st.Chats == nil {
 		st.Chats = map[int64]*KnownChat{}
@@ -1135,7 +1086,6 @@ func (s *Service) migrate(ctx context.Context, from, to int64) error {
 	return s.migrateDescription(ctx, from, to)
 }
 
-// migrateDescription points receivers of the old group at the supergroup.
 func (s *Service) migrateDescription(ctx context.Context, from, to int64) error {
 	err := s.updateAll(ctx, func(sd *v1alpha1.SystemDescription) (bool, error) {
 		n := sd.Spec.Notifications
@@ -1209,7 +1159,6 @@ func (s *Service) token(ctx context.Context) (string, int64, error) {
 	return t, id, nil
 }
 
-// describeErr turns an error into a short Russian explanation for the UI.
 func describeErr(err error) string {
 	var ae *APIError
 	switch {
@@ -1239,7 +1188,6 @@ func describeErr(err error) string {
 	}
 }
 
-// DescribeError is describeErr for the HTTP layer.
 func DescribeError(err error) string { return describeErr(err) }
 
 func keys(m map[string]bool) []string {
@@ -1265,10 +1213,7 @@ func uniqueSorted(in []string) []string {
 // one Kamerton manages: Kamerton does not read other Secrets.
 var ErrNotKamertonBot = errors.New("the receiver uses a bot token Secret Kamerton does not manage")
 
-// SendFollowUp sends an HTML message (parse mode HTML) to a chat of a
-// receiver, with Kamerton's bot. ref is the receiver's botTokenSecret: only
-// Kamerton's own token Secret is used, so a follow-up goes out only where
-// the bot that sent the alert is Kamerton's.
+// SendFollowUp uses only Kamerton's own token Secret, never another Secret named by ref.
 func (s *Service) SendFollowUp(ctx context.Context, ref v1alpha1.SecretKeyRef, chatID int64, htmlText string) error {
 	s.init()
 	name, key := s.Tokens.Ref()

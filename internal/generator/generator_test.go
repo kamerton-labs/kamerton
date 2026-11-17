@@ -30,7 +30,6 @@ func TestGenerateExample(t *testing.T) {
 	if b.RuleCount == 0 {
 		t.Fatal("no rules generated")
 	}
-	// The bundle's rule file must be accepted by Prometheus' parser.
 	if err := rules.Validate(b.RulesYAML); err != nil {
 		t.Fatal(err)
 	}
@@ -144,7 +143,6 @@ func TestAlertmanagerConfigUsesKamertonTemplates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Without an external URL: Kamerton's message, no links at all.
 	b, err := Generate(sd, Options{})
 	if err != nil {
 		t.Fatal(err)
@@ -160,11 +158,9 @@ func TestAlertmanagerConfigUsesKamertonTemplates(t *testing.T) {
 	if strings.Contains(string(b.RulesYAML), "runbook_url") {
 		t.Error("runbook_url without an external URL")
 	}
-	// Plain-words annotations in English by default.
 	if !strings.Contains(string(b.RulesYAML), "kamerton_title: Too many failed requests") {
 		t.Error("English kamerton_title annotation missing")
 	}
-	// With an external URL: per-alert runbook links into the UI.
 	b, _ = Generate(sd, Options{RunbookBaseURL: "http://localhost:8080/"})
 	if !strings.Contains(string(b.RulesYAML), "runbook_url: http://localhost:8080/runbooks/checkout/KamertonErrorRateHigh") {
 		t.Error("per-alert runbook URL missing")
@@ -173,7 +169,6 @@ func TestAlertmanagerConfigUsesKamertonTemplates(t *testing.T) {
 	if !strings.Contains(string(j), "http://localhost:8080/alerts?alertname=") {
 		t.Error("alert link missing")
 	}
-	// Russian on request.
 	sd.Spec.Notifications.Language = "ru"
 	b, _ = Generate(sd, Options{})
 	if !strings.Contains(string(b.RulesYAML), "kamerton_title: Много ошибочных запросов") {

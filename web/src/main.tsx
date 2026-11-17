@@ -21,8 +21,7 @@ const queryClient = new QueryClient({
   },
 })
 
-// Any 401 from the API (no session, or it expired): go to the login page and
-// come back to the same address afterwards.
+// Any 401: go to the login page and come back here afterwards.
 setUnauthorizedHandler(() => {
   const { pathname, search, hash } = router.state.location
   if (isLoginPath(pathname)) return

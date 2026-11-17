@@ -14,7 +14,6 @@ import (
 
 var t0 = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 
-// series builds a series with samples at the given minute offsets.
 func series(name string, minutes ...int) *model.SampleStream {
 	s := &model.SampleStream{Metric: model.Metric{"service": model.LabelValue(name)}}
 	for _, m := range minutes {

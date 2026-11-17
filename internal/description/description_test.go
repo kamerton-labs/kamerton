@@ -312,7 +312,6 @@ func TestIncidentSwitches(t *testing.T) {
 	if res.Valid {
 		t.Error("groupByCause: maybe is accepted")
 	}
-	// Defaults: both on.
 	res = Validate([]byte(minimal))
 	if n := res.Document.Spec.Notifications; !n.GroupsByCause() || !n.SendsEvidence() {
 		t.Error("defaults are not on")

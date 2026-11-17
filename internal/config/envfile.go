@@ -19,10 +19,8 @@ const DefaultEnvFile = ".env"
 
 var envKey = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
-// ParseEnv parses KEY=VALUE lines: blank lines and lines starting with # are
-// skipped, an optional "export " prefix is allowed, values may be in double
-// quotes (with \n, \t, \" and \\ escapes) or single quotes (literal), and an
-// unquoted value ends at " #". Errors name the line, never the value.
+// ParseEnv parses KEY=VALUE lines with # comments, an optional "export " prefix and
+// double (escaped) or single (literal) quotes. Errors name the line, never the value.
 func ParseEnv(data []byte) ([][2]string, error) {
 	var out [][2]string
 	sc := bufio.NewScanner(bytes.NewReader(data))
@@ -106,9 +104,8 @@ func parseEnvValue(v string) (string, error) {
 	return strings.TrimSpace(v), nil
 }
 
-// LoadEnvFile sets the variables of an env file that are not already set in
-// the environment (the environment wins). A missing file is an error only
-// when required. It returns the names of the variables it set.
+// LoadEnvFile sets the variables of an env file that are not already set and
+// returns their names. A missing file is an error only when required.
 func LoadEnvFile(path string, required bool) ([]string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -134,9 +131,8 @@ func LoadEnvFile(path string, required bool) ([]string, error) {
 	return set, nil
 }
 
-// EnvFileArg finds -env-file / --env-file in serve's arguments before the
-// flags are parsed (flag defaults are read from the environment, so the file
-// has to be loaded first). It returns the path and whether it was given.
+// EnvFileArg finds -env-file in serve's arguments before flag parsing, because
+// flag defaults are read from the environment.
 func EnvFileArg(args []string) (string, bool) {
 	for i := 0; i < len(args); i++ {
 		a := args[i]
@@ -166,14 +162,12 @@ type Auth struct {
 	Secret string
 }
 
-// Auth environment variables.
 const (
 	EnvAuthUser     = "KAMERTON_AUTH_USER"
 	EnvAuthPassword = "KAMERTON_AUTH_PASSWORD"
 	EnvAuthSecret   = "KAMERTON_AUTH_SECRET"
 )
 
-// Enabled reports whether login is configured.
 func (a Auth) Enabled() bool { return a.User != "" && a.Password != "" }
 
 // AuthFromEnv reads the login settings. Both user and password, or neither,

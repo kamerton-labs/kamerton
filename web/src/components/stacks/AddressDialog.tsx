@@ -1,10 +1,8 @@
 // Copyright 2026 The Kamerton Authors
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// Change the address of one program of a set. "Check" asks the core to
-// open the address and say whether it really is that program (only reading
-// requests go to it); saving does not require a successful check, because
-// a program may be set up later.
+// Change the address of one program of a set. Saving does not require a
+// successful check, because a program may be set up later.
 
 import { useState } from 'react'
 import { Loader2, RotateCcw, SearchCheck } from 'lucide-react'
@@ -17,7 +15,6 @@ import { checkAddress, useResetStackAddress, useSetStackAddress, type CheckResul
 import { useT } from '@/i18n'
 import { checkText, checkTone, programInfo, stackName } from '@/lib/stacks'
 
-/** One line with the result of an address check. */
 export function CheckLine({ result }: { result: CheckResult }) {
   const { t } = useT()
   return (

@@ -1,9 +1,7 @@
 // Copyright 2026 The Kamerton Authors
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// What can be put on the canvas: a new service of some type, or a service
-// Kamerton sees in telemetry that is not in this system yet. Drag onto the
-// canvas or click to add.
+// New services by type, and services seen in telemetry but not yet in this system.
 
 import type { ReactNode } from 'react'
 import { Plus, Radar } from 'lucide-react'

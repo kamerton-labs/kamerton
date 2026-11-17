@@ -53,7 +53,6 @@ spec:
     - {name: db, type: database}
 `
 
-// Rules that need no threshold are on by default.
 func TestRulesOnByDefault(t *testing.T) {
 	rs := rulesOf(t, plainService)
 	api := alertsOf(rs, "api")
@@ -74,11 +73,10 @@ func TestRulesOnByDefault(t *testing.T) {
 	if f := api[rules.AlertOOMKilled].For.String(); f != "0s" {
 		t.Errorf("OOMKilled for %s, want 0s", f)
 	}
-	// The service latency rule no longer cuts off rare traffic by rate.
+	// The service latency rule does not cut off rare traffic by rate.
 	if e := api[rules.AlertLatency].Expr; strings.Contains(e, "> 0.05") || !strings.Contains(e, ">= 3") {
 		t.Errorf("latency volume condition:\n%s", e)
 	}
-	// A database has no request rules, but its pods are watched.
 	db := alertsOf(rs, "db")
 	if _, ok := db[rules.AlertOperationLatency]; ok {
 		t.Error("database got request rules")
@@ -135,7 +133,6 @@ spec:
 	if !strings.Contains(an.Expr, "10 * (") || an.For.String() != "15s" {
 		t.Errorf("web above normal: for %s\n%s", an.For, an.Expr)
 	}
-	// An operation with its own latency policy is left out of the per-operation rule.
 	if e := web[rules.AlertOperationLatency].Expr; !strings.Contains(e, `GET /slow`) || !strings.Contains(e, "span_name!~") {
 		t.Errorf("per-operation latency does not exclude GET /slow:\n%s", e)
 	}
@@ -186,7 +183,6 @@ spec:
       queue: {topic: audit, maxLag: 10, for: 30s}
 `
 
-// The stopped consumer rule comes with every queue lag rule, without a threshold.
 func TestQueueConsumerStoppedRule(t *testing.T) {
 	rs := rulesOf(t, queueSystem)
 	orders := alertsOf(rs, "orders")
@@ -197,7 +193,6 @@ func TestQueueConsumerStoppedRule(t *testing.T) {
 	if _, ok := orders[rules.AlertQueueLag]; !ok {
 		t.Fatal("lag rule missing")
 	}
-	// Severity follows the queue settings like the lag rule; "for" is a minute unless the queue's is shorter.
 	if r.Labels[rules.LabelSeverity] != "warning" || r.For.String() != "1m" {
 		t.Errorf("severity %s for %s", r.Labels[rules.LabelSeverity], r.For)
 	}
@@ -226,7 +221,6 @@ func TestQueueConsumerStoppedRule(t *testing.T) {
 			t.Errorf("telemetry %s still generates the rule", tel)
 		}
 	}
-	// Defaults: the kafkametricsreceiver names.
 	doc := strings.Replace(queueSystem, "  telemetry:\n    queues: {membersMetric: my_members, offsetMetric: my_offset}\n", "", 1)
 	r = alertsOf(rulesOf(t, doc), "orders")[rules.AlertQueueConsumerStopped]
 	if !strings.Contains(r.Expr, "kafka_consumer_group_members{") || !strings.Contains(r.Expr, "kafka_consumer_group_offset_ratio{") {

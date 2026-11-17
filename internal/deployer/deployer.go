@@ -1,17 +1,7 @@
 // Copyright 2026 The Kamerton Authors
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// Package deployer turns a generated bundle into Kubernetes objects and
-// applies them with server-side apply:
-//
-//   - PrometheusRule (monitoring.coreos.com/v1) with the alerting rules;
-//   - AlertmanagerConfig (monitoring.coreos.com/v1alpha1) with routes and
-//     receivers, credentials referenced from Secrets;
-//   - ConfigMaps with Grafana dashboards (picked up by the Grafana sidecar)
-//     and runbook stubs.
-//
-// The bring-your-own mode (pushing to external Prometheus/Grafana APIs) is not
-// implemented yet.
+// Package deployer turns a generated bundle into Kubernetes objects and applies them with server-side apply.
 package deployer
 
 import (
@@ -29,10 +19,8 @@ import (
 	"github.com/kamerton-labs/kamerton/internal/generator"
 )
 
-// FieldOwner is the server-side apply field manager name.
 const FieldOwner = "kamerton"
 
-// Labels put on every managed object.
 const (
 	LabelManagedBy = "app.kubernetes.io/managed-by"
 	LabelSystem    = "kamerton.dev/system"
@@ -41,28 +29,22 @@ const (
 	LabelGrafanaDashboard = "grafana_dashboard"
 )
 
-// Applier applies objects to a cluster.
 type Applier interface {
 	Apply(ctx context.Context, objs []*unstructured.Unstructured) error
 }
 
-// ExtraLabels are labels added to generated objects besides Kamerton's own
-// (which always win): on every object, and on the PrometheusRule and the
-// AlertmanagerConfig only, so that the right Prometheus Operator instance
-// picks them up (labels of the system's set of programs).
+// ExtraLabels are added to generated objects; Kamerton's own labels always win.
+// Rule and AlertmanagerConfig labels select the Prometheus Operator instance.
 type ExtraLabels struct {
 	All                map[string]string
 	Rule               map[string]string
 	AlertmanagerConfig map[string]string
 }
 
-// Objects builds the Kubernetes objects for a bundle in namespace.
 func Objects(b *generator.Bundle, namespace string, extraLabels map[string]string) ([]*unstructured.Unstructured, error) {
 	return ObjectsWithLabels(b, namespace, ExtraLabels{All: extraLabels})
 }
 
-// ObjectsWithLabels builds the Kubernetes objects for a bundle in namespace
-// with extra labels.
 func ObjectsWithLabels(b *generator.Bundle, namespace string, extra ExtraLabels) ([]*unstructured.Unstructured, error) {
 	base := fmt.Sprintf("kamerton-%s", b.System)
 	own := map[string]any{LabelManagedBy: "kamerton", LabelSystem: b.System, LabelManaged: "true"}
@@ -128,16 +110,12 @@ func ObjectsWithLabels(b *generator.Bundle, namespace string, extra ExtraLabels)
 	return out, nil
 }
 
-// KubernetesApplier applies objects with server-side apply.
-//
-// TODO: prune objects that are no longer generated (label selector on
-// kamerton.dev/system); owner references (set by the controller) only clean
-// up when the whole SystemDescription is deleted.
+// TODO: prune objects that are no longer generated; owner references clean up
+// only when the whole SystemDescription is deleted.
 type KubernetesApplier struct {
 	Client client.Client
 }
 
-// Apply implements Applier.
 func (a *KubernetesApplier) Apply(ctx context.Context, objs []*unstructured.Unstructured) error {
 	var errs []error
 	for _, o := range objs {
@@ -149,13 +127,10 @@ func (a *KubernetesApplier) Apply(ctx context.Context, objs []*unstructured.Unst
 	return errors.Join(errs...)
 }
 
-// DryRunApplier records objects instead of applying them (tests of the
-// controller use it).
 type DryRunApplier struct {
 	Applied []*unstructured.Unstructured
 }
 
-// Apply implements Applier.
 func (d *DryRunApplier) Apply(_ context.Context, objs []*unstructured.Unstructured) error {
 	d.Applied = objs
 	return nil

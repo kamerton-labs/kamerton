@@ -1,11 +1,7 @@
 // Copyright 2026 The Kamerton Authors
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// Package triage finds the probable source of an incident by walking the
-// dependency graph from the alerting service (ProbableSource), and groups
-// the active alerts of a system into incidents by cause (incidents.go).
-// Evidence about a cause (workload changes, failing operations, logs,
-// traces) is collected by package evidence.
+// Package triage finds the probable source of an incident and groups alerts by cause.
 package triage
 
 import (
@@ -14,12 +10,10 @@ import (
 	"github.com/kamerton-labs/kamerton/api/v1alpha1"
 )
 
-// Graph is the service dependency graph of a description.
 type Graph struct {
 	deps map[string][]string
 }
 
-// NewGraph builds the graph from spec.services[].dependsOn.
 func NewGraph(spec *v1alpha1.SystemDescriptionSpec) *Graph {
 	g := &Graph{deps: make(map[string][]string, len(spec.Services))}
 	for _, s := range spec.Services {
@@ -28,20 +22,15 @@ func NewGraph(spec *v1alpha1.SystemDescriptionSpec) *Graph {
 	return g
 }
 
-// Finding is the result of a probable-source search.
 type Finding struct {
-	// Alerting is the service the alert fired for.
 	Alerting string `json:"alerting"`
-	// ProbableSource is the deepest unhealthy dependency whose own
-	// dependencies are healthy; the alerting service itself when none of its
-	// dependencies is unhealthy.
-	ProbableSource string `json:"probableSource"`
-	// Chain is the dependency path from Alerting to ProbableSource.
-	Chain []string `json:"chain"`
+	// ProbableSource is the deepest unhealthy dependency whose own dependencies are
+	// healthy, or Alerting itself when no dependency is unhealthy.
+	ProbableSource string   `json:"probableSource"`
+	Chain          []string `json:"chain"`
 }
 
-// ProbableSource walks dependencies of alerting. unhealthy is the set of
-// services that currently have firing alerts.
+// ProbableSource walks the dependencies of alerting; unhealthy holds services with firing alerts.
 func (g *Graph) ProbableSource(alerting string, unhealthy map[string]bool) Finding {
 	// BFS gives the shortest path to every reachable service; the visited set
 	// makes cycles harmless.
@@ -78,7 +67,6 @@ func (g *Graph) ProbableSource(alerting string, unhealthy map[string]bool) Findi
 	return Finding{Alerting: alerting, ProbableSource: best, Chain: chain}
 }
 
-// hasUnhealthyDependency reports whether any service reachable from n is unhealthy.
 func (g *Graph) hasUnhealthyDependency(n string, unhealthy map[string]bool) bool {
 	seen := map[string]bool{n: true}
 	stack := append([]string(nil), g.deps[n]...)

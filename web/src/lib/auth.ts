@@ -1,10 +1,8 @@
 // Copyright 2026 The Kamerton Authors
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// Login (enabled on the core with KAMERTON_AUTH_USER / KAMERTON_AUTH_PASSWORD).
-// The session lives in an HttpOnly cookie; the UI only asks the core whether
-// it has one. Every request carries X-Requested-With, which the core requires
-// on every state-changing request, with or without login (CSRF protection).
+// Login (KAMERTON_AUTH_USER / KAMERTON_AUTH_PASSWORD on the core). The session
+// is an HttpOnly cookie, so the UI only asks the core whether it has one.
 
 import { t } from '@/i18n'
 
@@ -35,7 +33,6 @@ export function loginPath(current: string): string {
 
 export const isLoginPath = (pathname: string) => pathname === LOGIN_PATH || pathname.startsWith(LOGIN_PATH + '/')
 
-/** Message for a failed login, in the interface language. */
 export function loginErrorMessage(status: number, retryAfter?: number | null, fallback?: string): string {
   if (status === 401) return t('login.error.wrong')
   if (status === 429) return t('login.error.tooMany', { s: Math.max(1, Math.ceil(retryAfter ?? 60)) })

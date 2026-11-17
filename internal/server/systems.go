@@ -22,7 +22,6 @@ import (
 	"github.com/kamerton-labs/kamerton/internal/stack"
 )
 
-// systemSummary is one card of the system list.
 type systemSummary struct {
 	ID          string `json:"id"`
 	Name        string `json:"name"`
@@ -51,7 +50,6 @@ type alertCounts struct {
 	Warning  int `json:"warning"`
 }
 
-// AnnotationDescription is an optional human description of the system.
 const AnnotationDescription = descstore.AnnotationPrefix + "description"
 
 func (s *Server) listSystems(w http.ResponseWriter, r *http.Request) {
@@ -119,11 +117,9 @@ func (s *Server) listSystems(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
-// alertCounts counts active alerts per system ID, each system from the
-// Alertmanager of its set (or, without one, from its Prometheus' ALERTS).
-// Every distinct Alertmanager and Prometheus is asked once, concurrently.
-// A system missing from counts has no alert data. configured is true when
-// some system has a source; err is the first failure.
+// alertCounts counts active alerts per system ID from the Alertmanager of its set,
+// or without one from Prometheus' ALERTS, asking each source once. A system
+// missing from counts has no alert data; err is the first failure.
 func (s *Server) alertCounts(ctx context.Context, list []*descstore.Snapshot) (counts map[string]*alertCounts, configured bool, err error) {
 	type source struct {
 		am     alertmanager.Reader
@@ -168,7 +164,6 @@ func (s *Server) alertCounts(ctx context.Context, list []*descstore.Snapshot) (c
 				src.err = err
 				return
 			}
-			// Without Alertmanager, firing alerts are read from Prometheus.
 			m := rules.Matchers{}.Eq(rules.LabelManaged, "true").Eq("alertstate", "firing")
 			v, err := src.prom.Query(ctx, m.Selector("ALERTS"), time.Now())
 			src.err = err
@@ -217,9 +212,8 @@ func (s *Server) alertCounts(ctx context.Context, list []*descstore.Snapshot) (c
 	return counts, configured, err
 }
 
-// system loads the system named in the path; it writes the error response
-// and returns nil when it cannot. requireValid rejects stored documents
-// that do not validate.
+// system writes the error response and returns nil when it cannot load the system.
+// requireValid rejects stored documents that do not validate.
 func (s *Server) system(w http.ResponseWriter, r *http.Request, requireValid bool) *descstore.Snapshot {
 	snap, err := s.opts.Descriptions.Get(r.Context(), r.PathValue("id"))
 	switch {
@@ -281,8 +275,7 @@ func (s *Server) putSystem(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
-	// The stored version decides which Secret references may stay; a
-	// missing system is reported by Save.
+	// The stored version decides which Secret references may stay; Save reports a missing system.
 	stored, _ := s.opts.Descriptions.Get(ctx, r.PathValue("id"))
 	if !s.allowSave(ctx, w, body, stored) {
 		return
@@ -307,7 +300,6 @@ func (s *Server) deleteSystem(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"deleted": true})
 }
 
-// validateSystem validates a draft of a system; renaming is reported as an error.
 func (s *Server) validateSystem(w http.ResponseWriter, r *http.Request) {
 	snap := s.system(w, r, false)
 	if snap == nil {
@@ -365,8 +357,6 @@ func (s *Server) alertsSystem(w http.ResponseWriter, r *http.Request) {
 	s.alertsFor(w, r, snap)
 }
 
-// systemBacktestRequest backtests either a raw expression or a rule of a
-// (draft) description, identified by service, alert name and operation.
 type systemBacktestRequest struct {
 	backtestRequest
 	YAML      string `json:"yaml"`
@@ -431,8 +421,6 @@ type ruleState struct {
 	Labels   map[string]string `json:"labels"`
 }
 
-// ruleStates reads the current state of the system's rules from
-// Prometheus' ALERTS series.
 func (s *Server) ruleStates(w http.ResponseWriter, r *http.Request) {
 	snap := s.system(w, r, false)
 	if snap == nil {

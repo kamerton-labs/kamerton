@@ -1,7 +1,7 @@
 // Copyright 2026 The Kamerton Authors
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// Helpers of the email forms (kept apart from components for tests).
+// Kept apart from the components so it can be unit-tested.
 
 import { t } from '@/i18n'
 

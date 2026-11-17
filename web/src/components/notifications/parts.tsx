@@ -1,8 +1,7 @@
 // Copyright 2026 The Kamerton Authors
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// Small pieces shared by the channel cards (Telegram, email) and the
-// "where to send" panel of the canvas.
+// Pieces shared by the channel cards and the canvas "where to send" panel.
 
 import { useState, type ComponentProps, type ReactNode } from 'react'
 import { Link } from 'react-router'
@@ -23,7 +22,6 @@ const tintClass: Record<Tint, string> = {
   warn: 'bg-warn/15 text-warn',
 }
 
-/** An icon in a tinted rounded square. */
 export function IconTile({ icon: Icon, tint = 'neutral', size = 'md', round, className }: { icon: LucideIcon; tint?: Tint; size?: 'xs' | 'sm' | 'md' | 'lg'; round?: boolean; className?: string }) {
   return (
     <span
@@ -51,7 +49,6 @@ const dotTone: Record<DotTone, string> = {
   busy: 'bg-ok animate-pulse',
 }
 
-/** A small coloured dot with a few words. */
 export function StatusDot({ tone, children, className }: { tone: DotTone; children: ReactNode; className?: string }) {
   return (
     <span className={cn('inline-flex items-center gap-1.5 text-xs text-muted-foreground', className)}>
@@ -73,7 +70,6 @@ export function Chip({ tone = 'neutral', children, className }: { tone?: ChipTon
   return <span className={cn('inline-flex h-5 max-w-full items-center truncate rounded-md border px-1.5 text-[11px] leading-none font-medium', chipTone[tone], className)}>{children}</span>
 }
 
-/** Password field with a show/hide toggle. Hidden by default. */
 export function PasswordInput({ className, wrapperClassName, ...props }: Omit<ComponentProps<'input'>, 'type'> & { wrapperClassName?: string }) {
   const [shown, setShown] = useState(false)
   const { t } = useT()
@@ -117,7 +113,6 @@ export function SecretLocation({ what, secret }: { what: string; secret: { names
   )
 }
 
-/** Copies a value; shows a check for a moment. */
 export function CopyButton({ value, label, className, children }: { value: string; label: string; className?: string; children?: ReactNode }) {
   const [done, setDone] = useState(false)
   return (
@@ -160,7 +155,6 @@ export function UseChips({ uses, empty }: { uses: ChannelUse[]; empty?: ReactNod
   )
 }
 
-/** Hint when no system writes to a channel yet. */
 export function NoUsesHint() {
   const { t } = useT()
   return (
@@ -173,7 +167,6 @@ export function NoUsesHint() {
   )
 }
 
-/** Inline result of a test message. */
 export function TestResultLine({ result }: { result?: { ok: boolean; error?: string } }) {
   const { t } = useT()
   if (!result) return null
@@ -184,7 +177,6 @@ export function TestResultLine({ result }: { result?: { ok: boolean; error?: str
   )
 }
 
-/** The dashed "add" tile at the end of a grid. */
 export function AddTile({ title, children, className }: { title: ReactNode; children?: ReactNode; className?: string }) {
   return (
     <div className={cn('flex min-h-40 flex-col gap-3 rounded-xl border border-dashed p-4', className)}>
@@ -197,7 +189,6 @@ export function AddTile({ title, children, className }: { title: ReactNode; chil
   )
 }
 
-/** Numbered step of a guided setup. */
 export function Step({ n, children, done }: { n: number; children: ReactNode; done?: boolean }) {
   return (
     <li className="flex gap-3">
@@ -215,7 +206,6 @@ export function Step({ n, children, done }: { n: number; children: ReactNode; do
   )
 }
 
-/** One channel on the Channels page: icon, name, status, then its content. */
 export function ChannelCard({
   icon,
   tint,

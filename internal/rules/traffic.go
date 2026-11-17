@@ -11,71 +11,41 @@ import (
 	"github.com/prometheus/prometheus/model/rulefmt"
 )
 
-// AlertRequestsStopped fires when a service that normally receives requests
-// stops receiving them.
 const AlertRequestsStopped = "KamertonRequestsStopped"
 
-// SignalTraffic is the signal of AlertRequestsStopped.
 const SignalTraffic Signal = "traffic"
 
-// Fixed parts of the traffic rule. They are not settings: they define what
-// "normal traffic" and "the telemetry is flowing" mean.
+// These are not settings: they define what "normal traffic" and "the telemetry
+// is flowing" mean.
 const (
-	// TrafficBaselineRange is how far back normal traffic is looked for.
-	// A day survives gaps in the data (a stopped Prometheus, a machine that
-	// slept for hours): the average is taken only over the steps that have
-	// data, so an empty hour neither lowers the normal nor removes it.
+	// TrafficBaselineRange: a day survives gaps in the data. The average uses only
+	// steps with data, so an empty hour neither lowers the normal nor removes it.
 	TrafficBaselineRange = 24 * time.Hour
-	// TrafficBaselineStep is the resolution of the normal: the average of
-	// rates over consecutive windows of this length.
+	// TrafficBaselineStep: the normal averages rates over windows of this length.
 	TrafficBaselineStep = 10 * time.Minute
-	// TrafficMinHistory is the history a service needs before it has a
-	// normal. A service that appeared a minute ago has no normal and no alert.
-	TrafficMinHistory = time.Hour
-	// trafficVisibleShare is the share of the system's services that must
-	// still have data (a computable rate, zero included) for the rule to
-	// trust a missing series. Below it the telemetry pipeline has stopped or
-	// is restarting, and the rule stays silent instead of paging per service.
+	TrafficMinHistory   = time.Hour
+	// trafficVisibleShare of the system's services must still have data for the
+	// rule to trust a missing series. Below it the telemetry pipeline is down or
+	// restarting, and the rule stays silent instead of paging per service.
 	trafficVisibleShare = 0.5
-	// trafficSeenStep is the resolution of "services seen during the last
-	// day", the denominator of trafficVisibleShare.
-	trafficSeenStep = time.Hour
+	trafficSeenStep     = time.Hour
 )
 
-// TrafficParams parameterize the "requests stopped arriving" template.
 type TrafficParams struct {
 	Meta
-	// Target selects the incoming calls of the service (server and consumer
-	// spans, without excluded operations); Target.Window is the window of
-	// the current rate.
+	// Target selects incoming calls; Target.Window is the window of the current rate.
 	Target SpanTarget
-	// Threshold is the share of normal traffic (0..1) at or below which the
-	// alert fires; 0 fires only when calls stop completely.
+	// Threshold is the share of normal traffic (0..1) at or below which the alert
+	// fires; 0 fires only when calls stop completely.
 	Threshold float64
-	// MinRequestsPerSecond is the normal traffic below which the rule does
-	// not apply.
+	// MinRequestsPerSecond is the normal traffic below which the rule does not apply.
 	MinRequestsPerSecond float64
-	// SystemServices are the service label values of all services of the
-	// system. Telemetry is considered flowing while at least half of those
-	// seen during the last day still have data.
-	SystemServices []string
+	SystemServices       []string
 }
 
-// TrafficStopped renders an alert on a service that stopped receiving calls.
-//
-// The current rate is the rate of incoming calls over Target.Window; a series
-// that is absent counts as zero, like a counter that stopped growing. Normal
-// traffic is the average of 10-minute rates over the last day, only where
-// data exists, summed over all series of the service (so a collector restart,
-// which re-creates every series under new labels, does not reset it), and
-// exists only with at least an hour of history. The rule fires when the
-// current rate is at or below Threshold × normal and the normal is above
-// MinRequestsPerSecond, provided at least half of the system's services seen
-// during the last day still have data now and one window ago (otherwise the
-// telemetry pipeline itself is down or has just come back, and series are
-// missing for everyone).
-//
-// The value of the alert is the current rate in calls per minute.
+// TrafficStopped counts an absent series as zero. Normal traffic is summed over
+// all series of the service, so a collector restart that re-creates series does
+// not reset it. The value is in calls per minute.
 func TrafficStopped(p TrafficParams) rulefmt.Rule {
 	t := p.Target
 	svc := t.ServiceLabel

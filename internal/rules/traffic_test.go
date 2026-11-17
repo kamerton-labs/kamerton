@@ -27,7 +27,6 @@ func TestTrafficStoppedRendersAndValidates(t *testing.T) {
 		t.Errorf("alert %s labels %v", r.Alert, r.Labels)
 	}
 	for _, want := range []string{
-		// Incoming calls of the service only, without excluded operations.
 		`sum by (service_name) (rate(traces_span_metrics_calls_total{service_name="checkout", span_kind=~"SPAN_KIND_SERVER|SPAN_KIND_CONSUMER", span_name!~"flagd\\.evaluation\\.v2\\.Service/EventStream"}[2m]))`,
 		// An absent series counts as zero.
 		"or on (service_name)\n    0 * (",
@@ -36,7 +35,7 @@ func TestTrafficStoppedRendersAndValidates(t *testing.T) {
 		`[1d:10m]) >= 6`,
 		"<= on (service_name)\n  0.1 * (",
 		") > 0.02)",
-		// Telemetry flowing for at least half of the system's services, now and one window ago.
+		// Telemetry is flowing, now and one window ago.
 		`service_name=~"frontend|checkout|payment"`,
 		`>= 0.5 * count(count_over_time((group by (service_name) (`,
 		`[2m] offset 2m)))`,
@@ -75,8 +74,7 @@ func TestTrafficStoppedLanguageAndEdgeCases(t *testing.T) {
 		t.Errorf("threshold 0 must compare with 0 (absent or exactly zero):\n%s", r.Expr)
 	}
 
-	// A backtick cannot be embedded in the query of the value annotation:
-	// the normal rate is left out, the rule stays valid.
+	// A backtick cannot be embedded in the annotation query: the normal rate is left out.
 	p = trafficParams()
 	p.Target.ExcludeOperations = []string{"odd`name"}
 	r = TrafficStopped(p)
@@ -86,8 +84,7 @@ func TestTrafficStoppedLanguageAndEdgeCases(t *testing.T) {
 	}
 }
 
-// trafficExpr is the rule for service "pay" of a system with pay, web and
-// cart, on a metric named "calls", as one line (the promqltest syntax).
+// trafficExpr returns the rule for "pay" as one line, the promqltest syntax.
 func trafficExpr(t *testing.T) string {
 	t.Helper()
 	r := TrafficStopped(TrafficParams{
@@ -102,16 +99,15 @@ func trafficExpr(t *testing.T) string {
 	return strings.Join(strings.Fields(r.Expr), " ")
 }
 
-// Two services with steady traffic for 6 hours (sampled every minute), used
-// as the rest of the system in the scenarios below.
+// others is the rest of the system: two services with steady traffic for 6 hours.
 const others = `
   calls{service_name="web", span_kind="SPAN_KIND_SERVER"} 0+60x360
   calls{service_name="cart", span_kind="SPAN_KIND_SERVER"} 0+30x360
 `
 
-// The scenarios run the generated expression in Prometheus' own PromQL engine
-// (promqltest) on synthetic series. "pay" normally gets 6 calls a minute
-// (0.1/s); unless said otherwise its calls stop at minute 180.
+// The scenarios run the expression in Prometheus' PromQL engine (promqltest).
+// "pay" normally gets 6 calls a minute; unless said otherwise its calls stop at
+// minute 180.
 func TestTrafficStoppedScenarios(t *testing.T) {
 	expr := trafficExpr(t)
 	for _, tc := range []struct{ name, script string }{

@@ -1,8 +1,7 @@
 // Copyright 2026 The Kamerton Authors
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// Command schemagen converts the generated SystemDescription CRD into the
-// standalone JSON Schema embedded into the core. Invoked by `make generate`.
+// Command schemagen converts the generated CRD into the JSON Schema embedded in the core.
 package main
 
 import (

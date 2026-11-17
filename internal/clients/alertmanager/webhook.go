@@ -5,8 +5,7 @@ package alertmanager
 
 import "time"
 
-// Webhook is the body Alertmanager posts to a webhook receiver (payload
-// version 4), the subset Kamerton reads.
+// Webhook is the subset of Alertmanager's webhook payload (version 4) that Kamerton reads.
 type Webhook struct {
 	Version           string            `json:"version"`
 	GroupKey          string            `json:"groupKey"`
@@ -20,7 +19,6 @@ type Webhook struct {
 	Alerts            []WebhookAlert    `json:"alerts"`
 }
 
-// WebhookAlert is one alert of a webhook notification.
 type WebhookAlert struct {
 	Status      string            `json:"status"` // firing or resolved
 	Labels      map[string]string `json:"labels"`

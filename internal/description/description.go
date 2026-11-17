@@ -1,8 +1,7 @@
 // Copyright 2026 The Kamerton Authors
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// Package description loads and validates system descriptions, in their YAML
-// file form or as SystemDescription custom resources.
+// Package description loads and validates system descriptions in file or custom resource form.
 package description
 
 import (
@@ -18,7 +17,6 @@ import (
 	"github.com/kamerton-labs/kamerton/internal/schema"
 )
 
-// Severity of a validation issue.
 type Severity string
 
 const (
@@ -26,7 +24,6 @@ const (
 	SeverityWarning Severity = "warning"
 )
 
-// Issue is one validation problem.
 type Issue struct {
 	// Path is a JSON pointer into the document, for example /spec/services/2/dependsOn/0.
 	Path     string   `json:"path"`
@@ -34,7 +31,6 @@ type Issue struct {
 	Severity Severity `json:"severity"`
 }
 
-// Result is the outcome of validating a description document.
 type Result struct {
 	Valid    bool    `json:"valid"`
 	Errors   []Issue `json:"errors"`
@@ -54,8 +50,7 @@ func (r *Result) add(is ...Issue) {
 	}
 }
 
-// LoadFile reads, validates and decodes a description file. It fails if the
-// description has validation errors (warnings are ignored).
+// LoadFile reads, validates and decodes a description file; warnings are ignored.
 func LoadFile(path string) (*v1alpha1.SystemDescription, []byte, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -90,8 +85,6 @@ func displayPath(p string) string {
 	return p
 }
 
-// Validate validates a YAML or JSON description document: syntax, JSON
-// Schema, then semantic rules (references, regular expressions, durations).
 func Validate(data []byte) Result {
 	res := Result{Errors: []Issue{}, Warnings: []Issue{}}
 	if len(bytes.TrimSpace(data)) == 0 {
@@ -133,7 +126,6 @@ func Validate(data []byte) Result {
 	return res
 }
 
-// ToYAML serializes a description to YAML in its file form (no status).
 func ToYAML(sd *v1alpha1.SystemDescription) ([]byte, error) {
 	doc := struct {
 		APIVersion string                         `json:"apiVersion"`
