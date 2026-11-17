@@ -70,6 +70,17 @@ All notable changes to Kamerton are listed here. The format follows
 - Sent follow-ups are remembered in the ConfigMap `kamerton-followup-state`
   instead of memory, so a restart or a second replica does not send them
   again.
+- A follow-up with nothing to say yet no longer uses up its incident:
+  Kamerton tries again about 1 and 3 minutes later and on later
+  notifications, then gives up and logs the reason at Info
+  (`follow-up not sent`). Before, a root alert that arrived before its
+  consequences (such as "no ready pods" of a service scaled to zero) got no
+  follow-up at all.
+- The follow-up waits 45 seconds after the notification instead of 10, so
+  the alerts of the callers have fired and "also affected" is filled.
+- The workload evidence reports scaling within the window (from the
+  Deployment's scaling events, of type Normal, and a StatefulSet at zero
+  replicas), a workload left at zero replicas, and "no pods exist".
 - Notification templates omit the service when an alert has none.
 - The demo description (`testdata/otel-demo/system.yaml`) generates 195
   rules instead of 164.

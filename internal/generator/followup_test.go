@@ -200,3 +200,23 @@ func TestRenderFollowUpExplainsEarlierAlert(t *testing.T) {
 		t.Errorf("summary = %+v", sum)
 	}
 }
+
+func TestRenderScaledToZero(t *testing.T) {
+	at := time.Date(2026, 11, 16, 16, 50, 0, 0, time.UTC)
+	c := WorkloadChanges{NoPods: true, Scalings: []Scaling{{Workload: "payment", At: at, From: 1, To: 0}, {Workload: "valkey", From: -1}}}
+	if c.Empty() {
+		t.Fatal("scaling is a change")
+	}
+	f := &FollowUp{System: "shop", Window: 30 * time.Minute, Roots: []RootEvidence{{Service: "payment", Title: "No ready pods", Since: at, Changes: c}}}
+	if !f.Worth() {
+		t.Error("scaled to zero is worth a message")
+	}
+	en := RenderFollowUp(f, rules.LanguageEnglish, "").EmailText
+	if !strings.Contains(en, "What changed in payment in the last 30 min: payment scaled from 1 to 0 replicas at 16:50 UTC; valkey scaled to 0 replicas; no pods exist.\n") {
+		t.Errorf("english:\n%s", en)
+	}
+	ru := RenderFollowUp(f, rules.LanguageRussian, "Asia/Almaty").EmailText
+	if !strings.Contains(ru, "число реплик payment изменено с 1 до 0 в 21:50 UTC+5; число реплик valkey изменено до 0; подов нет.\n") {
+		t.Errorf("russian:\n%s", ru)
+	}
+}

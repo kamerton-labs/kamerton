@@ -36,7 +36,14 @@ const (
 	// on each of its ReplicaSets.
 	revisionAnnotation = "deployment.kubernetes.io/revision"
 	revisionHashLabel  = "controller-revision-hash"
+	// podSuffix stands in for the random suffix of a ReplicaSet's pods, to
+	// match workloads against the pod regex when no pod is left.
+	podSuffix = "-x2k9q"
 )
+
+// scaledRS matches the Deployment controller's ScalingReplicaSet events (type
+// Normal); "from N" is missing before Kubernetes 1.28.
+var scaledRS = regexp.MustCompile(`^Scaled (?:up|down) replica set \S+ (?:from (\d+) )?to (\d+)`)
 
 // Workload reports what changed in a service's pods within the window, finding pods
 // as the saturation rules do; without a namespace it comes from container metrics.
@@ -100,11 +107,25 @@ func (c *Collector) Workload(ctx context.Context, sd *v1alpha1.SystemDescription
 
 	var errs []error
 	owners := map[string]bool{}
-	rollouts, depNames, err := c.deploymentRollouts(ctx, ns, replicaSets, recent)
+	var guess func(string) bool
+	if len(mine) == 0 {
+		guess = func(name string) bool { return re.MatchString(name) }
+	}
+	rollouts, depNames, zeroDeps, err := c.deploymentRollouts(ctx, ns, replicaSets, guess, recent)
 	if err != nil {
 		errs = append(errs, err)
 	}
 	out.Rollouts = append(out.Rollouts, rollouts...)
+	zeroSets := map[string]bool{}
+	if len(mine) == 0 {
+		if zeroSets, err = c.statefulSetsAtZero(ctx, ns, re); err != nil {
+			errs = append(errs, err)
+		}
+		for n := range zeroSets {
+			statefulSets[n] = true
+		}
+		out.NoPods = len(depNames) > 0 || len(zeroSets) > 0
+	}
 	for n := range depNames {
 		owners[n] = true
 	}
@@ -125,12 +146,78 @@ func (c *Collector) Workload(ctx context.Context, sd *v1alpha1.SystemDescription
 	for n := range names {
 		owners[n] = true
 	}
-	warnings, err := c.warnings(ctx, ns, owners, recent)
-	if err != nil {
-		errs = append(errs, err)
+	var events corev1.EventList
+	if err := c.Kube.List(ctx, &events, client.InNamespace(ns), client.Limit(maxEvents)); err != nil {
+		return out, errors.Join(append(errs, fmt.Errorf("list events in %s: %w", ns, err))...)
 	}
-	out.Warnings = warnings
+	out.Warnings = warnings(events.Items, owners, recent)
+	out.Scalings = scalings(events.Items, depNames, zeroDeps, zeroSets, recent)
 	return out, errors.Join(errs...)
+}
+
+// statefulSetsAtZero finds StatefulSets whose pods would match the regex and
+// that are scaled to zero replicas.
+func (c *Collector) statefulSetsAtZero(ctx context.Context, ns string, re *regexp.Regexp) (map[string]bool, error) {
+	out := map[string]bool{}
+	var list appsv1.StatefulSetList
+	if err := c.Kube.List(ctx, &list, client.InNamespace(ns)); err != nil {
+		return out, fmt.Errorf("list statefulsets in %s: %w", ns, err)
+	}
+	for _, sts := range list.Items {
+		if re.MatchString(sts.Name+"-0") && sts.Spec.Replicas != nil && *sts.Spec.Replicas == 0 {
+			out[sts.Name] = true
+		}
+	}
+	return out, nil
+}
+
+// scalings reports the latest scaling of each Deployment within the window
+// (any event type: scaling is Normal), and a workload left at zero replicas
+// without such an event, then without time. StatefulSets at zero take the
+// time of their last pod deletion.
+func scalings(events []corev1.Event, deps, zeroDeps, zeroSets map[string]bool, recent func(time.Time) bool) []generator.Scaling {
+	latest := map[string]generator.Scaling{}
+	for i := range events {
+		e := &events[i]
+		t := eventTime(e)
+		if !recent(t) {
+			continue
+		}
+		name := e.InvolvedObject.Name
+		var sc generator.Scaling
+		switch {
+		case e.InvolvedObject.Kind == "Deployment" && deps[name] && e.Reason == "ScalingReplicaSet":
+			m := scaledRS.FindStringSubmatch(e.Message)
+			if m == nil {
+				continue
+			}
+			sc = generator.Scaling{Workload: name, At: t, From: -1}
+			sc.To, _ = strconv.Atoi(m[2])
+			if m[1] != "" {
+				sc.From, _ = strconv.Atoi(m[1])
+			}
+		case e.InvolvedObject.Kind == "StatefulSet" && zeroSets[name] && e.Reason == "SuccessfulDelete":
+			sc = generator.Scaling{Workload: name, At: t, From: -1}
+		default:
+			continue
+		}
+		if prev, ok := latest[name]; !ok || sc.At.After(prev.At) {
+			latest[name] = sc
+		}
+	}
+	for _, zero := range []map[string]bool{zeroDeps, zeroSets} {
+		for name := range zero {
+			if _, ok := latest[name]; !ok {
+				latest[name] = generator.Scaling{Workload: name, From: -1}
+			}
+		}
+	}
+	out := make([]generator.Scaling, 0, len(latest))
+	for _, sc := range latest {
+		out = append(out, sc)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Workload < out[j].Workload })
+	return out
 }
 
 // namespaceFromMetrics reads the pods' namespace from restart metrics, else memory metrics.
@@ -203,15 +290,17 @@ func restarts(p *corev1.Pod, recent func(time.Time) bool) []generator.Restart {
 }
 
 // deploymentRollouts finds Deployments whose newest ReplicaSet was created within
-// the window, with old and new image tags. It also returns the Deployment names.
-func (c *Collector) deploymentRollouts(ctx context.Context, ns string, podRS map[string]bool, recent func(time.Time) bool) ([]generator.Rollout, map[string]bool, error) {
-	deps := map[string]bool{}
-	if len(podRS) == 0 {
-		return nil, deps, nil
+// the window, with old and new image tags. It also returns the Deployment names
+// and those whose newest ReplicaSet wants zero replicas. guess, when set, finds
+// ReplicaSets by the names their pods would have (no pod is left to point at them).
+func (c *Collector) deploymentRollouts(ctx context.Context, ns string, podRS map[string]bool, guess func(string) bool, recent func(time.Time) bool) ([]generator.Rollout, map[string]bool, map[string]bool, error) {
+	deps, zero := map[string]bool{}, map[string]bool{}
+	if len(podRS) == 0 && guess == nil {
+		return nil, deps, zero, nil
 	}
 	var list appsv1.ReplicaSetList
 	if err := c.Kube.List(ctx, &list, client.InNamespace(ns)); err != nil {
-		return nil, deps, fmt.Errorf("list replicasets in %s: %w", ns, err)
+		return nil, deps, zero, fmt.Errorf("list replicasets in %s: %w", ns, err)
 	}
 	byDep := map[string][]appsv1.ReplicaSet{}
 	for _, rs := range list.Items {
@@ -220,7 +309,7 @@ func (c *Collector) deploymentRollouts(ctx context.Context, ns string, podRS map
 			continue
 		}
 		byDep[dep] = append(byDep[dep], rs)
-		if podRS[rs.Name] {
+		if podRS[rs.Name] || (guess != nil && guess(rs.Name+podSuffix)) {
 			deps[dep] = true
 		}
 	}
@@ -234,6 +323,9 @@ func (c *Collector) deploymentRollouts(ctx context.Context, ns string, podRS map
 		sets := byDep[d]
 		sort.Slice(sets, func(i, j int) bool { return revision(&sets[i]) > revision(&sets[j]) })
 		newest := &sets[0]
+		if newest.Spec.Replicas != nil && *newest.Spec.Replicas == 0 {
+			zero[d] = true
+		}
 		if !recent(newest.CreationTimestamp.Time) {
 			continue
 		}
@@ -246,7 +338,7 @@ func (c *Collector) deploymentRollouts(ctx context.Context, ns string, podRS map
 		}
 		out = append(out, r)
 	}
-	return out, deps, nil
+	return out, deps, zero, nil
 }
 
 // statefulSetRollout reports a StatefulSet that is rolling out a new
@@ -272,18 +364,14 @@ func (c *Collector) statefulSetRollout(ctx context.Context, ns, name string, pod
 	return r, nil
 }
 
-func (c *Collector) warnings(ctx context.Context, ns string, objects map[string]bool, recent func(time.Time) bool) ([]generator.Warning, error) {
-	var list corev1.EventList
-	if err := c.Kube.List(ctx, &list, client.InNamespace(ns), client.Limit(maxEvents)); err != nil {
-		return nil, fmt.Errorf("list events in %s: %w", ns, err)
-	}
+func warnings(events []corev1.Event, objects map[string]bool, recent func(time.Time) bool) []generator.Warning {
 	type agg struct {
 		w    generator.Warning
 		last time.Time
 	}
 	byKey := map[string]*agg{}
-	for i := range list.Items {
-		e := &list.Items[i]
+	for i := range events {
+		e := &events[i]
 		if e.Type != corev1.EventTypeWarning || !objects[e.InvolvedObject.Name] {
 			continue
 		}
@@ -326,7 +414,7 @@ func (c *Collector) warnings(ctx context.Context, ns string, objects map[string]
 	for i := 0; i < len(all) && i < maxWarnings; i++ {
 		out = append(out, all[i].w)
 	}
-	return out, nil
+	return out
 }
 
 func eventTime(e *corev1.Event) time.Time {

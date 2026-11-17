@@ -729,14 +729,15 @@ type Notifications struct {
 	// per-service ones either way.
 	// +optional
 	GroupByCause *bool `json:"groupByCause,omitempty"`
-	// Send a second, short message right after a firing notification with
-	// what Kamerton found about the probable cause: the dependency chain,
-	// what changed in the workload in the last 30 minutes (new version,
-	// restarts, pods not ready, warning events), the operation with most
+	// Send a second, short message about 45 seconds after a firing
+	// notification with what Kamerton found about the probable cause: the
+	// dependency chain, what changed in the workload in the last 30 minutes
+	// (new version, scaling, restarts, pods not ready or none, warning
+	// events), the operation with most
 	// errors, an error log line and a link to failing traces. It goes to the
 	// same Telegram chats and email recipients as the alert, only through the
 	// bot and mail server configured in Kamerton, and only in a cluster.
-	// Nothing is sent when nothing useful was found. Default: true.
+	// Nothing is sent when nothing useful was found within a few minutes. Default: true.
 	// +optional
 	EvidenceFollowUp *bool `json:"evidenceFollowUp,omitempty"`
 }

@@ -63,13 +63,24 @@ type RootEvidence struct {
 
 type WorkloadChanges struct {
 	Rollouts       []Rollout
+	Scalings       []Scaling
 	Restarts       []Restart
 	NotReady, Pods int
-	Warnings       []Warning
+	// NoPods: the workload exists but has no pod at all.
+	NoPods   bool
+	Warnings []Warning
 }
 
 func (c WorkloadChanges) Empty() bool {
-	return len(c.Rollouts) == 0 && len(c.Restarts) == 0 && c.NotReady == 0 && len(c.Warnings) == 0
+	return len(c.Rollouts) == 0 && len(c.Scalings) == 0 && len(c.Restarts) == 0 && c.NotReady == 0 && !c.NoPods && len(c.Warnings) == 0
+}
+
+// Scaling is a change of a workload's replica count. From is -1 and At zero
+// when unknown (the scaling event is older than the window or gone).
+type Scaling struct {
+	Workload string
+	At       time.Time
+	From, To int
 }
 
 type Rollout struct {
@@ -128,6 +139,7 @@ type followUpWords struct {
 	changed                                     string // service, window
 	rollout, restarted, restartedTimes          string
 	exitCode, crashLoop, notReady, warning      string
+	scaledFrom, scaledTo, at, noPods            string
 	mostErrors                                  string // operation, count, window
 	log, quoteOpen, quoteClose, traces          string
 	minutes, and                                string
@@ -143,6 +155,7 @@ var followUpTexts = map[string]followUpWords{
 		changed:      "What changed in %s in the last %s:",
 		rollout:      "new version at %s", restarted: "container %s restarted", restartedTimes: "container %s restarted %d times",
 		exitCode: "exit code %d", crashLoop: "keeps crashing (CrashLoopBackOff)", notReady: "%d of %d pods not ready",
+		scaledFrom: "%s scaled from %d to %d replicas", scaledTo: "%s scaled to %d replicas", at: "at %s", noPods: "no pods exist",
 		warning:    "warning %s: %s",
 		mostErrors: "Most errors: operation %s (%s failed calls in %s).",
 		log:        "Log:", quoteOpen: "“", quoteClose: "”", traces: "Failing traces in Grafana",
@@ -158,6 +171,7 @@ var followUpTexts = map[string]followUpWords{
 		changed:      "Что изменилось в %s за последние %s:",
 		rollout:      "новая версия в %s", restarted: "контейнер %s перезапустился", restartedTimes: "контейнер %s перезапускался, раз: %d",
 		exitCode: "код выхода %d", crashLoop: "падает снова и снова (CrashLoopBackOff)", notReady: "не готовы подов: %d из %d",
+		scaledFrom: "число реплик %s изменено с %d до %d", scaledTo: "число реплик %s изменено до %d", at: "в %s", noPods: "подов нет",
 		warning:    "предупреждение %s: %s",
 		mostErrors: "Больше всего ошибок в операции %s: %s за %s.",
 		log:        "Лог:", quoteOpen: "«", quoteClose: "»", traces: "Трассы с ошибками в Grafana",
@@ -410,6 +424,16 @@ func changeParts(c WorkloadChanges, w followUpWords, at func(time.Time) string, 
 		}
 		parts = append(parts, p)
 	}
+	for _, sc := range c.Scalings {
+		p := fmt.Sprintf(w.scaledTo, esc(sc.Workload), sc.To)
+		if sc.From >= 0 {
+			p = fmt.Sprintf(w.scaledFrom, esc(sc.Workload), sc.From, sc.To)
+		}
+		if !sc.At.IsZero() {
+			p += " " + fmt.Sprintf(w.at, at(sc.At))
+		}
+		parts = append(parts, p)
+	}
 	for _, r := range c.Restarts {
 		p := fmt.Sprintf(w.restarted, esc(r.Container))
 		if r.Count > 1 {
@@ -432,6 +456,9 @@ func changeParts(c WorkloadChanges, w followUpWords, at func(time.Time) string, 
 	}
 	if c.NotReady > 0 {
 		parts = append(parts, fmt.Sprintf(w.notReady, c.NotReady, c.Pods))
+	}
+	if c.NoPods {
+		parts = append(parts, w.noPods)
 	}
 	for _, e := range c.Warnings {
 		parts = append(parts, fmt.Sprintf(w.warning, esc(e.Reason), esc(trimLine(e.Message, 160))))

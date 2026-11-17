@@ -34,8 +34,13 @@ type Record struct {
 	Since time.Time `json:"since,omitzero"`
 	// Likely are the dependencies the follow-up named as the likely cause.
 	Likely []string `json:"likely,omitempty"`
-	// Sent is false when nothing was sent (no recipients, nothing worth it).
-	Sent bool `json:"sent,omitempty"`
+	Sent   bool     `json:"sent,omitempty"`
+	// Attempts that sent nothing, and the reason of the last one. Done: given
+	// up, no more attempts. LeaseUntil: an attempt is running until then.
+	Attempts   int       `json:"attempts,omitempty"`
+	Reason     string    `json:"reason,omitempty"`
+	Done       bool      `json:"done,omitempty"`
+	LeaseUntil time.Time `json:"leaseUntil,omitzero"`
 }
 
 type State struct {

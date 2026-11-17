@@ -355,7 +355,8 @@ start failing too. Kamerton knows the `dependsOn` graph, so:
   incidents (cause, "also affected" and the evidence of the follow-up).
 - **A follow-up with evidence.** Alertmanager still sends the alert straight
   to Telegram and email, so it arrives while Kamerton is down. It also calls
-  Kamerton's webhook, and about ten seconds later Kamerton sends one short
+  Kamerton's webhook, and about 45 seconds later (time for the alerts of the
+  callers to fire, so "also affected" is filled) Kamerton sends one short
   message to the same chats and addresses, for example:
 
   ```text
@@ -377,14 +378,17 @@ start failing too. Kamerton knows the `dependsOn` graph, so:
   ("This explains the earlier alert about checkout").
 
   Each part appears only when found: the workload changes come from the
-  Kubernetes API (pods, ReplicaSets, StatefulSets, Warning events of the
-  service's `workload`), the operation from the span metrics in the
-  system's Prometheus, the log line from its Loki, and a link to failing
-  traces needs `incidents.grafanaExternalURL`. Nothing is sent when nothing
-  useful is found, and one incident gets one follow-up (Alertmanager's
-  repeats send nothing new; sent incidents are kept for a day in the
-  ConfigMap `kamerton-followup-state`, so a restart or another replica does
-  not send them again). The alerts API returns the last evidence of each
+  Kubernetes API (pods, ReplicaSets, StatefulSets, Warning events and
+  scaling events of the service's `workload`: "payment scaled from 1 to 0
+  replicas at 16:50 UTC; no pods exist"), the operation from the span
+  metrics in the system's Prometheus, the log line from its Loki, and a link
+  to failing traces needs `incidents.grafanaExternalURL`. When nothing useful
+  is found yet, Kamerton looks again about 1 and 3 minutes later and on
+  later notifications of the incident, then gives up and logs why at Info
+  (`follow-up not sent`). One incident gets one follow-up (Alertmanager's
+  repeats send nothing new; incidents are kept for a day in the ConfigMap
+  `kamerton-followup-state`, so a restart or another replica does not send
+  them again). The alerts API returns the last evidence of each
   incident as `evidence`. The follow-up goes only through Kamerton's own
   bot and mail server, only for descriptions in Kamerton's namespace, and
   only in a cluster. Turn it off per system with

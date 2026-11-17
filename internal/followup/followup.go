@@ -26,14 +26,24 @@ import (
 )
 
 const (
-	// DefaultDelay makes the follow-up arrive after the alert itself.
-	DefaultDelay = 10 * time.Second
+	// DefaultDelay is the wait before the first look at an incident: the root
+	// alert now often comes first, and callers' alerts fire 15 to 60 seconds
+	// later. 45s catches most of them for "also affected".
+	DefaultDelay = 45 * time.Second
 	// DefaultTTL is how long an incident and its evidence are remembered.
-	DefaultTTL     = 24 * time.Hour
-	maxRoots       = 3
-	processTimeout = time.Minute
-	maxEvidence    = 200
-	maxLikely      = 3
+	DefaultTTL = 24 * time.Hour
+	maxRoots   = 3
+	// processTimeout covers the delay, the timed re-checks and the attempts.
+	processTimeout = 8 * time.Minute
+	// lease: an attempt holds the incident this long at most, so a replica
+	// that dies mid-attempt does not keep it from the others.
+	lease = 2 * time.Minute
+	// maxAttempts and giveUpAfter bound the attempts that later webhooks start
+	// (after a restart the timed re-checks are gone).
+	maxAttempts = 6
+	giveUpAfter = 10 * time.Minute
+	maxEvidence = 200
+	maxLikely   = 3
 	// checkConcurrency bounds the instant queries of the dependency check.
 	checkConcurrency = 8
 )
@@ -57,18 +67,25 @@ type Service struct {
 	Telegram TelegramSender
 	Email    EmailSender
 	// State remembers incidents across restarts and replicas; nil: memory.
-	State  StateStore
-	Delay  time.Duration
-	TTL    time.Duration
-	Logger *slog.Logger
-	Now    func() time.Time
-	Sleep  func(ctx context.Context, d time.Duration)
+	State StateStore
+	Delay time.Duration
+	// Rechecks are the waits between attempts while nothing is worth sending;
+	// nil: DefaultRechecks. The last attempt gives the incident up.
+	Rechecks []time.Duration
+	TTL      time.Duration
+	Logger   *slog.Logger
+	Now      func() time.Time
+	Sleep    func(ctx context.Context, d time.Duration)
 
 	mu        sync.Mutex
 	memory    MemoryStateStore
 	collected map[string]cachedEvidence
 	wg        sync.WaitGroup
 }
+
+// DefaultRechecks: about a minute and three minutes after the first attempt,
+// when workload events, callers' alerts and the dependency state have caught up.
+var DefaultRechecks = []time.Duration{time.Minute, 2 * time.Minute}
 
 type cachedEvidence struct {
 	at      time.Time
@@ -140,38 +157,76 @@ func (s *Service) update(ctx context.Context, mutate func(*State) error) {
 	_, _ = s.memory.Update(ctx, mutate)
 }
 
-// claim records the incident and reports false when it was already recorded.
-// earlier are the follow-ups sent for other incidents of the same system.
-func (s *Service) claim(ctx context.Context, key string, rec Record) (claimed bool, earlier []Record) {
+type claimResult int
+
+const (
+	claimed claimResult = iota
+	claimSent
+	claimDone
+	claimBusy
+)
+
+// claim takes the incident for one attempt. A record that has not led to a
+// message stays open for later attempts until it is given up; the lease keeps
+// two attempts from running at once on any replica. earlier are the
+// follow-ups sent for other incidents of the same system.
+func (s *Service) claim(ctx context.Context, key string, rec Record) (res claimResult, earlier []Record) {
 	now := s.now()
 	s.update(ctx, func(st *State) error {
-		claimed, earlier = false, nil
+		res, earlier = claimed, nil
 		st.prune(now, s.ttl())
-		if _, ok := st.Records[key]; ok {
+		r, ok := st.Records[key]
+		switch {
+		case ok && r.Sent:
+			res = claimSent
+		case ok && r.Done:
+			res = claimDone
+		case ok && now.Before(r.LeaseUntil):
+			res = claimBusy
+		}
+		if res != claimed {
 			return ErrNoChange
 		}
-		for _, r := range st.Records {
-			if r.System == rec.System && r.Sent {
-				earlier = append(earlier, r)
+		for k, o := range st.Records {
+			if k != key && o.System == rec.System && o.Sent {
+				earlier = append(earlier, o)
 			}
 		}
+		if ok {
+			rec.At, rec.Attempts = r.At, r.Attempts
+		}
+		rec.LeaseUntil = now.Add(lease)
 		st.Records[key] = rec
-		claimed = true
 		return nil
 	})
-	return claimed, earlier
+	return res, earlier
 }
 
-func (s *Service) markSent(ctx context.Context, key string, likely []string) {
+// finish ends an attempt. A skipped attempt gives the incident up when it was
+// the last timed one or the bounds are reached; gaveUp is true only for the
+// call that did it, so the reason is logged once.
+func (s *Service) finish(ctx context.Context, key string, sent bool, likely []string, reason string, last bool) (gaveUp bool) {
+	now := s.now()
 	s.update(ctx, func(st *State) error {
+		gaveUp = false
 		r, ok := st.Records[key]
 		if !ok {
 			return ErrNoChange
 		}
-		r.Sent, r.Likely = true, likely
+		r.LeaseUntil = time.Time{}
+		if sent {
+			r.Sent, r.Likely = true, likely
+		} else {
+			r.Attempts++
+			r.Reason = reason
+			if !r.Done && (last || r.Attempts >= maxAttempts || now.Sub(r.At) >= giveUpAfter) {
+				r.Done, gaveUp = true, true
+			}
+		}
 		st.Records[key] = r
 		return nil
 	})
+	return gaveUp
 }
 
 func (s *Service) remember(incident string, sum generator.EvidenceSummary) {
@@ -215,6 +270,9 @@ type Result struct {
 	// Skipped explains why nothing was sent; empty when sent.
 	Skipped         string
 	Telegram, Email int
+	// open: skipped for now, a later attempt may still send.
+	open   bool
+	likely []string
 }
 
 // Process handles one notification synchronously; the follow-up goes out no
@@ -244,6 +302,41 @@ func (s *Service) Process(ctx context.Context, hook *alertmanager.Webhook, recei
 	if !sd.Spec.Notifications.SendsEvidence() {
 		return nil
 	}
+	delay := s.Delay
+	if delay == 0 {
+		delay = DefaultDelay
+	}
+	s.sleep(ctx, received.Add(delay).Sub(s.now()))
+	rechecks := s.Rechecks
+	if rechecks == nil {
+		rechecks = DefaultRechecks
+	}
+	byID := map[string]int{}
+	var results []Result
+	for i := 0; ; i++ {
+		retry := false
+		for _, res := range s.attempt(ctx, sd, firing, i == len(rechecks)) {
+			if j, ok := byID[res.Incident]; ok {
+				results[j] = res
+			} else {
+				byID[res.Incident] = len(results)
+				results = append(results, res)
+			}
+			retry = retry || res.open
+		}
+		if !retry || i == len(rechecks) {
+			return results
+		}
+		s.sleep(ctx, rechecks[i])
+		if ctx.Err() != nil {
+			return results
+		}
+	}
+}
+
+// attempt looks at the incidents of the notification as they are now and
+// sends a follow-up for each one that has none yet and something to say.
+func (s *Service) attempt(ctx context.Context, sd *v1alpha1.SystemDescription, firing []alertmanager.WebhookAlert, last bool) []Result {
 	recipients := Recipients(sd.Spec.Notifications, firing)
 	alerts := s.systemAlerts(ctx, sd, firing)
 	incidents := triage.NewGraph(&sd.Spec).Incidents(sd.Name, alerts)
@@ -278,12 +371,29 @@ func (s *Service) Process(ctx context.Context, hook *alertmanager.Webhook, recei
 		if len(inc.Roots) > 0 {
 			_, rec.Since = rootAlert(inc.RootAlerts, inc.Roots[0])
 		}
-		if claimed, earlier := s.claim(ctx, key, rec); claimed {
-			res = s.send(ctx, sd, inc, key, byIncident[id], recipients, earlier, received)
-		} else {
+		c, earlier := s.claim(ctx, key, rec)
+		switch c {
+		case claimed:
+			res = s.send(ctx, sd, inc, byIncident[id], recipients, earlier)
+			if res.Skipped == "" {
+				s.finish(ctx, key, true, res.likely, "", false)
+				break
+			}
+			res.open = true
+			if s.finish(ctx, key, false, nil, res.Skipped, last) {
+				res.open = false
+				s.log().Info("follow-up not sent", "system", sd.Name, "incident", id, "reason", res.Skipped)
+				break
+			}
+			s.log().Debug("follow-up skipped for now", "system", sd.Name, "incident", id, "reason", res.Skipped)
+		case claimSent:
 			res.Skipped = "already sent"
+		case claimDone:
+			res.Skipped = "given up"
+		case claimBusy:
+			res.Skipped = "in progress"
 		}
-		if res.Skipped != "" {
+		if c != claimed {
 			s.log().Debug("follow-up skipped", "system", sd.Name, "incident", id, "reason", res.Skipped)
 		}
 		results = append(results, res)
@@ -293,8 +403,8 @@ func (s *Service) Process(ctx context.Context, hook *alertmanager.Webhook, recei
 
 // send collects the evidence, keeps it for the alerts API and sends it when it
 // says more than the alert and someone got the alert.
-func (s *Service) send(ctx context.Context, sd *v1alpha1.SystemDescription, inc *triage.Incident, key string, services []string,
-	recipients []v1alpha1.Receiver, earlier []Record, received time.Time) Result {
+func (s *Service) send(ctx context.Context, sd *v1alpha1.SystemDescription, inc *triage.Incident, services []string,
+	recipients []v1alpha1.Receiver, earlier []Record) Result {
 	res := Result{Incident: inc.ID}
 	f := s.evidence(ctx, sd, inc, services)
 	f.Explains, f.ExplainsSince = explains(earlier, inc)
@@ -316,11 +426,6 @@ func (s *Service) send(ctx context.Context, sd *v1alpha1.SystemDescription, inc 
 		return res
 	}
 	msg := generator.RenderFollowUp(f, lang, tz)
-	delay := s.Delay
-	if delay == 0 {
-		delay = DefaultDelay
-	}
-	s.sleep(ctx, received.Add(delay).Sub(s.now()))
 	seenChat := map[int64]bool{}
 	for i := range recipients {
 		r := &recipients[i]
@@ -344,11 +449,9 @@ func (s *Service) send(ctx context.Context, sd *v1alpha1.SystemDescription, inc 
 		res.Skipped = "no message could be sent"
 		return res
 	}
-	likely := make([]string, 0, len(f.Likely))
 	for _, l := range f.Likely {
-		likely = append(likely, l.Service)
+		res.likely = append(res.likely, l.Service)
 	}
-	s.markSent(ctx, key, likely)
 	s.log().Info("follow-up sent", "system", sd.Name, "incident", inc.ID, "telegram", res.Telegram, "email", res.Email)
 	return res
 }

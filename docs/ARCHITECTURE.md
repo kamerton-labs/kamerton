@@ -426,14 +426,18 @@ Kamerton's namespace whose `spec.notifications.evidenceFollowUp` is not
 false. The routes before it are unchanged, so Telegram and email keep
 getting the alert straight from Alertmanager.
 
-On a firing notification (`internal/followup`) the core answers at once and
-then: finds the system by `kamerton_system`; reads its alerts with muted
+On a firing notification (`internal/followup`) the core answers at once,
+waits until 45 seconds after the notification (the root alert, such as "no
+ready pods", now usually comes first and its callers' alerts 15 to 60
+seconds later; the wait fills "also affected"), and then makes an attempt:
+finds the system by `kamerton_system`; reads its alerts with muted
 ones from the Alertmanager of its set (the notification's alerts when that
 fails); groups them into incidents; for each incident of the notification
-records `system:roots@start` in the ConfigMap `kamerton-followup-state`
-(Alertmanager repeats and group updates, also after a restart or on
-another replica, find it and send nothing; entries expire after 24 hours, at
-most 500; when the ConfigMap cannot be written, in memory); collects
+claims `system:roots@start` in the ConfigMap `kamerton-followup-state`
+(optimistic concurrency, so one replica at a time; a lease of 2 minutes
+covers one attempt and lapses if that replica dies; entries expire after
+24 hours, at most 500; when the ConfigMap cannot be written, in memory);
+collects
 evidence for up to three roots (`internal/evidence`, 5 s per collector, 12 s
 in total, failures logged); for a root that shows a symptom target and has
 no cause of its own, checks its direct dependencies at that moment (pending
@@ -446,18 +450,35 @@ sent follow-ups whose roots are now affected or which named one of its
 roots as the likely cause; keeps the evidence for the alerts API; renders
 the message (`generator.RenderFollowUp`, language
 and time zone of the description, Telegram HTML, email HTML and text) and
-sends it no earlier than 10 seconds after the notification to the receivers
-that got the alert (severity routing and service routes of the
-description). Telegram goes only through Kamerton's bot (receivers naming
-Kamerton's token Secret), email only through the mail server configured in
-Kamerton. Nothing is sent when the evidence says no more than the alert
-(no affected services, likely cause, explained alert, changes, failing
-operation or log line), when nobody got the alert, or for the system "no
-data" alert (there is no data to collect from).
+sends it to the receivers that got the alert (severity routing and service
+routes of the description), and marks the incident sent: repeats and group
+updates, also after a restart or on another replica, send nothing. Telegram
+goes only through Kamerton's bot (receivers naming Kamerton's token Secret),
+email only through the mail server configured in Kamerton. The system "no
+data" alert gets no follow-up (there is no data to collect from).
+
+An attempt that sends nothing (the evidence says no more than the alert:
+no affected services, likely cause, explained alert, changes, failing
+operation or log line; nobody got the alert; every channel failed) leaves
+the incident open: the same process tries again about 1 and 3 minutes later
+(`Rechecks`), and a later notification for the incident tries too. The last
+timed attempt gives the incident up, and so does the 6th attempt or one 10
+minutes after the first (bounds for attempts started by notifications when a
+restart lost the timed ones). Giving up is logged at Info once, with the
+reason (`follow-up not sent`); attempts that will be retried log at Debug.
+So exactly one follow-up goes out per incident, at most about 5 minutes
+after the notification, and an incident with nothing to say costs at most
+three collections per notification and never a message.
 
 Evidence parts: workload changes of the root's pods (namespace and pod regex
 as the saturation rules use them; without a namespace, the namespace label of
-the pods' container metrics in Prometheus): the newest ReplicaSet of a
+the pods' container metrics in Prometheus): scaling of the workload within
+the window from the `ScalingReplicaSet` events of its Deployment (type
+Normal, "Scaled down replica set … from 1 to 0"; the pods' ReplicaSets, or
+with no pod left the ReplicaSets whose pods the regex would match) and the
+last `SuccessfulDelete` of a StatefulSet at zero replicas, a workload left at
+zero without such an event (then without time), "no pods exist" when the
+workload exists but has none, the newest ReplicaSet of a
 Deployment created within 30 minutes (old and new image tag), a StatefulSet
 rolling out a new revision, containers terminated within 30 minutes or in
 CrashLoopBackOff (reason, exit code), pods not ready, the most frequent
