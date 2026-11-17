@@ -5,6 +5,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -255,5 +256,47 @@ func TestAlertsIncidents(t *testing.T) {
 			inc.StartsAt != "2026-11-16T09:18:00Z" || len(inc.RootAlerts) != 1 || inc.RootAlerts[0].Muted || len(inc.AffectedAlerts) != 1 || !inc.AffectedAlerts[0].Muted {
 			t.Errorf("%s incident = %+v", path, inc)
 		}
+	}
+}
+
+func TestAlertsIncidentEvidence(t *testing.T) {
+	srv, _, _, _, fu := hookServer(t, true)
+	if resp, _ := call(t, "POST", srv.URL+AlertmanagerHookPath, hookBody, withHeader("Authorization", "Bearer s3cret-token")); resp.StatusCode != http.StatusOK {
+		t.Fatalf("webhook: %d", resp.StatusCode)
+	}
+	fu.Wait()
+	cookie := sessionCookie(func() *http.Response { r, _ := login(t, srv, "admin", "pw"); return r }())
+	_, body := call(t, "GET", srv.URL+"/api/v1/systems/shop/alerts", "", withCookie(cookie))
+	var out struct {
+		Incidents []struct {
+			ID       string          `json:"id"`
+			Roots    []string        `json:"roots"`
+			Evidence json.RawMessage `json:"evidence"`
+		} `json:"incidents"`
+	}
+	decode(t, body, &out)
+	if len(out.Incidents) != 1 || out.Incidents[0].ID != "shop:db" {
+		t.Fatalf("incidents: %s", body)
+	}
+	var ev map[string]any
+	if err := json.Unmarshal(out.Incidents[0].Evidence, &ev); err != nil {
+		t.Fatalf("evidence %s: %v", out.Incidents[0].Evidence, err)
+	}
+	collected, _ := ev["collectedAt"].(string)
+	if _, err := time.Parse(time.RFC3339, collected); err != nil || ev["cause"] != "db: Requests stopped arriving since 09:18 UTC" || ev["likely"] != false {
+		t.Errorf("evidence = %v", ev)
+	}
+	for k := range ev {
+		switch k {
+		case "collectedAt", "cause", "likely", "changes", "operation", "operationFailures", "logLine", "tracesURL", "explains":
+		default:
+			t.Errorf("unexpected evidence field %q", k)
+		}
+	}
+
+	srv, _, _, _, _ = hookServer(t, false)
+	cookie = sessionCookie(func() *http.Response { r, _ := login(t, srv, "admin", "pw"); return r }())
+	if _, body := call(t, "GET", srv.URL+"/api/v1/alerts", "", withCookie(cookie)); strings.Contains(body, `"evidence"`) {
+		t.Errorf("evidence without follow-up: %s", body)
 	}
 }

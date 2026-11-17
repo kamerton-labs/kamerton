@@ -73,6 +73,12 @@ func (v *validator) spec(spec *v1alpha1.SystemDescriptionSpec) {
 		v.latency(p+"/latency", d.Latency)
 		v.saturation(p+"/saturation", d.Saturation)
 		v.traffic(p+"/trafficDrop", d.TrafficDrop)
+		v.noData(p+"/noData", d.NoData)
+		v.noReadyPods(p+"/noReadyPods", d.NoReadyPods)
+	}
+	if n := spec.NoData; n != nil {
+		v.noDataAfter(base+"/noData/after", n.After)
+		v.message(base+"/noData/message", n.Message)
 	}
 	if t := spec.Telemetry; t != nil && t.Spans != nil {
 		for i, k := range t.Spans.ServerSpanKinds {
@@ -130,6 +136,8 @@ func (v *validator) service(p string, s *v1alpha1.Service, names map[string]int)
 	v.latency(p+"/latency", s.Latency)
 	v.saturation(p+"/saturation", s.Saturation)
 	v.traffic(p+"/trafficDrop", s.TrafficDrop)
+	v.noData(p+"/noData", s.NoData)
+	v.noReadyPods(p+"/noReadyPods", s.NoReadyPods)
 	if s.TrafficDrop != nil && (s.Type == v1alpha1.ServiceTypeQueue || s.Type == v1alpha1.ServiceTypeDatabase) {
 		v.warnf(p+"/trafficDrop", "the rule counts server and consumer spans of %q itself; a %s usually appears only in client spans of other services, so check that such spans exist", s.Name, s.Type)
 	}
@@ -305,6 +313,32 @@ func (v *validator) traffic(p string, t *v1alpha1.TrafficDropPolicy) {
 		v.warnf(p+"/for", "for %s is shorter than %s; the alert may fire while the telemetry collector restarts", t.For, model.Duration(minTrafficFor))
 	}
 	v.message(p+"/message", t.Message)
+}
+
+// minNoDataAfter covers two flushes of span metrics at the Collector's
+// slowest usual interval (60s): one late flush must not look like an outage.
+const minNoDataAfter = 2 * time.Minute
+
+func (v *validator) noDataAfter(p string, d v1alpha1.Duration) {
+	if after, ok := v.duration(p, d); ok && after < minNoDataAfter {
+		v.warnf(p, "after %s is shorter than %s; span metrics flushed once a minute will look missing after one late flush", d, model.Duration(minNoDataAfter))
+	}
+}
+
+func (v *validator) noData(p string, n *v1alpha1.NoDataPolicy) {
+	if n == nil {
+		return
+	}
+	v.noDataAfter(p+"/after", n.After)
+	v.message(p+"/message", n.Message)
+}
+
+func (v *validator) noReadyPods(p string, n *v1alpha1.NoReadyPodsPolicy) {
+	if n == nil {
+		return
+	}
+	v.duration(p+"/for", n.For)
+	v.message(p+"/message", n.Message)
 }
 
 func (v *validator) saturation(p string, s *v1alpha1.SaturationPolicy) {

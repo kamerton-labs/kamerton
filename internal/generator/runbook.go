@@ -18,6 +18,7 @@ type runbookWords struct {
 	title, generated, typ, critical, owner, dependsOn, calledBy string
 	alerts, severity, signal, todo, escalation, escalationTodo  string
 	yes, no                                                     string
+	systemTitle, systemAbout                                    string
 	hints                                                       map[string]string
 }
 
@@ -38,6 +39,8 @@ var runbookTexts = map[string]runbookWords{
 		escalationTodo: "TODO: who to call when the steps above do not help.",
 		yes:            "true",
 		no:             "false",
+		systemTitle:    "Runbook: system %s",
+		systemAbout:    "Alerts about the whole system rather than one service: they carry no service label.",
 		hints:          runbookHints,
 	},
 	rules.LanguageRussian: {
@@ -56,6 +59,8 @@ var runbookTexts = map[string]runbookWords{
 		escalationTodo: "TODO: к кому обращаться, если шаги выше не помогли.",
 		yes:            "да",
 		no:             "нет",
+		systemTitle:    "Runbook: система %s",
+		systemAbout:    "Оповещения о системе в целом, а не об одном сервисе: у них нет метки service.",
 		hints:          runbookHintsRussian,
 	},
 }
@@ -70,6 +75,13 @@ func runbook(sd *v1alpha1.SystemDescription, svc *v1alpha1.Service, rs []rulefmt
 		w = runbookTexts[rules.LanguageEnglish]
 	}
 	var b strings.Builder
+	if svc == nil {
+		fmt.Fprintf(&b, "# "+w.systemTitle+"\n\n", sd.Name)
+		fmt.Fprintf(&b, "> "+w.generated+"\n\n", sd.Name)
+		b.WriteString(w.systemAbout + "\n")
+		runbookAlerts(&b, w, rs)
+		return b.String()
+	}
 	fmt.Fprintf(&b, "# "+w.title+"\n\n", svc.Name)
 	fmt.Fprintf(&b, "> "+w.generated+"\n\n", sd.Name)
 	if svc.Description != "" {
@@ -99,7 +111,12 @@ func runbook(sd *v1alpha1.SystemDescription, svc *v1alpha1.Service, rs []rulefmt
 	if len(callers) > 0 {
 		fmt.Fprintf(&b, "- %s: %s\n", w.calledBy, strings.Join(callers, ", "))
 	}
-	fmt.Fprintf(&b, "\n## %s\n\n", w.alerts)
+	runbookAlerts(&b, w, rs)
+	return b.String()
+}
+
+func runbookAlerts(b *strings.Builder, w runbookWords, rs []rulefmt.Rule) {
+	fmt.Fprintf(b, "\n## %s\n\n", w.alerts)
 	seen := map[string]bool{}
 	for _, r := range rs {
 		key := r.Alert + r.Labels[rules.LabelOperation]
@@ -111,20 +128,34 @@ func runbook(sd *v1alpha1.SystemDescription, svc *v1alpha1.Service, rs []rulefmt
 		if op := r.Labels[rules.LabelOperation]; op != "" {
 			title += " (" + op + ")"
 		}
-		fmt.Fprintf(&b, "### %s\n\n", title)
-		fmt.Fprintf(&b, "- %s: %s\n- %s: %s\n\n", w.severity, r.Labels[rules.LabelSeverity], w.signal, r.Labels[rules.LabelSignal])
-		fmt.Fprintf(&b, "```promql\n%s\n```\n\n", r.Expr)
+		fmt.Fprintf(b, "### %s\n\n", title)
+		fmt.Fprintf(b, "- %s: %s\n- %s: %s\n\n", w.severity, r.Labels[rules.LabelSeverity], w.signal, r.Labels[rules.LabelSignal])
+		fmt.Fprintf(b, "```promql\n%s\n```\n\n", r.Expr)
 		if h := w.hints[r.Alert]; h != "" {
-			fmt.Fprintf(&b, "%s\n\n", h)
+			fmt.Fprintf(b, "%s\n\n", h)
 		}
 		b.WriteString(w.todo + "\n\n")
 	}
-	fmt.Fprintf(&b, "## %s\n\n%s\n", w.escalation, w.escalationTodo)
-	return b.String()
+	fmt.Fprintf(b, "## %s\n\n%s\n", w.escalation, w.escalationTodo)
 }
 
 // runbookHints: the UI runbook page shows the same advice.
 var runbookHints = map[string]string{
+	rules.AlertTelemetryMissing: "Kamerton receives no span metrics from any service of the system, so no other alert of the system can fire. What to check: " +
+		"the OpenTelemetry Collector pods and their logs (exporter errors, a full sending queue, dropped data); errors of its remote write to Prometheus " +
+		"(HTTP 4xx/5xx, `prometheus_remote_storage` and `otelcol_exporter_send_failed_metric_points` counters); Prometheus logs for `out of order sample`, " +
+		"`out of bounds` or `too old sample` (the Collector's clock and the node clocks must agree: check NTP and clock skew on the nodes) and whether the " +
+		"remote write receiver is on; finally that the services still send traces to the Collector. The alert resolves by itself when data returns, " +
+		"or a day after the last data.",
+	rules.AlertServiceTelemetryMissing: "This service sent span metrics in the last day but sends none now, while other services of the system do: " +
+		"its own telemetry stopped, not the pipeline. What to check: whether its pods run (see the no-ready-pods alert), the OpenTelemetry SDK exporter " +
+		"of the service (endpoint, errors in the service log), the Collector it sends to (agent or gateway on its node, its logs and remote write errors), " +
+		"clock skew on its node, and Prometheus logs for `out of order sample`. A service renamed or removed stops alerting a day after its last data; " +
+		"change the description instead.",
+	rules.AlertNoReadyPods: "No pod of the service is ready: it is down for its callers, whose error and SLO alerts are muted while this one fires. " +
+		"Check `kubectl get pods` and `kubectl describe pod` (CrashLoopBackOff, failing readiness probe, image pull error, Pending for lack of resources), " +
+		"then whether the workload was scaled to zero (`kubectl get deploy,sts`). With no pod left the alert stops an hour after the last ready pod, " +
+		"because a deliberate scale to zero cannot be told from a failure.",
 	rules.AlertOOMKilled: "The kernel killed the container for exceeding its memory limit; Kubernetes restarted it. " +
 		"Check `kubectl describe pod` (Last State: OOMKilled), the memory graph before the kill (a steady climb is a leak, a jump is a heavy request), " +
 		"and raise the limit only if the usage is legitimate.",
@@ -145,6 +176,21 @@ var runbookHints = map[string]string{
 }
 
 var runbookHintsRussian = map[string]string{
+	rules.AlertTelemetryMissing: "Kamerton не получает span-метрики ни от одного сервиса системы, поэтому другие оповещения системы сработать не могут. Что проверить: " +
+		"поды OpenTelemetry Collector и их логи (ошибки экспортёра, переполненная очередь отправки, отброшенные данные); ошибки его remote write в Prometheus " +
+		"(HTTP 4xx/5xx, счётчики `prometheus_remote_storage` и `otelcol_exporter_send_failed_metric_points`); логи Prometheus на `out of order sample`, " +
+		"`out of bounds` или `too old sample` (часы Collector и узлов должны совпадать: проверьте NTP и расхождение часов на узлах) и включён ли приём " +
+		"remote write; наконец, что сервисы по-прежнему отправляют трассы в Collector. Оповещение решается само, когда данные вернутся, " +
+		"или через сутки после последних данных.",
+	rules.AlertServiceTelemetryMissing: "Сервис присылал span-метрики за последние сутки, а сейчас не присылает, хотя другие сервисы системы присылают: " +
+		"остановилась его собственная телеметрия, а не весь конвейер. Что проверить: работают ли его поды (см. оповещение о готовых подах), экспортёр " +
+		"OpenTelemetry SDK в сервисе (адрес, ошибки в логе сервиса), Collector, в который он отправляет данные (агент или шлюз на его узле, логи, ошибки " +
+		"remote write), расхождение часов на его узле и логи Prometheus на `out of order sample`. Переименованный или удалённый сервис перестаёт " +
+		"оповещать через сутки после последних данных; лучше исправьте описание.",
+	rules.AlertNoReadyPods: "Ни один под сервиса не готов: для вызывающих он недоступен, и их оповещения об ошибках и SLO заглушены, пока горит это. " +
+		"Посмотрите `kubectl get pods` и `kubectl describe pod` (CrashLoopBackOff, не проходит readiness-проба, ошибка загрузки образа, Pending из-за ресурсов), " +
+		"затем не уменьшили ли нагрузку до нуля реплик (`kubectl get deploy,sts`). Если подов не осталось, оповещение гаснет через час после последнего " +
+		"готового пода: намеренное масштабирование до нуля нельзя отличить от сбоя.",
 	rules.AlertOOMKilled: "Ядро убило контейнер за превышение лимита памяти, Kubernetes его перезапустил. " +
 		"Посмотрите `kubectl describe pod` (Last State: OOMKilled) и график памяти перед убийством (ровный рост - утечка, резкий скачок - тяжёлый запрос); " +
 		"поднимайте лимит, только если такое потребление нормально для сервиса.",

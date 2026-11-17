@@ -71,6 +71,30 @@ export interface TrafficDropPolicy {
   message?: NotificationMessage
 }
 
+/** "No data from the service" (api/v1alpha1 NoDataPolicy). */
+export interface NoDataPolicy {
+  enabled?: boolean
+  /** How long the service may send no span metrics; the alert fires 1 minute later. */
+  after?: string
+  severity?: Severity
+  message?: NotificationMessage
+}
+
+/** "Kamerton cannot see the system" (api/v1alpha1 SystemNoDataPolicy); always critical. */
+export interface SystemNoDataPolicy {
+  enabled?: boolean
+  after?: string
+  message?: NotificationMessage
+}
+
+/** "No ready pods" (api/v1alpha1 NoReadyPodsPolicy). */
+export interface NoReadyPodsPolicy {
+  enabled?: boolean
+  for?: string
+  severity?: Severity
+  message?: NotificationMessage
+}
+
 export interface Operation {
   name: string
   errorRate?: ErrorRatePolicy
@@ -134,6 +158,8 @@ export interface Service {
   latency?: LatencyPolicy
   saturation?: SaturationPolicy
   trafficDrop?: TrafficDropPolicy
+  noData?: NoDataPolicy
+  noReadyPods?: NoReadyPodsPolicy
   operations?: Operation[]
   excludeOperations?: string[]
   queue?: QueueSpec
@@ -175,6 +201,8 @@ export interface Defaults {
   latency?: LatencyPolicy
   saturation?: SaturationPolicy
   trafficDrop?: TrafficDropPolicy
+  noData?: NoDataPolicy
+  noReadyPods?: NoReadyPodsPolicy
 }
 
 export interface Description {
@@ -185,10 +213,14 @@ export interface Description {
     environment?: string
     /** Set of programs the system uses; empty = the built-in set. */
     stack?: string
-    telemetry?: { spans?: { serviceLabel?: string } & Record<string, unknown> } & Record<string, unknown>
+    telemetry?: { spans?: { serviceLabel?: string; callsMetric?: string } & Record<string, unknown>; containers?: { readyMetric?: string } & Record<string, unknown> } & Record<
+      string,
+      unknown
+    >
     defaults?: Defaults
     services: Service[]
     notifications?: { receivers?: Receiver[]; routing?: Routing; language?: string; timeZone?: string }
+    noData?: SystemNoDataPolicy
   }
 }
 

@@ -20,12 +20,15 @@ import { httpUrl } from '@/lib/format'
 import { t, useT, type MsgKey } from '@/i18n'
 import { serviceTypeLabel } from '@/lib/model/types'
 
-const SIGNALS = ['error_rate', 'latency', 'saturation', 'queue_lag', 'slo_burn_rate', 'traffic', 'custom'] as const
+const SIGNALS = ['error_rate', 'latency', 'saturation', 'queue_lag', 'slo_burn_rate', 'traffic', 'no_data', 'availability', 'custom'] as const
 type Signal = (typeof SIGNALS)[number]
 const isSignal = (s: string): s is Signal => (SIGNALS as readonly string[]).includes(s)
 
-/** Advice for rules that need no threshold from the team (internal/rules/normal.go); others use the signal's advice. */
+/** Advice for rules that need no threshold from the team (internal/generator/runbook.go runbookHints); others use the signal's advice. */
 const ALERT_ADVICE = {
+  KamertonTelemetryMissing: 'runbook.adviceAlert.telemetryMissing',
+  KamertonServiceTelemetryMissing: 'runbook.adviceAlert.serviceTelemetryMissing',
+  KamertonNoReadyPods: 'runbook.adviceAlert.noReadyPods',
   KamertonOOMKilled: 'runbook.adviceAlert.oomKilled',
   KamertonMemoryNearLimit: 'runbook.adviceAlert.memoryNearLimit',
   KamertonCPUNearLimit: 'runbook.adviceAlert.cpuNearLimit',
@@ -36,7 +39,8 @@ const ALERT_ADVICE = {
 
 /** Advice lines for an alert; one dictionary entry holds the lines separated by new lines. */
 function adviceFor(alert: string, signal: string): string[] {
-  const key: MsgKey | undefined = alert in ALERT_ADVICE ? ALERT_ADVICE[alert as keyof typeof ALERT_ADVICE] : isSignal(signal) ? (`runbook.advice.${signal}` as const) : undefined
+  const key: MsgKey | undefined =
+    alert in ALERT_ADVICE ? ALERT_ADVICE[alert as keyof typeof ALERT_ADVICE] : isSignal(signal) && signal !== 'no_data' && signal !== 'availability' ? (`runbook.advice.${signal}` as const) : undefined
   return key ? t(key).split('\n') : []
 }
 
@@ -72,7 +76,7 @@ export default function RunbookPage() {
     const url = URL.createObjectURL(new Blob([data.markdown], { type: 'text/markdown' }))
     const a = document.createElement('a')
     a.href = url
-    a.download = `${s.name}.md`
+    a.download = s.system ? `${data.systemID}.md` : `${s.name}.md`
     a.click()
     URL.revokeObjectURL(url)
   }
@@ -80,20 +84,34 @@ export default function RunbookPage() {
   return (
     <div className="mx-auto w-full max-w-4xl space-y-4 p-4 md:p-6">
       <div className="flex flex-wrap items-start justify-between gap-2">
-        <div>
-          <h1 className="text-2xl font-semibold">{t('runbook.title', { name: s.name })}</h1>
-          <p className="text-sm text-muted-foreground">
-            {t('runbook.system')}{' '}
-            <Link className="underline-offset-2 hover:underline" to={`/systems/${encodeURIComponent(data.systemID)}?service=${encodeURIComponent(s.name)}`}>
-              {data.system}
-            </Link>{' '}
-            · {serviceTypeLabel(s.type)} · {s.critical ? t('runbook.critical') : t('runbook.regular')}
-            {s.owner ? ` · ${t('runbook.owner', { owner: s.owner })}` : ''}
-          </p>
-        </div>
+        {s.system ? (
+          <div>
+            <h1 className="text-2xl font-semibold">{t('runbook.systemTitle', { name: data.system })}</h1>
+            <p className="text-sm text-muted-foreground" data-testid="runbook-system">
+              {t('runbook.systemAbout')}{' '}
+              <Link className="underline-offset-2 hover:underline" to={`/systems/${encodeURIComponent(data.systemID)}`}>
+                {data.system}
+              </Link>
+            </p>
+          </div>
+        ) : (
+          <div>
+            <h1 className="text-2xl font-semibold">{t('runbook.title', { name: s.name })}</h1>
+            <p className="text-sm text-muted-foreground">
+              {t('runbook.system')}{' '}
+              <Link className="underline-offset-2 hover:underline" to={`/systems/${encodeURIComponent(data.systemID)}?service=${encodeURIComponent(s.name)}`}>
+                {data.system}
+              </Link>{' '}
+              · {serviceTypeLabel(s.type ?? '')} · {s.critical ? t('runbook.critical') : t('runbook.regular')}
+              {s.owner ? ` · ${t('runbook.owner', { owner: s.owner })}` : ''}
+            </p>
+          </div>
+        )}
         <div className="flex gap-2">
           <Button variant="outline" size="sm" asChild>
-            <Link to={`/alerts?system=${encodeURIComponent(data.system)}&service=${encodeURIComponent(s.name)}`}>{t('runbook.firing')}</Link>
+            <Link to={s.system ? `/alerts?system=${encodeURIComponent(data.system)}` : `/alerts?system=${encodeURIComponent(data.system)}&service=${encodeURIComponent(s.name)}`}>
+              {t('runbook.firing')}
+            </Link>
           </Button>
           <Button variant="outline" size="sm" onClick={download}>
             <Download /> Markdown

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 import { getLang, t, tn } from '@/i18n'
-import type { SystemSummary } from '@/lib/api'
+import type { Incident, SystemSummary } from '@/lib/api'
 
 export function timeAgo(iso: string): string {
   const s = Math.max(0, (Date.now() - Date.parse(iso)) / 1000)
@@ -21,8 +21,12 @@ export function sinceText(iso: string): string {
   return ago === t('time.justNow') ? t('time.startedJustNow') : t('time.started', { ago })
 }
 
-/** State of a system in a few words (the system list and the system header). */
-export function systemStateText(s: Pick<SystemSummary, 'state' | 'alerts'>): string {
+/** State of a system in a few words (the system list and the system header); incidents name their causes. */
+export function systemStateText(s: Pick<SystemSummary, 'state' | 'alerts'>, incidents: Incident[] = []): string {
+  if (incidents.length > 0 && (s.state === 'firing' || s.state === 'warning')) {
+    const roots = [...new Set(incidents.flatMap((i) => (i.roots.length ? i.roots : [t('incident.systemRoot')])))]
+    return tn('incident.state', incidents.length, { roots: roots.slice(0, 2).join(', ') + (roots.length > 2 ? ` +${roots.length - 2}` : '') })
+  }
   switch (s.state) {
     case 'firing':
       return t('system.state.firing', { n: s.alerts?.critical ?? 0 }) + (s.alerts?.warning ? t('system.state.firingWarnings', { n: s.alerts.warning }) : '')

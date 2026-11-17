@@ -308,6 +308,11 @@ func TestRunbookEndpoint(t *testing.T) {
 	if code, _ := get(t, srv.URL+"/api/v1/runbooks/nope"); code != 404 {
 		t.Errorf("unknown service: %d", code)
 	}
+	code, body = get(t, srv.URL+"/api/v1/runbooks/_system")
+	if code != 200 || !strings.Contains(body, `"system":true`) || !strings.Contains(body, `"alert":"KamertonTelemetryMissing"`) ||
+		strings.Contains(body, `"alert":"KamertonErrorRateHigh"`) || !strings.Contains(body, "Runbook: system") {
+		t.Errorf("system runbook: %d %.600s", code, body)
+	}
 	_, settings := get(t, srv.URL+"/api/v1/settings")
 	if !strings.Contains(settings, `"externalURL":"http://localhost:8080"`) || !strings.Contains(settings, `"linksEnabled":true`) {
 		t.Errorf("settings: %s", settings)

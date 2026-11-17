@@ -317,3 +317,30 @@ func TestIncidentSwitches(t *testing.T) {
 		t.Error("defaults are not on")
 	}
 }
+
+func TestNoDataAndNoReadyPodsValidation(t *testing.T) {
+	svc := func(extra string) string {
+		return strings.Replace(minimal, "type: http", "type: http\n"+extra, 1)
+	}
+	ok := Validate([]byte(svc("      noData: {enabled: true, after: 4m, severity: critical}\n      noReadyPods: {enabled: false, for: 1m, severity: warning}")))
+	if !ok.Valid || len(ok.Warnings) != 0 {
+		t.Errorf("valid policies: %+v %+v", ok.Errors, ok.Warnings)
+	}
+	for _, bad := range []string{"noData: {after: soon}", "noData: {severity: high}", "noReadyPods: {for: later}", "noReadyPods: {enabled: maybe}"} {
+		if r := Validate([]byte(svc("      " + bad))); r.Valid {
+			t.Errorf("%s must be rejected", bad)
+		}
+	}
+	short := Validate([]byte(svc("      noData: {after: 1m}")))
+	if !short.Valid || len(short.Warnings) != 1 || short.Warnings[0].Path != "/spec/services/0/noData/after" {
+		t.Errorf("short window must warn: %+v", short.Warnings)
+	}
+	system := Validate([]byte(strings.Replace(minimal, "spec:\n", "spec:\n  noData: {after: 90s, message: {text: 'no {data}'}}\n", 1)))
+	if system.Valid || len(system.Warnings) != 1 || system.Warnings[0].Path != "/spec/noData/after" || system.Errors[0].Path != "/spec/noData/message/text" {
+		t.Errorf("system policy: %+v %+v", system.Errors, system.Warnings)
+	}
+	defaults := Validate([]byte(strings.Replace(minimal, "spec:\n", "spec:\n  defaults:\n    noData: {after: 30s}\n    noReadyPods: {for: 1m}\n  telemetry:\n    containers: {readyMetric: '-'}\n", 1)))
+	if !defaults.Valid || len(defaults.Warnings) != 1 || defaults.Warnings[0].Path != "/spec/defaults/noData/after" {
+		t.Errorf("defaults: %+v %+v", defaults.Errors, defaults.Warnings)
+	}
+}

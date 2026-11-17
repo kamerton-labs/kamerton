@@ -355,3 +355,55 @@ func TestCollectBoundsAndSurvivesFailures(t *testing.T) {
 		t.Errorf("evidence = %+v", ev)
 	}
 }
+
+func replicas(n int32) *int32 { return &n }
+
+func TestWorkloadScaledToZero(t *testing.T) {
+	scaled := rs("payment-5d4f8b6c4", "5", 48*time.Hour, "ghcr.io/shop/payment:v1.4.3")
+	scaled.Spec.Replicas = replicas(0)
+	scaling := func(name, msg string, at time.Duration) *corev1.Event {
+		return &corev1.Event{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: name}, Type: corev1.EventTypeNormal, Reason: "ScalingReplicaSet",
+			Message: msg, Count: 1, LastTimestamp: ago(at), InvolvedObject: corev1.ObjectReference{Kind: "Deployment", Name: "payment"}}
+	}
+	c := &Collector{Kube: kube(t, scaled,
+		scaling("s1", "Scaled up replica set payment-5d4f8b6c4 from 0 to 1", 20*time.Minute),
+		scaling("s2", "Scaled down replica set payment-5d4f8b6c4 from 1 to 0", 2*time.Minute),
+		scaling("s3", "Scaled down replica set payment-5d4f8b6c4 to 0", 3*time.Hour),
+		&appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "valkey"}, Spec: appsv1.StatefulSetSpec{Replicas: replicas(0)}},
+		&corev1.Event{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "d1"}, Type: corev1.EventTypeNormal, Reason: "SuccessfulDelete",
+			Message: "delete Pod valkey-0 in StatefulSet valkey successful", LastTimestamp: ago(5 * time.Minute),
+			InvolvedObject: corev1.ObjectReference{Kind: "StatefulSet", Name: "valkey"}},
+	)}
+	sd := shop()
+	got, err := c.Workload(context.Background(), sd, &sd.Spec.Services[0], nil, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.NoPods || got.Pods != 0 || len(got.Scalings) != 1 {
+		t.Fatalf("changes = %+v", got)
+	}
+	if s := got.Scalings[0]; s.Workload != "payment" || s.From != 1 || s.To != 0 || !s.At.Equal(now.Add(-2*time.Minute)) {
+		t.Errorf("scaling = %+v", s)
+	}
+
+	cache, err := c.Workload(context.Background(), sd, &sd.Spec.Services[1], nil, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cache.NoPods || len(cache.Scalings) != 1 || cache.Scalings[0].Workload != "valkey" || cache.Scalings[0].From != -1 || !cache.Scalings[0].At.Equal(now.Add(-5*time.Minute)) {
+		t.Errorf("statefulset at zero = %+v", cache)
+	}
+
+	// Events gone (older than the window): the zero replicas are still reported, without time.
+	old := &Collector{Kube: kube(t, scaled, scaling("s3", "Scaled down replica set payment-5d4f8b6c4 to 0", 3*time.Hour))}
+	got, _ = old.Workload(context.Background(), sd, &sd.Spec.Services[0], nil, now)
+	if !got.NoPods || len(got.Scalings) != 1 || !got.Scalings[0].At.IsZero() || got.Scalings[0].To != 0 {
+		t.Errorf("without events = %+v", got)
+	}
+
+	// A service whose regex matches no workload: "no pods" is not claimed.
+	none := &Collector{Kube: kube(t)}
+	if got, _ := none.Workload(context.Background(), sd, &sd.Spec.Services[0], nil, now); !got.Empty() {
+		t.Errorf("no workload at all = %+v", got)
+	}
+}

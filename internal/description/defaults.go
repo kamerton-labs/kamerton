@@ -24,6 +24,7 @@ const (
 	DefaultRestartsMetric   = "kube_pod_container_status_restarts_total"
 	DefaultLimitsMetric     = "kube_pod_container_resource_limits"
 	DefaultTerminatedMetric = "kube_pod_container_status_last_terminated_reason"
+	DefaultReadyMetric      = "kube_pod_status_ready"
 	DefaultNamespaceLabel   = "namespace"
 	DefaultPodLabel         = "pod"
 	DefaultContainerLabel   = "container"
@@ -86,6 +87,7 @@ func ResolveTelemetry(t *v1alpha1.Telemetry) ResolvedTelemetry {
 	or(&c.PodLabel, DefaultPodLabel)
 	or(&c.LimitsMetric, DefaultLimitsMetric)
 	or(&c.TerminatedReasonMetric, DefaultTerminatedMetric)
+	or(&c.ReadyMetric, DefaultReadyMetric)
 	or(&c.ContainerLabel, DefaultContainerLabel)
 
 	q := &r.Queues

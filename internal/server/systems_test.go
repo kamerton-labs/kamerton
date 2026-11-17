@@ -196,6 +196,15 @@ func TestSystemsFileMode(t *testing.T) {
 	if code != 200 || bt.Firings != 1 || bt.Rule.For != "10m" || !strings.Contains(bt.Rule.Expr, "> 0.1") || bt.Rule.Threshold != "10%" {
 		t.Errorf("rule backtest: %d %s", code, body)
 	}
+	for _, alert := range []map[string]any{
+		{"alert": "KamertonTelemetryMissing", "range": "1d"},
+		{"service": "api", "alert": "KamertonNoReadyPods", "range": "1d"},
+	} {
+		req, _ := json.Marshal(alert)
+		if code, body := do(t, "POST", api+"/systems/shop/backtest", string(req)); code != 200 || !strings.Contains(body, `"rule":{`) {
+			t.Errorf("backtest of %v: %d %.300s", alert, code, body)
+		}
+	}
 	req, _ = json.Marshal(map[string]any{"service": "api", "alert": "KamertonQueueLagHigh"})
 	if code, _ := do(t, "POST", api+"/systems/shop/backtest", string(req)); code != http.StatusNotFound {
 		t.Errorf("backtest of a rule that does not exist: %d", code)

@@ -29,6 +29,61 @@ All notable changes to Kamerton are listed here. The format follows
   Alertmanager. `spec.notifications.evidenceFollowUp: false` turns it off
   per system; Helm values `incidents.followUp.enabled`,
   `incidents.followUp.workloadRead`, `incidents.grafanaExternalURL`.
+- "No data" alerts. `KamertonTelemetryMissing` (critical, one per system):
+  none of the system's services has sent span metrics for 3 minutes although
+  some did in the last day, so Kamerton cannot see the system and no other
+  alert can fire; the message says so. `KamertonServiceTelemetryMissing`
+  (http/grpc services): one service sent span metrics in the last day, none
+  for 3 minutes, while others still do; severity of its "requests stopped"
+  rule where that is on, else warning. A service that never sent data never
+  fires, and one silent for a day stops. The system alert mutes the
+  per-service ones. Settings: `spec.noData` (`enabled`, `after`, `message`),
+  `defaults.noData` and `services[].noData` (`enabled`, `after`, `severity`,
+  `message`). Runbook stubs, including the system runbook `_system`.
+- "No ready pods" alert `KamertonNoReadyPods` from kube-state-metrics
+  `kube_pod_status_ready` (`telemetry.containers.readyMetric`): pods of the
+  service exist and none is ready, or the last one is gone (for an hour
+  after the last ready pod). Pending 30s, so a service scaled to zero is
+  reported within about a minute, before its callers' alerts. Settings:
+  `defaults.noReadyPods`, `services[].noReadyPods` (`enabled`, `for`,
+  `severity`, `message`).
+- The follow-up names the likely cause when the alerting service has no
+  failing dependency yet: it checks the direct dependencies at that moment
+  (pending alerts, no ready pods, error rate, calls far below normal) and
+  says what it observed. A later follow-up for that cause says which earlier
+  alert it explains.
+- `evidence` on each incident of the alerts API: when collected, the cause
+  (or likely cause), workload changes, the operation with most errors, a log
+  line, a trace link, and the earlier alerts it explains.
+- Runbook endpoints serve `_system`: the runbook of the alerts about the
+  whole system.
+
+### Changed
+
+- Grouping by cause: "no ready pods" is a cause, and the SLO burn-rate
+  alerts of callers are muted too (they never mute others). The incidents in
+  the alerts API follow the same rules; the system "no data" alert forms an
+  incident `<system>:_system` without roots.
+- "Requests stopped arriving" no longer fires for a service with no
+  span-metric series at all while its "no data" alert is on: that case is
+  the "no data" alert's.
+- Sent follow-ups are remembered in the ConfigMap `kamerton-followup-state`
+  instead of memory, so a restart or a second replica does not send them
+  again.
+- A follow-up with nothing to say yet no longer uses up its incident:
+  Kamerton tries again about 1 and 3 minutes later and on later
+  notifications, then gives up and logs the reason at Info
+  (`follow-up not sent`). Before, a root alert that arrived before its
+  consequences (such as "no ready pods" of a service scaled to zero) got no
+  follow-up at all.
+- The follow-up waits 45 seconds after the notification instead of 10, so
+  the alerts of the callers have fired and "also affected" is filled.
+- The workload evidence reports scaling within the window (from the
+  Deployment's scaling events, of type Normal, and a StatefulSet at zero
+  replicas), a workload left at zero replicas, and "no pods exist".
+- Notification templates omit the service when an alert has none.
+- The demo description (`testdata/otel-demo/system.yaml`) generates 195
+  rules instead of 164.
 
 ### Fixed
 

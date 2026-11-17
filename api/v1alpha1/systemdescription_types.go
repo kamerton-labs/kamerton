@@ -70,6 +70,11 @@ type SystemDescriptionSpec struct {
 	// Notification receivers and routing.
 	// +optional
 	Notifications *Notifications `json:"notifications,omitempty"`
+
+	// The alert raised when no service of the system sends span metrics:
+	// then Kamerton sees nothing and no other alert of the system can fire.
+	// +optional
+	NoData *SystemNoDataPolicy `json:"noData,omitempty"`
 }
 
 // Telemetry maps Kamerton's concepts onto metric and label names.
@@ -138,6 +143,11 @@ type ContainerMetrics struct {
 	// Set to "-" to disable the out-of-memory kill alert.
 	// +optional
 	TerminatedReasonMetric string `json:"terminatedReasonMetric,omitempty"`
+	// Pod readiness (from kube-state-metrics, with a "condition" label of
+	// true, false or unknown). Default: kube_pod_status_ready. Set to "-" to
+	// disable the "no ready pods" alert.
+	// +optional
+	ReadyMetric string `json:"readyMetric,omitempty"`
 	// Label holding the Kubernetes namespace. Default: namespace.
 	// +optional
 	NamespaceLabel string `json:"namespaceLabel,omitempty"`
@@ -197,6 +207,12 @@ type Defaults struct {
 	// Default policy of the "requests stopped arriving" alert.
 	// +optional
 	TrafficDrop *TrafficDropPolicy `json:"trafficDrop,omitempty"`
+	// Default policy of the alert on a service that stopped sending span metrics.
+	// +optional
+	NoData *NoDataPolicy `json:"noData,omitempty"`
+	// Default policy of the "no ready pods" alert.
+	// +optional
+	NoReadyPods *NoReadyPodsPolicy `json:"noReadyPods,omitempty"`
 }
 
 // ErrorRatePolicy alerts when the share of failed calls is too high.
@@ -321,6 +337,73 @@ type TrafficDropPolicy struct {
 	Message *NotificationMessage `json:"message,omitempty"`
 }
 
+// SystemNoDataPolicy alerts when none of the system's services has sent span
+// metrics for a while although some did in the last day: the telemetry
+// pipeline (OpenTelemetry Collector, remote write, Prometheus) is broken.
+// Critical. While it fires, the per-service "no data" alerts are muted.
+type SystemNoDataPolicy struct {
+	// Set to false to disable this alert. Default: on.
+	// +optional
+	Enabled *bool `json:"enabled,omitempty"`
+	// How long no data may arrive before the alert; it fires 1 minute later
+	// (5 minutes with the default). Must cover two flushes of the span
+	// metrics (the Collector flushes every 15 to 60 seconds). Default: 3m.
+	// +optional
+	After Duration `json:"after,omitempty"`
+	// Notification text for this alert written by the team, in any language.
+	// When absent, Kamerton's default text is used.
+	// +optional
+	Message *NotificationMessage `json:"message,omitempty"`
+}
+
+// NoDataPolicy alerts when a service that sent span metrics in the last day
+// has sent none for a while, while other services of the system still do.
+// A service that never sent any, or sent nothing for a day, never alerts.
+// The "requests stopped arriving" alert then covers only a service whose
+// series still exist; with this alert off, it also covers vanished series.
+type NoDataPolicy struct {
+	// Set to true or false to turn this alert on or off. Default: on for
+	// services of type http or grpc; services of type queue or database get
+	// it only when set on the service itself.
+	// +optional
+	Enabled *bool `json:"enabled,omitempty"`
+	// How long the service may send no data before the alert; it fires 1
+	// minute later. Default: 3m.
+	// +optional
+	After Duration `json:"after,omitempty"`
+	// Severity of this alert: critical or warning. Default: the severity of
+	// the "requests stopped arriving" alert when that alert is on for the
+	// service (it no longer fires on vanished series), otherwise warning.
+	// +optional
+	Severity Severity `json:"severity,omitempty"`
+	// Notification text for this alert written by the team, in any language.
+	// When absent, Kamerton's default text is used.
+	// +optional
+	Message *NotificationMessage `json:"message,omitempty"`
+}
+
+// NoReadyPodsPolicy alerts when the pods of a service (found by workload)
+// exist and none is ready, or when the last pod is gone. With no pod left it
+// lasts an hour after the last ready pod: a deliberate scale to zero cannot be
+// told from a failure, so a service kept at zero stops alerting after that.
+// It is a cause for the grouping by cause: callers' alerts are muted.
+type NoReadyPodsPolicy struct {
+	// Set to false to disable this alert. Default: on.
+	// +optional
+	Enabled *bool `json:"enabled,omitempty"`
+	// How long the condition must hold before the alert fires. Default: 30s.
+	// +optional
+	For Duration `json:"for,omitempty"`
+	// Severity of this alert: critical or warning. Default: critical for
+	// critical services, warning for others.
+	// +optional
+	Severity Severity `json:"severity,omitempty"`
+	// Notification text for this alert written by the team, in any language.
+	// When absent, Kamerton's default text is used.
+	// +optional
+	Message *NotificationMessage `json:"message,omitempty"`
+}
+
 // SaturationPolicy alerts on memory, CPU and restarts of the service pods.
 type SaturationPolicy struct {
 	// Set to false to disable these alerts.
@@ -429,6 +512,12 @@ type Service struct {
 	// Policy of the "requests stopped arriving" alert, overriding defaults.
 	// +optional
 	TrafficDrop *TrafficDropPolicy `json:"trafficDrop,omitempty"`
+	// Policy of the alert on the service no longer sending span metrics, overriding defaults.
+	// +optional
+	NoData *NoDataPolicy `json:"noData,omitempty"`
+	// Policy of the "no ready pods" alert, overriding defaults.
+	// +optional
+	NoReadyPods *NoReadyPodsPolicy `json:"noReadyPods,omitempty"`
 	// Operations with their own thresholds.
 	// +optional
 	// +listType=map
@@ -630,22 +719,25 @@ type Notifications struct {
 	// +optional
 	TimeZone string `json:"timeZone,omitempty"`
 	// One message per incident: while a service that others depend on
-	// (dependsOn) has an error, latency or "requests stopped" alert, the same
-	// kinds of alerts of the services that call it are muted in Alertmanager,
-	// so the cause arrives instead of a pile of follow-on alerts. Memory, CPU,
-	// restart, queue and SLO alerts are never muted. Services in a dependency
-	// cycle do not mute each other. Default: true; set to false to get every
-	// alert separately.
+	// (dependsOn) has an error, latency, "requests stopped" or "no ready
+	// pods" alert, the error, latency, "requests stopped" and SLO burn-rate
+	// alerts of the services that call it are muted in Alertmanager, so the
+	// cause arrives instead of a pile of follow-on alerts. Memory, CPU,
+	// restart, queue and "no data" alerts are never muted. Services in a
+	// dependency cycle do not mute each other. Default: true; set to false to
+	// get every alert separately. The system "no data" alert mutes the
+	// per-service ones either way.
 	// +optional
 	GroupByCause *bool `json:"groupByCause,omitempty"`
-	// Send a second, short message right after a firing notification with
-	// what Kamerton found about the probable cause: the dependency chain,
-	// what changed in the workload in the last 30 minutes (new version,
-	// restarts, pods not ready, warning events), the operation with most
+	// Send a second, short message about 45 seconds after a firing
+	// notification with what Kamerton found about the probable cause: the
+	// dependency chain, what changed in the workload in the last 30 minutes
+	// (new version, scaling, restarts, pods not ready or none, warning
+	// events), the operation with most
 	// errors, an error log line and a link to failing traces. It goes to the
 	// same Telegram chats and email recipients as the alert, only through the
 	// bot and mail server configured in Kamerton, and only in a cluster.
-	// Nothing is sent when nothing useful was found. Default: true.
+	// Nothing is sent when nothing useful was found within a few minutes. Default: true.
 	// +optional
 	EvidenceFollowUp *bool `json:"evidenceFollowUp,omitempty"`
 }

@@ -11,9 +11,9 @@ import (
 	"github.com/kamerton-labs/kamerton/internal/rules"
 )
 
-// A symptom alert of a service whose dependency also has one is a consequence:
-// inhibit rules mute it and it is listed as affected. Both use MutingEdges, so
-// "also affected" in the UI is exactly what Alertmanager mutes.
+// A symptom target of a service whose dependency has a symptom source is a
+// consequence: inhibit rules mute it and it is listed as affected. Both use
+// MutingEdges, so "also affected" in the UI is what Alertmanager mutes.
 
 type Alert struct {
 	Fingerprint string    `json:"fingerprint,omitempty"`
@@ -26,6 +26,10 @@ type Alert struct {
 	// Muted means Alertmanager inhibits the alert while its cause fires.
 	Muted bool `json:"muted"`
 }
+
+// SystemRoot ends the ID of the incident of alerts about the whole system
+// (no service label); such an incident has no roots.
+const SystemRoot = "_system"
 
 type Incident struct {
 	// ID is system plus roots, so it is stable while the roots stay the same.
@@ -149,26 +153,30 @@ func (g *Graph) Incidents(system string, alerts []Alert) []Incident {
 			mutedBy[c] = append(mutedBy[c], dep)
 		}
 	}
+	alerts, wide := systemWide(system, alerts)
 	bySvc := map[string][]Alert{}
-	symptom := map[string]bool{}
+	source, target, ownCause := map[string]bool{}, map[string]bool{}, map[string]bool{}
 	var services []string
 	for _, a := range alerts {
 		if _, seen := bySvc[a.Service]; !seen {
 			services = append(services, a.Service)
 		}
 		bySvc[a.Service] = append(bySvc[a.Service], a)
-		if rules.IsSymptom(a.Name) {
-			symptom[a.Service] = true
-		}
+		source[a.Service] = source[a.Service] || rules.IsSymptomSource(a.Name)
+		target[a.Service] = target[a.Service] || rules.IsSymptomTarget(a.Name)
+		ownCause[a.Service] = ownCause[a.Service] || (rules.IsSymptomSource(a.Name) && !rules.IsSymptomTarget(a.Name))
 	}
 	sort.Strings(services)
 
-	// A symptomatic service is affected when a dependency it is muted by is
-	// symptomatic too; otherwise it is a root. Muting links have no cycles
-	// (MutingEdges drops them), so walking down always ends.
+	// A service with a symptom target is affected when a dependency it is
+	// muted by has a symptom source, unless it has a cause of its own (no
+	// ready pods). Muting links have no cycles, so walking down always ends.
 	isRoot := func(s string) bool {
+		if !target[s] || ownCause[s] {
+			return true
+		}
 		for _, d := range mutedBy[s] {
-			if symptom[d] {
+			if source[d] {
 				return false
 			}
 		}
@@ -191,7 +199,7 @@ func (g *Graph) Incidents(system string, alerts []Alert) []Incident {
 		}
 		set := map[string]bool{}
 		for _, d := range mutedBy[s] {
-			if symptom[d] {
+			if source[d] {
 				for _, r := range rootsOf(d, visiting) {
 					set[r] = true
 				}
@@ -224,7 +232,7 @@ func (g *Graph) Incidents(system string, alerts []Alert) []Incident {
 	}
 	rootOfAffected := map[string][]string{}
 	for _, s := range services {
-		if !symptom[s] {
+		if !source[s] && !target[s] {
 			find(s) // a service with other alerts only: its own group
 			continue
 		}
@@ -274,6 +282,9 @@ func (g *Graph) Incidents(system string, alerts []Alert) []Incident {
 		inc.ID = system + ":" + strings.Join(inc.Roots, "+")
 		out = append(out, *inc)
 	}
+	if wide != nil {
+		out = append(out, *wide)
+	}
 	sort.Slice(out, func(i, j int) bool {
 		if !out[i].StartsAt.Equal(out[j].StartsAt) {
 			return out[i].StartsAt.Before(out[j].StartsAt)
@@ -283,7 +294,53 @@ func (g *Graph) Incidents(system string, alerts []Alert) []Incident {
 	return out
 }
 
+// systemWide takes out the alerts about the whole system into an incident of
+// their own. While one fires, the per-service "no data" alerts it mutes are
+// listed as affected there.
+func systemWide(system string, alerts []Alert) ([]Alert, *Incident) {
+	var wide *Incident
+	for _, a := range alerts {
+		if a.Service != "" {
+			continue
+		}
+		if wide == nil {
+			wide = &Incident{ID: system + ":" + SystemRoot, System: system, Roots: []string{}, Affected: []string{}, AffectedAlerts: []Alert{}}
+		}
+		wide.RootAlerts = append(wide.RootAlerts, a)
+		if wide.StartsAt.IsZero() || a.StartsAt.Before(wide.StartsAt) {
+			wide.StartsAt = a.StartsAt
+		}
+	}
+	if wide == nil {
+		return alerts, nil
+	}
+	rest := make([]Alert, 0, len(alerts))
+	for _, a := range alerts {
+		switch {
+		case a.Service == "":
+		case a.Name == rules.AlertServiceTelemetryMissing:
+			wide.Affected = appendUnique(wide.Affected, a.Service)
+			wide.AffectedAlerts = append(wide.AffectedAlerts, a)
+		default:
+			rest = append(rest, a)
+		}
+	}
+	sort.Strings(wide.Affected)
+	sortAlerts(wide.RootAlerts)
+	sortAlerts(wide.AffectedAlerts)
+	return rest, wide
+}
+
+// IncidentOf finds the incident of a service; "" finds the system-wide one.
 func IncidentOf(incidents []Incident, service string) *Incident {
+	if service == "" {
+		for i := range incidents {
+			if strings.HasSuffix(incidents[i].ID, ":"+SystemRoot) {
+				return &incidents[i]
+			}
+		}
+		return nil
+	}
 	for i := range incidents {
 		for _, r := range incidents[i].Roots {
 			if r == service {

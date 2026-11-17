@@ -123,6 +123,8 @@ func messageBody(w messageWords, base string, htmlMode bool, clock zoneClock) st
 	since := func(field string) string {
 		return `{{ reReplaceAll "\\{since\\}" $since ` + field + ` }}`
 	}
+	// Alerts about the whole system have no service label.
+	service := `{{ with $a.Labels.service }}` + b(`{{ . }}`) + `: {{ end }}`
 	title := `{{ if $a.Annotations.kamerton_message_title }}` + since(`$a.Annotations.kamerton_message_title`) +
 		`{{ else if $a.Annotations.kamerton_title }}{{ $a.Annotations.kamerton_title }}{{ else }}{{ $a.Annotations.summary }}{{ end }}`
 	// The team's text and first steps appear only when the message is about
@@ -133,7 +135,7 @@ func messageBody(w messageWords, base string, htmlMode bool, clock zoneClock) st
 		`{{ end }}`
 
 	t.WriteString(`{{ range $i, $a := .Alerts.Firing }}{{ if lt $i ` + strconv.Itoa(maxListedAlerts) + ` }}` + clock.assign("$since", "$a.StartsAt") + "\n" +
-		`{{ if eq $a.Labels.severity "critical" }}🔴{{ else }}🟡{{ end }} ` + b(`{{ $a.Labels.service }}`) + `: ` + title + "\n" +
+		`{{ if eq $a.Labels.severity "critical" }}🔴{{ else }}🟡{{ end }} ` + service + title + "\n" +
 		`{{ with $a.Annotations.kamerton_value }}` + w.now + ` ` + b(`{{ . }}`) +
 		`{{ with $a.Annotations.kamerton_threshold }}, ` + w.threshold + ` {{ . }}{{ end }} · {{ end }}` +
 		w.since + ` {{ $since }}` + "\n" +
@@ -147,7 +149,7 @@ func messageBody(w messageWords, base string, htmlMode bool, clock zoneClock) st
 	t.WriteString(`{{ if .Alerts.Resolved }}` + resolvedHeader +
 		`{{ range $i, $a := .Alerts.Resolved }}{{ if lt $i ` + strconv.Itoa(maxListedAlerts) + ` }}` +
 		clock.assign("$since", "$a.StartsAt") + clock.assign("$until", "$a.EndsAt") +
-		"\n" + `✅ ` + b(`{{ $a.Labels.service }}`) + `: ` + title + "\n" +
+		"\n" + `✅ ` + service + title + "\n" +
 		w.since + ` {{ $since }} ` + w.until + ` {{ $until }}` + "\n" +
 		`{{ end }}{{ end }}` +
 		`{{ if gt (len .Alerts.Resolved) ` + strconv.Itoa(maxListedAlerts) + ` }}` + i(`… `+w.shown+` `+strconv.Itoa(maxListedAlerts)+` `+w.more+` {{ len .Alerts.Resolved }}`) + "\n{{ end }}" +

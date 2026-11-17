@@ -6,7 +6,7 @@
 // must match internal/generator/generator.go.
 
 import { getLang, t as tr, tl, tn, type Lang } from '@/i18n'
-import { clone, type CustomRule, type Description, type ErrorRatePolicy, type LatencyPolicy, type Service, type Severity, type TrafficDropPolicy } from './types'
+import { clone, type CustomRule, type Description, type ErrorRatePolicy, type LatencyPolicy, type NoDataPolicy, type NoReadyPodsPolicy, type Service, type Severity, type TrafficDropPolicy } from './types'
 
 export const BUILTIN = {
   errorThreshold: 0.05,
@@ -37,7 +37,19 @@ export const BUILTIN = {
   queueStoppedFor: '1m',
   queueNoMembers: '1m',
   queueStalled: '3m',
+  noDataAfter: '3m',
+  /** Fixed pending period of both no-data rules (internal/rules/nodata.go NoDataPending). */
+  noDataFor: '1m',
+  noReadyPodsFor: '30s',
+  /** With no pod left the alert lasts this long after the last ready one (internal/rules/pods.go). */
+  podsGoneRange: '1h',
 } as const
+
+/** Service part of the id of rules about the whole system: generator.SystemRunbook, never a service name. */
+export const SYSTEM_RULES = '_system'
+
+/** A metric set to "-" turns its rules off (internal/description DisabledMetric). */
+const DISABLED = '-'
 
 /** Values proposed when a rule is added. */
 export const SUGGESTED = { memory: '512Mi', cpuCores: 1, sloObjective: 99.5, queueMaxLag: 1000 } as const
@@ -61,16 +73,24 @@ export type RuleKind =
   | 'queueStopped'
   | 'slo'
   | 'traffic'
+  | 'noData'
+  | 'noReadyPods'
+  | 'systemNoData'
   | 'custom'
 
 export const kindLabel = (kind: RuleKind): string => tr(`rule.kind.${kind}` as const)
 
 export const kindHint = (kind: RuleKind): string => tr(`rule.hint.${kind}` as const)
 
+/** The duration of the no-data rules is how long data may be missing, not how long a condition holds. */
+export const isNoDataKind = (kind: RuleKind) => kind === 'noData' || kind === 'systemNoData'
+
 export interface RuleItem {
-  /** service/kind[/operation|name] */
+  /** service/kind[/operation|name]; rules about the whole system use SYSTEM_RULES as the service part. */
   id: string
+  /** '' for a rule about the whole system: its alert has no service label. */
   service: string
+  system?: boolean
   kind: RuleKind
   operation?: string
   customName?: string
@@ -84,7 +104,11 @@ export interface RuleItem {
   severityInherited: boolean
   /** Severity cannot be changed (SLO burn-rate pair). */
   severityFixed?: boolean
+  /** What "as the service" means when it is not the service's own severity. */
+  severityDefault?: Severity
   sentence: string
+  /** An extra line for the editor. */
+  note?: string
   /** Alert name used for state and backtest, with the operation label. */
   alert: string
   alertOperation: string
@@ -122,13 +146,16 @@ const thresholdBase: Record<RuleKind, Omit<ThresholdSpec, 'unit' | 'label'> | nu
   queueStopped: null,
   slo: { step: 0.1, min: 50, max: 99.999 },
   traffic: { step: 1, min: 0, max: 99 },
+  noData: null,
+  noReadyPods: null,
+  systemNoData: null,
   custom: null,
 }
 
 /** Unit of a threshold in a language: the interface's, or the notification's in previews. */
 export const thresholdUnit = (kind: RuleKind, lang: Lang = getLang()): string => (thresholdBase[kind] ? tl(lang, `rule.unit.${kind as ThresholdKind}` as const) : '')
 
-type ThresholdKind = Exclude<RuleKind, 'oomKilled' | 'queueStopped' | 'custom'>
+type ThresholdKind = Exclude<RuleKind, 'oomKilled' | 'queueStopped' | 'noData' | 'noReadyPods' | 'systemNoData' | 'custom'>
 
 /** Threshold input of a rule kind, or null when the rule has no threshold. */
 export function thresholdSpec(kind: RuleKind): ThresholdSpec | null {
@@ -197,6 +224,18 @@ export function hasRequestRules(s: Service): boolean {
 
 const serviceSeverity = (s: Service): Severity => (s.critical ? 'critical' : 'warning')
 
+const spansOn = (desc: Description) => desc.spec.telemetry?.spans?.callsMetric !== DISABLED
+
+const telemetryName = (s: Service) => s.telemetryName || s.name
+
+/** The per-service no-data rule needs another service that still sends (internal/generator otherTelemetryNames). */
+const hasOtherTelemetry = (desc: Description, s: Service) => desc.spec.services.some((x) => telemetryName(x) !== telemetryName(s))
+
+/** The per-service no-data rule can exist: http/grpc, or queue/database with noData set (internal/generator mergeNoData). */
+export function noDataApplies(desc: Description, s: Service): boolean {
+  return (s.type === 'http' || s.type === 'grpc' || !!s.noData) && spansOn(desc) && hasOtherTelemetry(desc, s)
+}
+
 export function customAlertName(name: string): string {
   return 'KamertonCustom' + name.split('-').map((p) => (p ? p[0].toUpperCase() + p.slice(1) : '')).join('')
 }
@@ -219,6 +258,26 @@ function during(forD: string): string {
 export function deriveRules(desc: Description): RuleItem[] {
   const out: RuleItem[] = []
   const d = desc.spec.defaults ?? {}
+  if (spansOn(desc)) {
+    const after = desc.spec.noData?.after ?? BUILTIN.noDataAfter
+    out.push({
+      id: `${SYSTEM_RULES}/systemNoData`,
+      service: '',
+      system: true,
+      kind: 'systemNoData',
+      enabled: desc.spec.noData?.enabled !== false,
+      threshold: NaN,
+      for: after,
+      severity: 'critical',
+      severityInherited: false,
+      severityFixed: true,
+      sentence: tr('rule.s.systemNoData', { after: formatDuration(after) }),
+      alert: 'KamertonTelemetryMissing',
+      alertOperation: '',
+      alerts: ['KamertonTelemetryMissing'],
+      removable: false,
+    })
+  }
   for (const s of desc.spec.services) {
     const sev = serviceSeverity(s)
     const base = { service: s.name }
@@ -381,6 +440,11 @@ export function deriveRules(desc: Description): RuleItem[] {
         })
       }
     }
+    const nd: NoDataPolicy[] = [d.noData ?? {}, s.noData ?? {}]
+    const noDataShown = noDataApplies(desc, s)
+    const noDataOn = noDataShown && isOn(...nd.map((x) => x.enabled))
+    const noDataAfter = pick('after', ...nd) ?? BUILTIN.noDataAfter
+    let trafficSeverity: Severity | undefined
     if (trafficApplies(s)) {
       const tp: TrafficDropPolicy[] = [d.trafficDrop ?? {}, s.trafficDrop ?? {}]
       const onByDefault = trafficOnByDefault(d, s)
@@ -390,6 +454,7 @@ export function deriveRules(desc: Description): RuleItem[] {
         const thr = pick('threshold', ...tp) ?? BUILTIN.trafficThreshold
         const tfor = pick('for', ...tp) ?? BUILTIN.trafficFor
         const tsev = pick('severity', ...tp)
+        if (enabled && spansOn(desc)) trafficSeverity = tsev ?? sev
         out.push({
           ...base,
           id: `${s.name}/traffic`,
@@ -400,12 +465,33 @@ export function deriveRules(desc: Description): RuleItem[] {
           severity: tsev ?? sev,
           severityInherited: !tsev,
           sentence: (thr === 0 ? tr('rule.s.trafficNone') : tr('rule.s.traffic', { thr: trim(thr * 100) })) + during(tfor),
+          note: noDataOn ? tr('rule.note.trafficNoData', { after: formatDuration(noDataAfter) }) : undefined,
           alert: 'KamertonRequestsStopped',
           alertOperation: '',
           alerts: ['KamertonRequestsStopped'],
           removable: !onByDefault,
         })
       }
+    }
+    if (noDataShown) {
+      const nsev = pick('severity', ...nd)
+      const def = trafficSeverity ?? 'warning'
+      out.push({
+        ...base,
+        id: `${s.name}/noData`,
+        kind: 'noData',
+        enabled: noDataOn,
+        threshold: NaN,
+        for: noDataAfter,
+        severity: nsev ?? def,
+        severityInherited: !nsev,
+        severityDefault: def,
+        sentence: tr('rule.s.noData', { after: formatDuration(noDataAfter) }),
+        alert: 'KamertonServiceTelemetryMissing',
+        alertOperation: '',
+        alerts: ['KamertonServiceTelemetryMissing'],
+        removable: !(s.type === 'http' || s.type === 'grpc'),
+      })
     }
     const sat = [d.saturation ?? {}, s.saturation ?? {}]
     const satOn = isOn(...sat.map((x) => x.enabled))
@@ -534,6 +620,26 @@ export function deriveRules(desc: Description): RuleItem[] {
       alerts: ['KamertonOOMKilled'],
       removable: false,
     })
+    if (desc.spec.telemetry?.containers?.readyMetric !== DISABLED) {
+      const np: NoReadyPodsPolicy[] = [d.noReadyPods ?? {}, s.noReadyPods ?? {}]
+      const pfor = pick('for', ...np) ?? BUILTIN.noReadyPodsFor
+      const psev = pick('severity', ...np)
+      out.push({
+        ...base,
+        id: `${s.name}/noReadyPods`,
+        kind: 'noReadyPods',
+        enabled: isOn(...np.map((x) => x.enabled)),
+        threshold: NaN,
+        for: pfor,
+        severity: psev ?? sev,
+        severityInherited: !psev,
+        sentence: tr('rule.s.noReadyPods', { gone: formatDuration(BUILTIN.podsGoneRange) }) + during(pfor),
+        alert: 'KamertonNoReadyPods',
+        alertOperation: '',
+        alerts: ['KamertonNoReadyPods'],
+        removable: false,
+      })
+    }
     if (s.queue) {
       const qfor = s.queue.for ?? BUILTIN.queueFor
       out.push({
@@ -593,6 +699,11 @@ export function deriveRules(desc: Description): RuleItem[] {
   return out
 }
 
+/** Rules the core generates for these cards: the SLO card stands for two (internal/generator, rules.Count). */
+export function generatedCount(rules: RuleItem[]): number {
+  return rules.reduce((n, r) => n + (r.enabled ? r.alerts.length : 0), 0)
+}
+
 export function customSentence(cr: CustomRule): string {
   const f = during(cr.for ?? BUILTIN.customFor)
   if (cr.condition) {
@@ -613,6 +724,7 @@ export function addableKinds(desc: Description, service: string): RuleKind[] {
     if (!present.has('slo')) out.push('slo')
   }
   if (!present.has('traffic') && (s.type === 'http' || s.type === 'grpc')) out.push('traffic')
+  if (!present.has('noData') && !(s.type === 'http' || s.type === 'grpc') && spansOn(desc) && hasOtherTelemetry(desc, s)) out.push('noData')
   if (!present.has('memory')) out.push('memory')
   if (!present.has('cpu')) out.push('cpu')
   out.push('custom')
@@ -651,6 +763,18 @@ export function setRule(desc: Description, id: string, patch: RulePatch): Descri
   const next = clone(desc)
   const [service, kind, ...rest] = id.split('/')
   const key = rest.join('/')
+  if (service === SYSTEM_RULES) {
+    if (kind !== 'systemNoData') return desc
+    const p = next.spec.noData ?? {}
+    if (patch.enabled !== undefined) {
+      delete p.enabled
+      if (!patch.enabled) p.enabled = false
+    }
+    if (patch.for !== undefined) p.after = patch.for
+    next.spec.noData = prune(p)
+    if (!next.spec.noData) delete next.spec.noData
+    return next
+  }
   const s = next.spec.services.find((x) => x.name === service)
   if (!s) return desc
   const d = next.spec.defaults ?? {}
@@ -800,6 +924,25 @@ export function setRule(desc: Description, id: string, patch: RulePatch): Descri
       else s.trafficDrop = { enabled: false }
       break
     }
+    case 'noData': {
+      const p: NoDataPolicy = s.noData ?? {}
+      if (patch.enabled !== undefined) setEnabled(p, [d.noData?.enabled], patch.enabled)
+      if (patch.for !== undefined) p.after = patch.for
+      applySeverity(p, patch.severity)
+      // For queue and database the policy itself turns the rule on, so an empty one stays.
+      s.noData = prune(p) ?? (s.type === 'http' || s.type === 'grpc' ? undefined : {})
+      if (!s.noData) delete s.noData
+      break
+    }
+    case 'noReadyPods': {
+      const p: NoReadyPodsPolicy = s.noReadyPods ?? {}
+      if (patch.enabled !== undefined) setEnabled(p, [d.noReadyPods?.enabled], patch.enabled)
+      if (patch.for !== undefined) p.for = patch.for
+      applySeverity(p, patch.severity)
+      s.noReadyPods = prune(p)
+      if (!s.noReadyPods) delete s.noReadyPods
+      break
+    }
     case 'custom': {
       const cr = s.customRules?.find((c) => c.name === key)
       if (!cr) return desc
@@ -845,7 +988,12 @@ export function addRule(desc: Description, service: string, r: NewRule): Descrip
     case 'cpuAboveNormal':
     case 'oomKilled':
     case 'queueStopped':
+    case 'noReadyPods':
+    case 'systemNoData':
       // Built-in rules: adding means turning on (setRule below).
+      break
+    case 'noData':
+      s.noData = s.noData ?? {}
       break
     case 'opErrors':
     case 'opLatency': {
@@ -901,6 +1049,7 @@ export function removeRule(desc: Description, id: string): Description {
   const next = clone(desc)
   const [service, kind, ...rest] = id.split('/')
   const key = rest.join('/')
+  if (service === SYSTEM_RULES) return setRule(desc, id, { enabled: false })
   const s = next.spec.services.find((x) => x.name === service)
   if (!s) return desc
   switch (kind as RuleKind) {
@@ -932,6 +1081,10 @@ export function removeRule(desc: Description, id: string): Description {
       return next
     case 'slo':
       delete s.slo
+      return next
+    case 'noData':
+      if (s.type === 'http' || s.type === 'grpc') return setRule(desc, id, { enabled: false })
+      delete s.noData
       return next
     case 'custom':
       s.customRules = (s.customRules ?? []).filter((c) => c.name !== key)

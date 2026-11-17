@@ -11,7 +11,7 @@ flowchart TD
     subgraph K["kamerton (one binary)"]
         C["Controller (controller-runtime)<br/>watches SystemDescription,<br/>writes status conditions"] --> V
         V["Schema validation, then semantic validation"] --> G["Generator"]
-        G --> R["Rules library<br/>error rate, latency, saturation,<br/>queue lag, SLO burn rate"]
+        G --> R["Rules library<br/>error rate, latency, saturation,<br/>queue lag, SLO burn rate, no data, no ready pods"]
         R --> RV["Prometheus rulefmt validation"]
         G --> DB["Grafana dashboard JSON"]
         G --> AM["Alertmanager routes and inhibit rules<br/>(AlertmanagerConfig)"]
@@ -61,7 +61,7 @@ Prometheus Operator and Prometheus, Alertmanager, Grafana, Loki, Tempo.
 | `internal/backtest` | Firing episodes of a rule over history | real (needs Prometheus) |
 | `internal/triage` | Probable source on the dependency graph; incidents (roots, affected services) from active alerts, using the same links as the generated inhibit rules | real |
 | `internal/evidence` | Evidence about a root service: workload changes in the last 30 minutes (pods, ReplicaSets, StatefulSets, Warning events), operations with most failed calls (span metrics, query built by the rule library), an error log line (Loki), a Grafana Explore link to failing traces (Tempo); short timeout per collector, bounded total | real (tested with fake Kubernetes, Prometheus and Loki) |
-| `internal/followup` | Alertmanager webhook notifications → incident → evidence → one follow-up message per incident to the chats and addresses that got the alert, after a short delay; in-memory record of sent incidents | real (tested with fakes) |
+| `internal/followup` | Alertmanager webhook notifications → incident → evidence (and the likely cause among the dependencies of a root whose own alert came first) → one follow-up message per incident to the chats and addresses that got the alert, after a short delay; sent incidents in the ConfigMap `kamerton-followup-state` (memory when it cannot be written); last evidence per incident in memory for the alerts API | real (tested with fakes) |
 | `internal/clients/*` | Prometheus (official client), Alertmanager v2 | real |
 | `internal/stack` | Sets of programs: the built-in set from the flags (addresses can be overridden and reset), sets added in the UI with extra labels for PrometheusRule / AlertmanagerConfig; stored in the ConfigMap `kamerton-stacks` (cluster), `.kamerton-stacks.json` next to the descriptions (local) or memory. Identity checks of an address per program (health path + build info / status). Discovery through the Kubernetes API: Services in all namespaces recognised by labels, operator service names and typical ports, confirmed over HTTP (bounded concurrency, short timeouts); Prometheus Operator `Prometheus`/`Alertmanager` resources → selector labels and warnings when instances cannot be told apart | real (unit-tested with a fake Kubernetes client and fake HTTP servers; used on a k3s cluster with a second Prometheus) |
 | `internal/descstore` | Systems: SystemDescription resources (cluster) or files (local); list, create, save, update, delete | real (tested through the API in both modes) |
@@ -105,6 +105,45 @@ Prometheus Operator and Prometheus, Alertmanager, Grafana, Loki, Tempo.
   The value is calls per minute, the notification adds the normal rate.
   Expression semantics are tested with Prometheus' engine (`promqltest`) on
   synthetic series for each failure mode (`internal/rules/traffic_test.go`).
+  Next to the per-service "no data" rule it also requires some span-metric
+  series of the service (any kind) to have a sample within that rule's
+  window, so the two never fire together: calls far below normal while series
+  exist here, no series at all there. With "no data" off for the service, an
+  absent series counts as zero again.
+- **No data** (`KamertonTelemetryMissing`, `KamertonServiceTelemetryMissing`,
+  `internal/rules/nodata.go`): every other rule is an expression over span
+  metrics and returns nothing without samples, so a broken pipeline would
+  look like silence. "Sent before" is: the service had a sample at one of the
+  10-minute steps of the last day (`count_over_time((group by (svc)
+  (calls))[1d:10m])`; each step sees the 5 minutes before it, so a service
+  must send for about a quarter of an hour). Never instrumented: never fires;
+  silent for a day (renamed, removed): resolves by itself; a Prometheus
+  restart keeps the TSDB, and the 1-minute pending period covers the first
+  evaluations before remote write catches up; with storage lost, "before" is
+  lost too. "No data now" is `present_over_time(calls[after])` (default 3m:
+  two flushes of the Collector at its slowest usual interval), a range and not
+  an instant lookup because remote write leaves no staleness markers. The
+  system rule (critical, no `service` label, group `kamerton/<system>`,
+  runbook `_system`) fires when none of the services has data; the
+  per-service one (http/grpc, or `noData` set on the service) when the
+  service has none while another service of the system has some. Severity
+  of the per-service one: its "requests stopped" rule's severity where that
+  rule is on (the vanished-series case moved here), else warning. Both carry
+  Kamerton's own message text and first steps (`kamerton_message_text`,
+  `kamerton_message_action`), which a team message replaces.
+- **No ready pods** (`KamertonNoReadyPods`, `internal/rules/pods.go`): from
+  kube-state-metrics `kube_pod_status_ready{condition="true"}` with the
+  workload locator of the saturation rules. Fires while pods exist and none
+  is ready (crash loop, failing probe, image pull), or when no pod is left
+  within an hour of the last ready one (`max_over_time(...[1h:1m])`). The
+  scrape writes a staleness marker when a pod's series goes, so the rule sees
+  the pod gone at the next scrape; pending 30s gives about a minute in all.
+  kube-state-metrics' Deployment and StatefulSet series
+  (`kube_deployment_spec_replicas`, `kube_statefulset_replicas`, `..._ready`)
+  carry the workload name, which the pod locator does not know; and a scale
+  to zero sets the same replica count as an intentional one, so a long scale
+  to zero is told apart only by time: the alert stops an hour after the last
+  ready pod and never fires for a service at zero when the rule appears.
 - Every generated rule file is parsed with Prometheus' own `rulefmt` before it
   leaves the generator.
 
@@ -161,7 +200,7 @@ description without them is arranged automatically). Saving from the UI keeps
 | GET | `/api/v1/systems/{id}/rules/state` | current rule states from Prometheus `ALERTS` |
 | GET | `/api/v1/systems/{id}/discovery` | services in telemetry; `described` for this system, `inSystems` for others |
 | POST | `/api/v1/systems/{id}/backtest` | `{yaml, service, alert, operation, range}` (a rule of a draft) or `{expr, for, range}` |
-| GET | `/api/v1/systems/{id}/runbooks/{service}` | runbook of a service |
+| GET | `/api/v1/systems/{id}/runbooks/{service}` | runbook of a service; `_system`: the alerts about the whole system (`service: {name: "_system", system: true}`) |
 | GET | `/api/v1/systems/{id}/alerts` | active alerts of the system (same shape as `/api/v1/alerts`) |
 | GET | `/api/v1/systems/{id}/telegram`, PUT `…/telegram/routing` | Telegram status / routing for this system |
 | GET | `/api/v1/stack` | health of the programs of one set (`?set=`, default the built-in one) |
@@ -171,7 +210,7 @@ description without them is arranged automatically). Saving from the UI keeps
 | PUT/DELETE | `/api/v1/stacks/{id}/programs/{kind}` | `{url}` sets an address (http/https only, no credentials); DELETE resets the built-in set's address to the install-time value or disconnects it in another set |
 | POST | `/api/v1/stacks/check` | `{kind, url}` → `{state: ok, not_ready, no_answer, wrong_program, no_access, bad_url; version, message}`; only GETs go to the address |
 | GET | `/api/v1/stacks/discover` | programs found in the cluster (`kind, namespace, service, url, version, healthy, state, operator, usedBy`), operator resources, warnings; `{available: false, reason}` outside a cluster |
-| GET | `/api/v1/alerts` | active alerts of all systems from every Alertmanager in use (merged by fingerprint), with plain-words title, value, threshold and probable source; `muted` (alerts muted by grouping by cause) and `incidents` (see Incidents) |
+| GET | `/api/v1/alerts` | active alerts of all systems from every Alertmanager in use (merged by fingerprint), with plain-words title, value, threshold and probable source; `muted` (alerts muted by grouping by cause) and `incidents` with optional `evidence` (see Incidents) |
 | POST | `/api/v1/hooks/alertmanager` | Alertmanager webhook (payload version 4); `Authorization: Bearer <token>` from the Secret `kamerton-webhook`; no session, no `X-Requested-With`; 404 `not_available` when follow-up messages are off |
 | GET | `/api/v1/settings` | external URL (links on/off), storage mode, namespace, Telegram and email availability, `followUp: {available, reason}` |
 | GET | `/api/v1/runbooks/{service}` | runbook found by service name (`?system=` to choose); behind `runbook_url` of rules |
@@ -298,13 +337,18 @@ values are escaped. Links go only to the external URL (`/alerts?...` and
 ### Grouping by cause (inhibit rules)
 
 `spec.notifications.groupByCause` (default true) adds `spec.inhibitRules`
-to the AlertmanagerConfig (`internal/generator/inhibit.go`). Symptom alerts
+to the AlertmanagerConfig (`internal/generator/inhibit.go`). Symptom sources
 are `KamertonErrorRateHigh`, `KamertonOperationErrorRateHigh`,
 `KamertonLatencyHigh`, `KamertonOperationLatencyHigh`,
-`KamertonLatencyAboveNormal` and `KamertonRequestsStopped`
-(`rules.SymptomAlerts`): what a caller sees when its dependency fails. For
-each service with callers there are two rules: a critical symptom alert of
-the service mutes symptom alerts of its direct callers of any severity; a
+`KamertonLatencyAboveNormal`, `KamertonRequestsStopped` and
+`KamertonNoReadyPods` (`rules.SymptomSources`): what a failing dependency
+fires. Symptom targets are the same without `KamertonNoReadyPods` and with
+`KamertonSLOBurnRateFast` and `KamertonSLOBurnRateSlow`
+(`rules.SymptomTargets`): what a caller fires because of it. No ready pods is
+a cause of the service's own, never a consequence; a caller's burning budget
+is a consequence, but proves nothing about the services it calls. For each
+service with callers there are two rules: a critical source alert of the
+service mutes target alerts of its direct callers of any severity; a
 warning mutes only their warnings (a warning may be routed nowhere and must
 not hide a critical alert). Alertmanager lets a muted alert act as a source,
 so chains collapse to the deepest failing service. Every matcher names
@@ -312,8 +356,11 @@ so chains collapse to the deepest failing service. Every matcher names
 of the Alertmanager). Source and target name different services, so no
 alert inhibits itself; links inside a dependency cycle are dropped
 (`triage.MutingEdges`), so two services that call each other never mute each
-other. Resource (memory, CPU, restarts, OOMKilled), queue, SLO and custom
-alerts neither mute nor are muted.
+other. Resource (memory, CPU, restarts, OOMKilled), queue, "no data" and
+custom alerts neither mute nor are muted. One more rule, generated whenever
+the system "no data" rule is on, whatever `groupByCause` says:
+`KamertonTelemetryMissing` mutes `KamertonServiceTelemetryMissing` of the
+same system.
 
 The Prometheus Operator adds `namespace="<namespace of the
 AlertmanagerConfig>"` to both sides of an inhibit rule (and to routes)
@@ -323,10 +370,13 @@ Operator with the default strategy matches neither Kamerton's routes nor its
 inhibit rules.
 
 `triage.Incidents` applies the same links to the active alerts of a system
-(the alerts API asks Alertmanager with `inhibited=true`): a symptomatic
-service whose direct dependency (by muting links) is symptomatic is
-affected, the others are roots; roots that share an affected service form
-one incident. The alerts API adds:
+(the alerts API asks Alertmanager with `inhibited=true`): a service with a
+target alert whose direct dependency (by muting links) has a source alert is
+affected, unless it has no ready pods itself; the others are roots; roots
+that share an affected service form one incident. Alerts without a
+`service` label (the system "no data" alert) form the incident
+`<system>:_system` with no roots; while it exists, the per-service "no data"
+alerts it mutes are its affected alerts. The alerts API adds:
 
 ```json
 {
@@ -340,10 +390,30 @@ one incident. The alerts API adds:
                     "severity": "critical", "startsAt": "…", "title": "…", "value": "…", "muted": false}],
     "affected": ["checkout", "frontend"],
     "affectedAlerts": [{"…": "same shape", "muted": true}],
-    "startsAt": "…"
+    "startsAt": "…",
+    "evidence": {
+      "collectedAt": "2026-11-16T04:18:12Z",
+      "cause": "payment: Requests stopped arriving since 09:18 UTC+5",
+      "likely": false,
+      "changes": ["new version at 09:14 UTC+5 (v1.4.2 -> v1.4.3)", "container payment restarted (OOMKilled)"],
+      "operation": "oteldemo.PaymentService/Charge",
+      "operationFailures": 42,
+      "logLine": "card declined: upstream timeout",
+      "tracesURL": "https://…",
+      "explains": ["checkout"]
+    }
   }]
 }
 ```
+
+`evidence` is the last evidence the follow-up collected for the incident ID,
+kept for a day (at most 200 incidents) in the memory of the replica that got
+the webhook; every field is optional and strings are in the description's
+language and time zone. `cause` describes the first root, or with
+`likely: true` the dependency named as the likely cause (`changes`,
+`operation`, `logLine` and `tracesURL` then come from that dependency, a
+missing part from the root). `explains` lists services of earlier
+follow-ups this incident turns out to cause.
 
 ### Follow-up message
 
@@ -356,25 +426,59 @@ Kamerton's namespace whose `spec.notifications.evidenceFollowUp` is not
 false. The routes before it are unchanged, so Telegram and email keep
 getting the alert straight from Alertmanager.
 
-On a firing notification (`internal/followup`) the core answers at once and
-then: finds the system by `kamerton_system`; reads its alerts with muted
+On a firing notification (`internal/followup`) the core answers at once,
+waits until 45 seconds after the notification (the root alert, such as "no
+ready pods", now usually comes first and its callers' alerts 15 to 60
+seconds later; the wait fills "also affected"), and then makes an attempt:
+finds the system by `kamerton_system`; reads its alerts with muted
 ones from the Alertmanager of its set (the notification's alerts when that
 fails); groups them into incidents; for each incident of the notification
-records `system:roots@start` (Alertmanager repeats and group updates find
-it and send nothing; entries expire after 24 hours); collects evidence for
-up to three roots (`internal/evidence`, 5 s per collector, 12 s in total,
-failures logged); renders the message (`generator.RenderFollowUp`, language
+claims `system:roots@start` in the ConfigMap `kamerton-followup-state`
+(optimistic concurrency, so one replica at a time; a lease of 2 minutes
+covers one attempt and lapses if that replica dies; entries expire after
+24 hours, at most 500; when the ConfigMap cannot be written, in memory);
+collects
+evidence for up to three roots (`internal/evidence`, 5 s per collector, 12 s
+in total, failures logged); for a root that shows a symptom target and has
+no cause of its own, checks its direct dependencies at that moment (pending
+symptom-source alerts in `ALERTS`, and the queries of
+`generator.DependencyChecks`: no ready pods, calls far below normal, error
+rate, with the dependency's merged thresholds even where its rule is off;
+5 s) and names those with observations as the likely cause, with the
+evidence of the first; marks the follow-up as an explanation of earlier
+sent follow-ups whose roots are now affected or which named one of its
+roots as the likely cause; keeps the evidence for the alerts API; renders
+the message (`generator.RenderFollowUp`, language
 and time zone of the description, Telegram HTML, email HTML and text) and
-sends it no earlier than 10 seconds after the notification to the receivers
-that got the alert (severity routing and service routes of the
-description). Telegram goes only through Kamerton's bot (receivers naming
-Kamerton's token Secret), email only through the mail server configured in
-Kamerton. Nothing is sent when the evidence says no more than the alert
-(no affected services, changes, failing operation or log line).
+sends it to the receivers that got the alert (severity routing and service
+routes of the description), and marks the incident sent: repeats and group
+updates, also after a restart or on another replica, send nothing. Telegram
+goes only through Kamerton's bot (receivers naming Kamerton's token Secret),
+email only through the mail server configured in Kamerton. The system "no
+data" alert gets no follow-up (there is no data to collect from).
+
+An attempt that sends nothing (the evidence says no more than the alert:
+no affected services, likely cause, explained alert, changes, failing
+operation or log line; nobody got the alert; every channel failed) leaves
+the incident open: the same process tries again about 1 and 3 minutes later
+(`Rechecks`), and a later notification for the incident tries too. The last
+timed attempt gives the incident up, and so does the 6th attempt or one 10
+minutes after the first (bounds for attempts started by notifications when a
+restart lost the timed ones). Giving up is logged at Info once, with the
+reason (`follow-up not sent`); attempts that will be retried log at Debug.
+So exactly one follow-up goes out per incident, at most about 5 minutes
+after the notification, and an incident with nothing to say costs at most
+three collections per notification and never a message.
 
 Evidence parts: workload changes of the root's pods (namespace and pod regex
 as the saturation rules use them; without a namespace, the namespace label of
-the pods' container metrics in Prometheus): the newest ReplicaSet of a
+the pods' container metrics in Prometheus): scaling of the workload within
+the window from the `ScalingReplicaSet` events of its Deployment (type
+Normal, "Scaled down replica set … from 1 to 0"; the pods' ReplicaSets, or
+with no pod left the ReplicaSets whose pods the regex would match) and the
+last `SuccessfulDelete` of a StatefulSet at zero replicas, a workload left at
+zero without such an event (then without time), "no pods exist" when the
+workload exists but has none, the newest ReplicaSet of a
 Deployment created within 30 minutes (old and new image tag), a StatefulSet
 rolling out a new revision, containers terminated within 30 minutes or in
 CrashLoopBackOff (reason, exit code), pods not ready, the most frequent

@@ -73,7 +73,8 @@ func TestDatabaseServiceHasNoRequestRules(t *testing.T) {
 	b := loadExample(t)
 	for _, g := range b.RuleGroups.Groups {
 		for _, r := range g.Rules {
-			if r.Labels[rules.LabelService] == "valkey-cart" && r.Labels[rules.LabelSignal] != string(rules.SignalSaturation) {
+			sig := r.Labels[rules.LabelSignal]
+			if r.Labels[rules.LabelService] == "valkey-cart" && sig != string(rules.SignalSaturation) && sig != string(rules.SignalAvailability) {
 				t.Errorf("database service got a %s rule", r.Labels[rules.LabelSignal])
 			}
 		}

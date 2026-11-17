@@ -10,7 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Switch } from '@/components/ui/switch'
 import { destinationName, useEditor } from '@/lib/editor'
 import { useT } from '@/i18n'
-import { deriveRules, kindLabel, ruleState, setRule, stateLabel, type RuleKind, type RuleState } from '@/lib/model/rules'
+import { deriveRules, generatedCount, kindLabel, ruleState, setRule, stateLabel, type RuleKind, type RuleState } from '@/lib/model/rules'
 import { receiversFor } from '@/lib/model/routing'
 import AddRuleDialog from './AddRuleDialog'
 import { RuleEditor } from './RuleCard'
@@ -29,7 +29,7 @@ export default function RulesView() {
   const all = useMemo(() => deriveRules(desc), [desc, lang])
   const kinds = useMemo(() => [...new Set(all.map((r) => r.kind))], [all])
   const rows = all.filter((r) => {
-    if (service !== 'all' && r.service !== service) return false
+    if (service !== 'all' && (r.system || r.service !== service)) return false
     if (kind !== 'all' && r.kind !== kind) return false
     if (state === 'off') return !r.enabled
     if (state === 'firing') return r.enabled && ['firing', 'warning'].includes(ruleState(r, states))
@@ -44,7 +44,7 @@ export default function RulesView() {
         <div>
           <h2 className="text-lg font-semibold">{t('system.view.rules')}</h2>
           <p className="text-sm text-muted-foreground">
-            {tn('rules.enabledOf', all.filter((r) => r.enabled).length, { total: all.length })}
+            {tn('rules.enabledOf', generatedCount(all), { total: all.reduce((n, r) => n + r.alerts.length, 0) })}
             {states ? (firing ? ` · ${t('rules.firing', { n: firing })}` : ` · ${t('rules.nothingFiring')}`) : ` · ${t('rules.stateUnknown')}`}
           </p>
         </div>
@@ -128,7 +128,13 @@ export default function RulesView() {
                   <Switch checked={r.enabled} disabled={readOnly} aria-label={t('rules.enabled')} onCheckedChange={(on) => edit((d) => setRule(d, r.id, { enabled: on }))} />
                 </span>
                 <span className="min-w-0 lg:contents">
-                  <span className="block truncate text-sm font-medium lg:text-foreground">{r.service}</span>
+                  {r.system ? (
+                    <span className="block truncate text-sm font-medium lg:text-foreground" data-testid="rule-system">
+                      {desc.metadata.name} <span className="font-normal text-muted-foreground">· {t('rules.wholeSystem')}</span>
+                    </span>
+                  ) : (
+                    <span className="block truncate text-sm font-medium lg:text-foreground">{r.service}</span>
+                  )}
                   <span className="block min-w-0">
                     <span className="block text-xs text-muted-foreground">{kindLabel(r.kind)}</span>
                     <span className={cn('block text-sm', !r.enabled && 'line-through decoration-muted-foreground/40')}>{r.sentence}</span>

@@ -5,7 +5,7 @@
 // internal/description CheckMessageText.
 
 import { t, tl, type Lang } from '@/i18n'
-import { thresholdUnit, type RuleItem, type RuleKind } from './rules'
+import { BUILTIN, isNoDataKind, thresholdUnit, type RuleItem, type RuleKind } from './rules'
 import { clone, type Description, type NotificationMessage, type Service } from './types'
 
 export const PLACEHOLDER_KEYS = ['value', 'threshold', 'service', 'operation', 'system', 'since'] as const
@@ -78,6 +78,12 @@ function where(rule: RuleItem): Where | null {
       return { get: (s) => s.slo?.message, set: (s, m) => s.slo && (s.slo.message = m) }
     case 'traffic':
       return { get: (s) => s.trafficDrop?.message, set: (s, m) => (s.trafficDrop = { ...(s.trafficDrop ?? {}), message: m }) }
+    case 'noData':
+      return { get: (s) => s.noData?.message, set: (s, m) => (s.noData = { ...(s.noData ?? {}), message: m }) }
+    case 'noReadyPods':
+      return { get: (s) => s.noReadyPods?.message, set: (s, m) => (s.noReadyPods = { ...(s.noReadyPods ?? {}), message: m }) }
+    case 'systemNoData':
+      return null
     case 'custom':
       return {
         get: (s) => s.customRules?.find((c) => c.name === rule.customName)?.message,
@@ -90,6 +96,7 @@ function where(rule: RuleItem): Where | null {
 }
 
 export function getMessage(desc: Description, rule: RuleItem): NotificationMessage | undefined {
+  if (rule.kind === 'systemNoData') return desc.spec.noData?.message
   const s = desc.spec.services.find((x) => x.name === rule.service)
   return s ? where(rule)?.get(s) : undefined
 }
@@ -103,14 +110,21 @@ function prune(o: object | undefined) {
 /** Sets the team's text of a rule; empty fields remove it. */
 export function setMessage(desc: Description, rule: RuleItem, msg: NotificationMessage): Description {
   const next = clone(desc)
+  const clean: NotificationMessage = {}
+  for (const k of ['title', 'text', 'action'] as const) if (msg[k]?.trim()) clean[k] = msg[k]!.trim()
+  if (rule.kind === 'systemNoData') {
+    const p = { ...(next.spec.noData ?? {}), message: Object.keys(clean).length ? clean : undefined }
+    prune(p)
+    if (Object.keys(p).length) next.spec.noData = p
+    else delete next.spec.noData
+    return next
+  }
   const s = next.spec.services.find((x) => x.name === rule.service)
   const w = where(rule)
   if (!s || !w) return desc
-  const clean: NotificationMessage = {}
-  for (const k of ['title', 'text', 'action'] as const) if (msg[k]?.trim()) clean[k] = msg[k]!.trim()
   w.set(s, Object.keys(clean).length ? clean : undefined)
   // Drop empty containers left behind (errorRate: {message: undefined}).
-  for (const k of ['errorRate', 'latency', 'saturation'] as const) {
+  for (const k of ['errorRate', 'latency', 'saturation', 'noReadyPods'] as const) {
     prune(s[k])
     if (s[k] && Object.keys(s[k]!).length === 0) delete s[k]
   }
@@ -122,6 +136,9 @@ export function setMessage(desc: Description, rule: RuleItem, msg: NotificationM
   // elsewhere it is what keeps the rule (see rules.ts).
   prune(s.trafficDrop)
   if (s.trafficDrop && Object.keys(s.trafficDrop).length === 0 && (next.spec.defaults?.trafficDrop?.enabled ?? !!s.critical)) delete s.trafficDrop
+  // An empty noData is what turns the rule on for a queue or a database (see rules.ts).
+  prune(s.noData)
+  if (s.noData && Object.keys(s.noData).length === 0 && (s.type === 'http' || s.type === 'grpc')) delete s.noData
   prune(s.queue)
   prune(s.slo)
   for (const c of s.customRules ?? []) prune(c)
@@ -148,7 +165,42 @@ export function fill(text: string, values: Record<string, string>): string {
 export function fixedThreshold(kind: RuleKind, lang: Lang): string {
   if (kind === 'oomKilled') return tl(lang, 'msg.fixed.oomKilled')
   if (kind === 'queueStopped') return tl(lang, 'msg.fixed.queueStopped')
+  if (kind === 'noReadyPods') return tl(lang, 'msg.fixed.noReadyPods')
   return ''
+}
+
+const UNITS_MS: [string, number][] = [
+  ['y', 31_536_000_000],
+  ['w', 604_800_000],
+  ['d', 86_400_000],
+  ['h', 3_600_000],
+  ['m', 60_000],
+  ['s', 1000],
+  ['ms', 1],
+]
+
+/** A duration as the core writes it in messages (Prometheus model.Duration: "180s" becomes "3m"). */
+export function promDuration(d: string): string {
+  const parts = [...d.matchAll(/(\d+)(ms|s|m|h|d|w|y)/g)]
+  if (parts.length === 0) return d
+  let ms = parts.reduce((n, p) => n + Number(p[1]) * UNITS_MS.find((u) => u[0] === p[2])![1], 0)
+  if (ms === 0) return '0s'
+  let out = ''
+  for (const [u, size] of UNITS_MS) {
+    if (ms >= size) {
+      out += `${Math.floor(ms / size)}${u}`
+      ms %= size
+    }
+  }
+  return out
+}
+
+/** Kamerton's own text and first steps of the no-data rules (internal/generator/rulemessage.go); the team's parts replace them. */
+export function defaultMessage(rule: RuleItem, lang: Lang): { text: string; action: string } | null {
+  if (!isNoDataKind(rule.kind)) return null
+  const k = rule.kind as 'noData' | 'systemNoData'
+  const after = promDuration(rule.for || BUILTIN.noDataAfter)
+  return { text: tl(lang, `msg.default.${k}.text` as const, { after }), action: tl(lang, `msg.default.${k}.action` as const, { after }) }
 }
 
 const TITLED = [
@@ -170,6 +222,9 @@ const TITLED = [
   'queueStopped',
   'slo',
   'traffic',
+  'noData',
+  'noReadyPods',
+  'systemNoData',
 ] as const satisfies readonly RuleKind[]
 
 /** The library's default title of a rule in a notification language (internal/rules/localize.go); '' for custom rules. */
