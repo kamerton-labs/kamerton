@@ -1,0 +1,39 @@
+apiVersion: v2
+name: kamerton
+description: Kamerton installs and configures an open-source observability stack (OpenTelemetry Collector, Prometheus, Alertmanager, Grafana, Loki, Tempo) from one short system description.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+annotations:
+  artifacthub.io/license: AGPL-3.0-only
+home: https://github.com/kamerton-labs/kamerton
+sources:
+  - https://github.com/kamerton-labs/kamerton
+kubeVersion: ">=1.27.0-0"
+keywords: [observability, monitoring, alerting, prometheus, alertmanager, grafana, loki, tempo, opentelemetry, kubernetes-operator, slo]
+# Managed programs are upstream charts, pinned and never vendored.
+# Versions checked against the repositories' index.yaml on 2026-11-15.
+# NOTE: Grafana, Loki and Tempo OSS charts are published by the grafana-community
+# repository; the charts with the same names in grafana.github.io/helm-charts are
+# deprecated (grafana, tempo) or are Grafana Enterprise Logs (loki).
+dependencies:
+  - name: kube-prometheus-stack # Prometheus Operator, Prometheus, Alertmanager
+    version: 93.3.0
+    repository: https://prometheus-community.github.io/helm-charts
+    condition: kube-prometheus-stack.enabled
+  - name: grafana
+    version: 14.4.1
+    repository: https://grafana-community.github.io/helm-charts
+    condition: grafana.enabled
+  - name: loki
+    version: 21.2.3
+    repository: https://grafana-community.github.io/helm-charts
+    condition: loki.enabled
+  - name: tempo
+    version: 3.2.1
+    repository: https://grafana-community.github.io/helm-charts
+    condition: tempo.enabled
+  - name: opentelemetry-collector
+    version: 0.178.3
+    repository: https://open-telemetry.github.io/opentelemetry-helm-charts
+    condition: opentelemetry-collector.enabled

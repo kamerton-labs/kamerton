@@ -1,0 +1,130 @@
+{{/* Copyright 2026 The Kamerton Authors. SPDX-License-Identifier: AGPL-3.0-only */}}
+{{- if .Values.rbac.create }}
+# Keep in sync with the +kubebuilder:rbac markers in
+# internal/controller/systemdescription_controller.go.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "kamerton.fullname" . }}
+  labels:
+    {{- include "kamerton.labels" . | nindent 4 }}
+rules:
+  # create/update/patch/delete: the UI creates, edits and deletes systems
+  # (one SystemDescription per system); the Telegram setup writes receivers.
+  - apiGroups: ["kamerton.dev"]
+    resources: ["systemdescriptions"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["kamerton.dev"]
+    resources: ["systemdescriptions/status"]
+    verbs: ["get", "update", "patch"]
+  - apiGroups: ["monitoring.coreos.com"]
+    resources: ["prometheusrules", "alertmanagerconfigs"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+  {{- if .Values.stacks.discovery.enabled }}
+  # "Find installed" in the UI: read-only discovery of programs already running
+  # in the cluster (Services in all namespaces, Prometheus Operator
+  # instances and their rule / AlertmanagerConfig selectors).
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get", "list"]
+  - apiGroups: ["monitoring.coreos.com"]
+    resources: ["prometheuses", "alertmanagers"]
+    verbs: ["get", "list"]
+  {{- end }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "kamerton.fullname" . }}
+  labels:
+    {{- include "kamerton.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "kamerton.fullname" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "kamerton.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- if or .Values.telegram.uiSetup .Values.email.uiSetup }}
+---
+# Telegram and email setup from the UI: the core stores the bot token and
+# the SMTP password in their own Secrets and remembers chats, the mail server
+# and recipients in ConfigMaps, all in its own namespace.
+# Namespaced Role (not ClusterRole): no access to Secrets anywhere else.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "kamerton.fullname" . }}-telegram
+  labels:
+    {{- include "kamerton.labels" . | nindent 4 }}
+rules:
+  # Read, replace and remove exactly these Secrets, by name. The core
+  # reads them with a direct GET (no informer), so list/watch are not needed.
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames:
+      {{- if .Values.telegram.uiSetup }}
+      - {{ .Values.telegram.secretName | quote }}
+      {{- end }}
+      {{- if .Values.email.uiSetup }}
+      - {{ .Values.email.secretName | quote }}
+      {{- end }}
+    verbs: ["get", "update", "patch", "delete"]
+  # Kubernetes cannot restrict "create" by resourceNames (the name is not
+  # known when the request is authorized), so this allows creating any
+  # Secret in this namespace, but not reading, listing or changing others.
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "kamerton.fullname" . }}-telegram
+  labels:
+    {{- include "kamerton.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "kamerton.fullname" . }}-telegram
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "kamerton.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}
+{{- if .Values.controller.leaderElect }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "kamerton.fullname" . }}-leader-election
+  labels:
+    {{- include "kamerton.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "kamerton.fullname" . }}-leader-election
+  labels:
+    {{- include "kamerton.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "kamerton.fullname" . }}-leader-election
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "kamerton.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}
+{{- end }}

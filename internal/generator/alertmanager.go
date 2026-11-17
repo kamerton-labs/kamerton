@@ -1,0 +1,143 @@
+// Copyright 2026 The Kamerton Authors
+// SPDX-License-Identifier: AGPL-3.0-only
+
+package generator
+
+import (
+	"regexp"
+	"strings"
+
+	"github.com/kamerton-labs/kamerton/api/v1alpha1"
+	"github.com/kamerton-labs/kamerton/internal/rules"
+)
+
+// nullReceiver swallows alerts that match no severity route.
+const nullReceiver = "kamerton-null"
+
+// alertmanagerConfig renders the spec of a prometheus-operator
+// AlertmanagerConfig (monitoring.coreos.com/v1alpha1). Credentials are
+// referenced by Secret key selectors and never copied into the config.
+//
+// Telegram and email receivers use Kamerton's message templates (message.go).
+//
+// TODO(triage): route notifications through the Kamerton webhook so they can
+// be enriched with the probable source, trace and log links before delivery.
+func (g *gen) alertmanagerConfig() map[string]any {
+	n := g.spec.Notifications
+	if n == nil || len(n.Receivers) == 0 {
+		return nil
+	}
+	groupBy := []any{"alertname", rules.LabelService}
+	repeat := builtinRepeatInterval
+	var critical, warning []string
+	if r := n.Routing; r != nil {
+		if len(r.GroupBy) > 0 {
+			groupBy = toAny(r.GroupBy)
+		}
+		if r.RepeatInterval != "" {
+			repeat = string(r.RepeatInterval)
+		}
+		critical, warning = r.Critical, r.Warning
+	}
+
+	var routes []any
+	add := func(severity string, receivers []string) {
+		for _, name := range receivers {
+			routes = append(routes, map[string]any{
+				"receiver": name,
+				"matchers": []any{matcher(rules.LabelSeverity, severity)},
+				"continue": true,
+			})
+		}
+	}
+	add(string(v1alpha1.SeverityCritical), critical)
+	add(string(v1alpha1.SeverityWarning), warning)
+	if r := n.Routing; r != nil {
+		for _, rt := range r.Routes {
+			matchers := []any{regexMatcher(rules.LabelService, rt.Services)}
+			if len(rt.Severities) > 0 {
+				sev := make([]string, len(rt.Severities))
+				for i, s := range rt.Severities {
+					sev[i] = string(s)
+				}
+				matchers = append([]any{regexMatcher(rules.LabelSeverity, sev)}, matchers...)
+			}
+			routes = append(routes, map[string]any{"receiver": rt.Receiver, "matchers": matchers, "continue": true})
+		}
+	}
+	msg := buildMessages(g.language(), g.opts.RunbookBaseURL, newZoneClock(n.TimeZone, g.now()))
+
+	receivers := []any{map[string]any{"name": nullReceiver}}
+	for _, r := range n.Receivers {
+		recv := map[string]any{"name": r.Name}
+		if t := r.Telegram; t != nil {
+			recv["telegramConfigs"] = []any{map[string]any{
+				"chatID":       t.ChatID,
+				"botToken":     secretRef(t.BotTokenSecret),
+				"sendResolved": true,
+				"parseMode":    "HTML",
+				"message":      msg.TelegramHTML,
+			}}
+		}
+		if e := r.Email; e != nil {
+			cfg := map[string]any{
+				"to":           strings.Join(e.To, ", "),
+				"from":         e.From,
+				"smarthost":    e.Smarthost,
+				"sendResolved": true,
+				"html":         msg.EmailHTML,
+				"text":         msg.EmailText,
+				"headers":      []any{map[string]any{"key": "Subject", "value": msg.EmailSubject}},
+			}
+			if e.AuthUsername != "" {
+				cfg["authUsername"] = e.AuthUsername
+			}
+			if e.AuthPasswordSecret != nil {
+				cfg["authPassword"] = secretRef(*e.AuthPasswordSecret)
+			}
+			recv["emailConfigs"] = []any{cfg}
+		}
+		receivers = append(receivers, recv)
+	}
+
+	return map[string]any{
+		"route": map[string]any{
+			"receiver":       nullReceiver,
+			"groupBy":        groupBy,
+			"groupWait":      "10s",
+			"groupInterval":  "2m",
+			"repeatInterval": repeat,
+			"matchers": []any{
+				matcher(rules.LabelManaged, "true"),
+				matcher(LabelSystem, g.sd.Name),
+			},
+			"routes": routes,
+		},
+		"receivers": receivers,
+	}
+}
+
+func matcher(name, value string) map[string]any {
+	return map[string]any{"name": name, "value": value, "matchType": "="}
+}
+
+// regexMatcher matches any of the exact values.
+func regexMatcher(name string, values []string) map[string]any {
+	quoted := make([]string, len(values))
+	for i, v := range values {
+		quoted[i] = regexp.QuoteMeta(v)
+	}
+	return map[string]any{"name": name, "value": strings.Join(quoted, "|"), "matchType": "=~"}
+}
+
+func secretRef(s v1alpha1.SecretKeyRef) map[string]any {
+	return map[string]any{"name": s.Name, "key": s.Key}
+}
+
+func toAny(s []string) []any {
+	out := make([]any, len(s))
+	for i, v := range s {
+		out[i] = v
+	}
+	return out
+}

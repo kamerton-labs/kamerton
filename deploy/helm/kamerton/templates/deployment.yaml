@@ -1,0 +1,126 @@
+{{/* Copyright 2026 The Kamerton Authors. SPDX-License-Identifier: AGPL-3.0-only */}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "kamerton.fullname" . }}
+  labels:
+    {{- include "kamerton.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "kamerton.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "kamerton.selectorLabels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "kamerton.serviceAccountName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: kamerton
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["serve"]
+          env:
+            - name: KAMERTON_LISTEN_ADDRESS
+              value: ":8080"
+            - name: KAMERTON_METRICS_BIND_ADDRESS
+              value: ":8081"
+            - name: KAMERTON_HEALTH_PROBE_BIND_ADDRESS
+              value: ":8082"
+            - name: KAMERTON_ENABLE_CONTROLLER
+              value: {{ .Values.controller.enabled | quote }}
+            - name: KAMERTON_LEADER_ELECT
+              value: {{ .Values.controller.leaderElect | quote }}
+            - name: KAMERTON_WATCH_NAMESPACE
+              value: {{ .Values.controller.watchNamespace | quote }}
+            - name: KAMERTON_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: KAMERTON_DESCRIPTION_NAME
+              value: {{ .Values.descriptionName | quote }}
+            - name: KAMERTON_TELEGRAM_SECRET_NAME
+              value: {{ .Values.telegram.secretName | quote }}
+            - name: KAMERTON_EMAIL_SECRET_NAME
+              value: {{ .Values.email.secretName | quote }}
+            - name: KAMERTON_EXTERNAL_URL
+              value: {{ .Values.externalURL | quote }}
+            - name: KAMERTON_LOG_LEVEL
+              value: {{ .Values.logLevel | quote }}
+            - name: KAMERTON_PROMETHEUS_URL
+              value: {{ include "kamerton.prometheusURL" . | quote }}
+            - name: KAMERTON_ALERTMANAGER_URL
+              value: {{ include "kamerton.alertmanagerURL" . | quote }}
+            - name: KAMERTON_GRAFANA_URL
+              value: {{ include "kamerton.grafanaURL" . | quote }}
+            - name: KAMERTON_LOKI_URL
+              value: {{ if .Values.loki.enabled }}{{ .Values.endpoints.loki | quote }}{{ else }}""{{ end }}
+            - name: KAMERTON_TEMPO_URL
+              value: {{ if .Values.tempo.enabled }}{{ .Values.endpoints.tempo | quote }}{{ else }}""{{ end }}
+            - name: KAMERTON_OTEL_COLLECTOR_HEALTH_URL
+              value: {{ if (index .Values "opentelemetry-collector" "enabled") }}{{ .Values.endpoints.otelCollectorHealth | quote }}{{ else }}""{{ end }}
+            - name: KAMERTON_EXTERNAL_PROMETHEUS
+              value: {{ .Values.bringYourOwn.prometheus.enabled | quote }}
+            - name: KAMERTON_EXTERNAL_GRAFANA
+              value: {{ .Values.bringYourOwn.grafana.enabled | quote }}
+            - name: KAMERTON_STACKS_CONFIGMAP
+              value: {{ .Values.stacks.configMapName | quote }}
+            - name: KAMERTON_STACK_DISCOVERY
+              value: {{ .Values.stacks.discovery.enabled | quote }}
+            {{- with (include "kamerton.authSecretName" .) }}
+            - name: KAMERTON_AUTH_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ . }}
+                  key: username
+            - name: KAMERTON_AUTH_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ . }}
+                  key: password
+            - name: KAMERTON_AUTH_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ . }}
+                  key: session-secret
+                  optional: true
+            {{- end }}
+          ports:
+            - name: http
+              containerPort: 8080
+            - name: metrics
+              containerPort: 8081
+            - name: probes
+              containerPort: 8082
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

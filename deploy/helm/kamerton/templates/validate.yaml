@@ -1,0 +1,22 @@
+{{/* Copyright 2026 The Kamerton Authors. SPDX-License-Identifier: AGPL-3.0-only */}}
+{{- if and .Values.bringYourOwn.prometheus.enabled (index .Values "kube-prometheus-stack" "enabled") }}
+{{- fail "bringYourOwn.prometheus.enabled=true requires kube-prometheus-stack.enabled=false" }}
+{{- end }}
+{{- if and .Values.bringYourOwn.prometheus.enabled (not .Values.bringYourOwn.prometheus.url) }}
+{{- fail "bringYourOwn.prometheus.url is required when bringYourOwn.prometheus.enabled=true" }}
+{{- end }}
+{{- if and .Values.bringYourOwn.grafana.enabled .Values.grafana.enabled }}
+{{- fail "bringYourOwn.grafana.enabled=true requires grafana.enabled=false" }}
+{{- end }}
+{{- if and .Values.bringYourOwn.grafana.enabled (not .Values.bringYourOwn.grafana.url) }}
+{{- fail "bringYourOwn.grafana.url is required when bringYourOwn.grafana.enabled=true" }}
+{{- end }}
+{{- if and (gt (int .Values.replicaCount) 1) .Values.controller.enabled (not .Values.controller.leaderElect) }}
+{{- fail "controller.leaderElect must be true when replicaCount > 1" }}
+{{- end }}
+{{- if and (not .Values.auth.existingSecret) (or .Values.auth.username .Values.auth.password) (not (and .Values.auth.username .Values.auth.password)) }}
+{{- fail "auth.username and auth.password must be set together (or use auth.existingSecret)" }}
+{{- end }}
+{{- if and .Values.auth.existingSecret (or .Values.auth.username .Values.auth.password) }}
+{{- fail "set either auth.existingSecret or auth.username/auth.password, not both" }}
+{{- end }}

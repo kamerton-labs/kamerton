@@ -1,0 +1,1586 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.20.1
+  name: systemdescriptions.kamerton.dev
+spec:
+  group: kamerton.dev
+  names:
+    kind: SystemDescription
+    listKind: SystemDescriptionList
+    plural: systemdescriptions
+    shortNames:
+    - sysdesc
+    - sd
+    singular: systemdescription
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.generatedRules
+      name: Rules
+      type: integer
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: SystemDescription is the Schema for the systemdescriptions API.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              SystemDescriptionSpec describes the services of one system, their thresholds
+              and SLOs, and where notifications go.
+            properties:
+              defaults:
+                description: Default policies applied to every service unless the
+                  service overrides them.
+                properties:
+                  errorRate:
+                    description: Default error rate policy.
+                    properties:
+                      enabled:
+                        description: Set to false to disable this alert.
+                        type: boolean
+                      for:
+                        description: How long the condition must hold before the alert
+                          fires.
+                        pattern: ^([0-9]+(ms|s|m|h|d|w|y))+$
+                        type: string
+                      message:
+                        description: |-
+                          Notification text for this alert (also used by the per-operation rule) written by the team, in any language.
+                          When absent, Kamerton's default text is used.
+                        properties:
+                          action:
+                            description: First steps for the person on call.
+                            maxLength: 1000
+                            type: string
+                          text:
+                            description: What it means, with values, for example "Error
+                              rate {value} (threshold {threshold})".
+                            maxLength: 1000
+                            type: string
+                          title:
+                            description: What happened, in the team's words. Replaces
+                              the title of the notification.
+                            maxLength: 200
+                            type: string
+                        type: object
+                      minRequestsPerSecond:
+                        description: |-
+                          Minimum traffic, in calls per second, for the alert to be evaluated.
+                          Prevents alerts on a single failed call in an idle service. Not used by
+                          the per-operation rule, which needs at least 3 failed calls of the
+                          operation in the window instead.
+                        minimum: 0
+                        type: number
+                      perOperation:
+                        description: |-
+                          Also evaluate the error rate of every operation separately, so a failure
+                          of one operation is not hidden by healthy traffic of others. The
+                          per-operation rule needs at least 3 failed calls of the operation in the
+                          window. Default: true; set to false to turn it off.
+                        type: boolean
+                      severity:
+                        description: |-
+                          Severity of this alert: critical or warning. Default: critical for
+                          critical services, warning for others.
+                        enum:
+                        - warning
+                        - critical
+                        type: string
+                      threshold:
+                        description: Maximum allowed share of failed calls, from 0
+                          to 1 (0.05 = 5%).
+                        maximum: 1
+                        minimum: 0
+                        type: number
+                    type: object
+                  excludeOperations:
+                    description: |-
+                      Operations (span names, RE2 regular expressions) ignored by all request
+                      rules, for example noisy streaming endpoints.
+                    items:
+                      type: string
+                    type: array
+                  latency:
+                    description: Default latency policy.
+                    properties:
+                      aboveNormalFactor:
+                        description: |-
+                          Alert when the latency quantile of the service is this many times its
+                          normal value (the quantile over the previous hour, ending 10 minutes
+                          ago) and above 100 ms, whatever the threshold. Default: 5; 0 turns
+                          the alert off.
+                        minimum: 0
+                        type: number
+                      enabled:
+                        description: Set to false to disable this alert.
+                        type: boolean
+                      for:
+                        description: How long the condition must hold before the alert
+                          fires.
+                        pattern: ^([0-9]+(ms|s|m|h|d|w|y))+$
+                        type: string
+                      message:
+                        description: |-
+                          Notification text for this alert (also used by the per-operation and
+                          "slower than normal" rules) written by the team, in any language.
+                          When absent, Kamerton's default text is used.
+                        properties:
+                          action:
+                            description: First steps for the person on call.
+                            maxLength: 1000
+                            type: string
+                          text:
+                            description: What it means, with values, for example "Error
+                              rate {value} (threshold {threshold})".
+                            maxLength: 1000
+                            type: string
+                          title:
+                            description: What happened, in the team's words. Replaces
+                              the title of the notification.
+                            maxLength: 200
+                            type: string
+                        type: object
+                      minRequestsPerSecond:
+                        description: |-
+                          Minimum traffic, in calls per second, for the alert to be evaluated.
+                          Default: none; the latency rules always need at least 3 calls in the
+                          window, so a quantile is never computed from one or two requests.
+                        minimum: 0
+                        type: number
+                      perOperation:
+                        description: |-
+                          Also evaluate the latency of every operation separately, so a slow
+                          operation is not hidden by fast traffic of others. Operations with their
+                          own latency policy are left to that policy. Default: true.
+                        type: boolean
+                      quantile:
+                        description: Quantile to evaluate, for example 0.95.
+                        exclusiveMinimum: true
+                        maximum: 1
+                        minimum: 0
+                        type: number
+                      severity:
+                        description: |-
+                          Severity of this alert: critical or warning. Default: critical for
+                          critical services, warning for others.
+                        enum:
+                        - warning
+                        - critical
+                        type: string
+                      thresholdMs:
+                        description: Latency threshold in milliseconds.
+                        minimum: 0
+                        type: number
+                    type: object
+                  namespace:
+                    description: Kubernetes namespace where the services run.
+                    type: string
+                  rateWindow:
+                    description: |-
+                      Window for rate() and increase(). Must cover at least two scrapes; with
+                      metrics updated once a minute use 2m or more. Default: 5m.
+                    pattern: ^([0-9]+(ms|s|m|h|d|w|y))+$
+                    type: string
+                  saturation:
+                    description: Default resource saturation policy.
+                    properties:
+                      cpuAboveNormalFactor:
+                        description: |-
+                          Without an explicit CPU threshold: alert when a pod uses more than 0.5
+                          cores and this many times the normal CPU of the service (the average
+                          over the previous hour, ending 10 minutes ago). Default: 3; 0 turns
+                          the alert off.
+                        minimum: 0
+                        type: number
+                      cpuCores:
+                        description: |-
+                          CPU threshold per pod in cores, for example 0.5. When set, it replaces
+                          the alerts on CPU close to the limit and far above normal.
+                        minimum: 0
+                        type: number
+                      cpuLimitShare:
+                        description: |-
+                          Without an explicit CPU threshold: alert when the CPU usage of a pod
+                          exceeds this share of its CPU limit (all containers must have a limit).
+                          From 0 to 1. Default: 0.9; 0 turns the alert off.
+                        maximum: 1
+                        minimum: 0
+                        type: number
+                      cpuMessage:
+                        description: Notification text of the CPU alerts written by
+                          the team.
+                        properties:
+                          action:
+                            description: First steps for the person on call.
+                            maxLength: 1000
+                            type: string
+                          text:
+                            description: What it means, with values, for example "Error
+                              rate {value} (threshold {threshold})".
+                            maxLength: 1000
+                            type: string
+                          title:
+                            description: What happened, in the team's words. Replaces
+                              the title of the notification.
+                            maxLength: 200
+                            type: string
+                        type: object
+                      enabled:
+                        description: Set to false to disable these alerts.
+                        type: boolean
+                      for:
+                        description: How long the condition must hold before the alert
+                          fires.
+                        pattern: ^([0-9]+(ms|s|m|h|d|w|y))+$
+                        type: string
+                      maxRestartsPerHour:
+                        description: Maximum container restarts per hour.
+                        format: int32
+                        minimum: 0
+                        type: integer
+                      memory:
+                        description: |-
+                          Memory threshold per pod as a Kubernetes quantity, for example 512Mi.
+                          When set, it replaces the alert on memory close to the limit.
+                        pattern: ^[0-9]+(\.[0-9]+)?(Ki|Mi|Gi|Ti|k|M|G|T)?$
+                        type: string
+                      memoryLimitShare:
+                        description: |-
+                          Without an explicit memory threshold: alert when the memory of a pod
+                          exceeds this share of its memory limit (all containers must have a
+                          limit) and its trend over the last hour reaches the limit within 30
+                          minutes. From 0 to 1. Default: 0.95; 0 turns the alert off.
+                        maximum: 1
+                        minimum: 0
+                        type: number
+                      memoryMessage:
+                        description: Notification text of the memory alerts written
+                          by the team.
+                        properties:
+                          action:
+                            description: First steps for the person on call.
+                            maxLength: 1000
+                            type: string
+                          text:
+                            description: What it means, with values, for example "Error
+                              rate {value} (threshold {threshold})".
+                            maxLength: 1000
+                            type: string
+                          title:
+                            description: What happened, in the team's words. Replaces
+                              the title of the notification.
+                            maxLength: 200
+                            type: string
+                        type: object
+                      oomKilledEnabled:
+                        description: |-
+                          Set to false to disable the alert on a container killed for running
+                          out of memory (OOMKilled). It fires at once and lasts 10 minutes.
+                        type: boolean
+                      oomKilledMessage:
+                        description: Notification text of the out-of-memory kill alert
+                          written by the team.
+                        properties:
+                          action:
+                            description: First steps for the person on call.
+                            maxLength: 1000
+                            type: string
+                          text:
+                            description: What it means, with values, for example "Error
+                              rate {value} (threshold {threshold})".
+                            maxLength: 1000
+                            type: string
+                          title:
+                            description: What happened, in the team's words. Replaces
+                              the title of the notification.
+                            maxLength: 200
+                            type: string
+                        type: object
+                      restartsEnabled:
+                        description: Set to false to disable only the container restarts
+                          alert.
+                        type: boolean
+                      restartsMessage:
+                        description: Notification text of the restarts alert written
+                          by the team.
+                        properties:
+                          action:
+                            description: First steps for the person on call.
+                            maxLength: 1000
+                            type: string
+                          text:
+                            description: What it means, with values, for example "Error
+                              rate {value} (threshold {threshold})".
+                            maxLength: 1000
+                            type: string
+                          title:
+                            description: What happened, in the team's words. Replaces
+                              the title of the notification.
+                            maxLength: 200
+                            type: string
+                        type: object
+                      severity:
+                        description: |-
+                          Severity of these alerts: critical or warning. Default: critical for
+                          critical services, warning for others.
+                        enum:
+                        - warning
+                        - critical
+                        type: string
+                    type: object
+                  trafficDrop:
+                    description: Default policy of the "requests stopped arriving"
+                      alert.
+                    properties:
+                      enabled:
+                        description: |-
+                          Set to true or false to turn this alert on or off. Default: on for
+                          critical services of type http or grpc, off for others; services of type
+                          queue or database get it only when set on the service itself.
+                        type: boolean
+                      for:
+                        description: 'How long the condition must hold before the
+                          alert fires. Default: 2m.'
+                        pattern: ^([0-9]+(ms|s|m|h|d|w|y))+$
+                        type: string
+                      message:
+                        description: |-
+                          Notification text for this alert written by the team, in any language.
+                          When absent, Kamerton's default text is used.
+                        properties:
+                          action:
+                            description: First steps for the person on call.
+                            maxLength: 1000
+                            type: string
+                          text:
+                            description: What it means, with values, for example "Error
+                              rate {value} (threshold {threshold})".
+                            maxLength: 1000
+                            type: string
+                          title:
+                            description: What happened, in the team's words. Replaces
+                              the title of the notification.
+                            maxLength: 200
+                            type: string
+                        type: object
+                      minRequestsPerSecond:
+                        description: |-
+                          Minimum normal traffic, in calls per second, for the alert to apply:
+                          quieter services go minutes without a call in normal operation.
+                          Default: 0.02 (about one call a minute).
+                        minimum: 0
+                        type: number
+                      severity:
+                        description: |-
+                          Severity of this alert: critical or warning. Default: critical for
+                          critical services, warning for others.
+                        enum:
+                        - warning
+                        - critical
+                        type: string
+                      threshold:
+                        description: |-
+                          Share of the normal traffic at or below which the alert fires, from 0
+                          to 1: 0.1 = 10%, 0 = only when calls stop completely. Default: 0.1.
+                        exclusiveMaximum: true
+                        maximum: 1
+                        minimum: 0
+                        type: number
+                    type: object
+                type: object
+              environment:
+                description: Human-readable name of the environment, added as the
+                  "environment" label to every alert.
+                type: string
+              notifications:
+                description: Notification receivers and routing.
+                properties:
+                  language:
+                    description: 'Language of notification messages and of the plain-words
+                      alert text: en (default) or ru.'
+                    enum:
+                    - ru
+                    - en
+                    type: string
+                  receivers:
+                    description: Notification receivers.
+                    items:
+                      description: Receiver is one notification channel. Exactly one
+                        of telegram or email must be set.
+                      properties:
+                        email:
+                          description: Email recipients.
+                          properties:
+                            authPasswordSecret:
+                              description: Kubernetes Secret key holding the SMTP
+                                password.
+                              properties:
+                                key:
+                                  description: Key inside the Secret.
+                                  minLength: 1
+                                  type: string
+                                name:
+                                  description: Secret name.
+                                  minLength: 1
+                                  type: string
+                              required:
+                              - key
+                              - name
+                              type: object
+                            authUsername:
+                              description: SMTP username.
+                              type: string
+                            from:
+                              description: Sender address.
+                              type: string
+                            smarthost:
+                              description: SMTP server as host:port.
+                              pattern: ^[^:\s]+:[0-9]+$
+                              type: string
+                            to:
+                              description: Recipient addresses.
+                              items:
+                                type: string
+                              minItems: 1
+                              type: array
+                          required:
+                          - from
+                          - smarthost
+                          - to
+                          type: object
+                        name:
+                          description: Unique receiver name.
+                          pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                          type: string
+                        telegram:
+                          description: Telegram chat.
+                          properties:
+                            botTokenSecret:
+                              description: Kubernetes Secret key holding the bot token.
+                                The token never goes into this description.
+                              properties:
+                                key:
+                                  description: Key inside the Secret.
+                                  minLength: 1
+                                  type: string
+                                name:
+                                  description: Secret name.
+                                  minLength: 1
+                                  type: string
+                              required:
+                              - key
+                              - name
+                              type: object
+                            chatID:
+                              description: Chat ID, for example -1001234567890.
+                              format: int64
+                              type: integer
+                          required:
+                          - botTokenSecret
+                          - chatID
+                          type: object
+                      required:
+                      - name
+                      type: object
+                    type: array
+                    x-kubernetes-list-map-keys:
+                    - name
+                    x-kubernetes-list-type: map
+                  routing:
+                    description: Routing of alerts to receivers.
+                    properties:
+                      critical:
+                        description: Receivers for critical alerts.
+                        items:
+                          type: string
+                        type: array
+                      groupBy:
+                        description: 'Labels used to group alerts into one notification.
+                          Default: alertname, service.'
+                        items:
+                          type: string
+                        type: array
+                      repeatInterval:
+                        description: 'How often to repeat a notification for an alert
+                          that is still firing. Default: 4h.'
+                        pattern: ^([0-9]+(ms|s|m|h|d|w|y))+$
+                        type: string
+                      routes:
+                        description: |-
+                          Routes limited to some services: the receiver gets only alerts of the
+                          listed services with the listed severities. Use critical/warning above
+                          for receivers that get alerts of every service.
+                        items:
+                          description: Route sends alerts of some services to one
+                            receiver.
+                          properties:
+                            receiver:
+                              description: Receiver name.
+                              minLength: 1
+                              type: string
+                            services:
+                              description: Service names whose alerts are delivered.
+                              items:
+                                type: string
+                              minItems: 1
+                              type: array
+                            severities:
+                              description: Severities to deliver. Empty means all
+                                severities.
+                              items:
+                                description: Severity of generated alerts.
+                                enum:
+                                - warning
+                                - critical
+                                type: string
+                              type: array
+                          required:
+                          - receiver
+                          - services
+                          type: object
+                        type: array
+                      warning:
+                        description: Receivers for warnings.
+                        items:
+                          type: string
+                        type: array
+                    type: object
+                  timeZone:
+                    description: |-
+                      Time zone of the times in notification messages, as an IANA name such as
+                      Asia/Almaty or Europe/Berlin. Times are shown with their offset, for
+                      example "09:18 16.11 UTC+5". Default: UTC.
+                    maxLength: 64
+                    type: string
+                type: object
+              services:
+                description: Services of the system.
+                items:
+                  description: Service is one component of the system.
+                  properties:
+                    critical:
+                      description: Critical services page on-call; others create warnings.
+                      type: boolean
+                    customRules:
+                      description: |-
+                        Rules for cases the built-in policies do not cover. They get the same
+                        labels, notification text and runbook link as built-in rules.
+                      items:
+                        description: CustomRule is an alert written by the user. Exactly
+                          one of condition or expr must be set.
+                        properties:
+                          condition:
+                            description: 'Condition assembled from parts: metric,
+                              function, aggregation, comparison.'
+                            properties:
+                              aggregation:
+                                description: 'How to combine series: max, min, avg,
+                                  sum or count. Default: max.'
+                                enum:
+                                - max
+                                - min
+                                - avg
+                                - sum
+                                - count
+                                type: string
+                              by:
+                                description: 'Labels kept after aggregation: one alert
+                                  per combination of their values.'
+                                items:
+                                  type: string
+                                type: array
+                              function:
+                                description: |-
+                                  What to take from the metric: the value as is (none), the per-second
+                                  rate of a counter (rate) or its increase over the rate window (increase). Default: none.
+                                enum:
+                                - none
+                                - rate
+                                - increase
+                                type: string
+                              labels:
+                                additionalProperties:
+                                  type: string
+                                description: Only series with these exact label values.
+                                type: object
+                              metric:
+                                description: Metric name, for example http_requests_total.
+                                pattern: ^[a-zA-Z_:][a-zA-Z0-9_:]*$
+                                type: string
+                              operator:
+                                description: 'Comparison with the threshold: gt (>),
+                                  gte (>=), lt (<), lte (<=), eq (==), ne (!=).'
+                                enum:
+                                - gt
+                                - gte
+                                - lt
+                                - lte
+                                - eq
+                                - ne
+                                type: string
+                              threshold:
+                                description: Threshold value.
+                                type: number
+                            required:
+                            - metric
+                            - operator
+                            - threshold
+                            type: object
+                          enabled:
+                            description: Set to false to disable this alert.
+                            type: boolean
+                          expr:
+                            description: PromQL expression; the alert fires for every
+                              series it returns.
+                            type: string
+                          for:
+                            description: 'How long the condition must hold before
+                              the alert fires. Default: 5m.'
+                            pattern: ^([0-9]+(ms|s|m|h|d|w|y))+$
+                            type: string
+                          message:
+                            description: |-
+                              Notification text for this alert written by the team, in any language.
+                              When absent, Kamerton's default text is used.
+                            properties:
+                              action:
+                                description: First steps for the person on call.
+                                maxLength: 1000
+                                type: string
+                              text:
+                                description: What it means, with values, for example
+                                  "Error rate {value} (threshold {threshold})".
+                                maxLength: 1000
+                                type: string
+                              title:
+                                description: What happened, in the team's words. Replaces
+                                  the title of the notification.
+                                maxLength: 200
+                                type: string
+                            type: object
+                          name:
+                            description: 'Identifier, unique within the service: lowercase
+                              letters, digits and dashes.'
+                            maxLength: 63
+                            pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                            type: string
+                          severity:
+                            description: |-
+                              Severity of this alert: critical or warning. Default: critical for
+                              critical services, warning for others.
+                            enum:
+                            - warning
+                            - critical
+                            type: string
+                          title:
+                            description: What is wrong, in plain words. Shown as the
+                              title of the notification.
+                            maxLength: 200
+                            minLength: 1
+                            type: string
+                          unit:
+                            description: Unit shown after the value in notifications,
+                              for example %, ms or orders.
+                            maxLength: 20
+                            type: string
+                        required:
+                        - name
+                        - title
+                        type: object
+                      type: array
+                      x-kubernetes-list-map-keys:
+                      - name
+                      x-kubernetes-list-type: map
+                    dependsOn:
+                      description: |-
+                        Services this service calls. Used to build the service map and to find
+                        the probable source of an incident.
+                      items:
+                        type: string
+                      type: array
+                    description:
+                      description: Short description shown in the UI and in notifications.
+                      type: string
+                    errorRate:
+                      description: Error rate policy, overriding defaults.
+                      properties:
+                        enabled:
+                          description: Set to false to disable this alert.
+                          type: boolean
+                        for:
+                          description: How long the condition must hold before the
+                            alert fires.
+                          pattern: ^([0-9]+(ms|s|m|h|d|w|y))+$
+                          type: string
+                        message:
+                          description: |-
+                            Notification text for this alert (also used by the per-operation rule) written by the team, in any language.
+                            When absent, Kamerton's default text is used.
+                          properties:
+                            action:
+                              description: First steps for the person on call.
+                              maxLength: 1000
+                              type: string
+                            text:
+                              description: What it means, with values, for example
+                                "Error rate {value} (threshold {threshold})".
+                              maxLength: 1000
+                              type: string
+                            title:
+                              description: What happened, in the team's words. Replaces
+                                the title of the notification.
+                              maxLength: 200
+                              type: string
+                          type: object
+                        minRequestsPerSecond:
+                          description: |-
+                            Minimum traffic, in calls per second, for the alert to be evaluated.
+                            Prevents alerts on a single failed call in an idle service. Not used by
+                            the per-operation rule, which needs at least 3 failed calls of the
+                            operation in the window instead.
+                          minimum: 0
+                          type: number
+                        perOperation:
+                          description: |-
+                            Also evaluate the error rate of every operation separately, so a failure
+                            of one operation is not hidden by healthy traffic of others. The
+                            per-operation rule needs at least 3 failed calls of the operation in the
+                            window. Default: true; set to false to turn it off.
+                          type: boolean
+                        severity:
+                          description: |-
+                            Severity of this alert: critical or warning. Default: critical for
+                            critical services, warning for others.
+                          enum:
+                          - warning
+                          - critical
+                          type: string
+                        threshold:
+                          description: Maximum allowed share of failed calls, from
+                            0 to 1 (0.05 = 5%).
+                          maximum: 1
+                          minimum: 0
+                          type: number
+                      type: object
+                    excludeOperations:
+                      description: Additional operations (RE2 regular expressions)
+                        ignored for this service.
+                      items:
+                        type: string
+                      type: array
+                    latency:
+                      description: Latency policy, overriding defaults.
+                      properties:
+                        aboveNormalFactor:
+                          description: |-
+                            Alert when the latency quantile of the service is this many times its
+                            normal value (the quantile over the previous hour, ending 10 minutes
+                            ago) and above 100 ms, whatever the threshold. Default: 5; 0 turns
+                            the alert off.
+                          minimum: 0
+                          type: number
+                        enabled:
+                          description: Set to false to disable this alert.
+                          type: boolean
+                        for:
+                          description: How long the condition must hold before the
+                            alert fires.
+                          pattern: ^([0-9]+(ms|s|m|h|d|w|y))+$
+                          type: string
+                        message:
+                          description: |-
+                            Notification text for this alert (also used by the per-operation and
+                            "slower than normal" rules) written by the team, in any language.
+                            When absent, Kamerton's default text is used.
+                          properties:
+                            action:
+                              description: First steps for the person on call.
+                              maxLength: 1000
+                              type: string
+                            text:
+                              description: What it means, with values, for example
+                                "Error rate {value} (threshold {threshold})".
+                              maxLength: 1000
+                              type: string
+                            title:
+                              description: What happened, in the team's words. Replaces
+                                the title of the notification.
+                              maxLength: 200
+                              type: string
+                          type: object
+                        minRequestsPerSecond:
+                          description: |-
+                            Minimum traffic, in calls per second, for the alert to be evaluated.
+                            Default: none; the latency rules always need at least 3 calls in the
+                            window, so a quantile is never computed from one or two requests.
+                          minimum: 0
+                          type: number
+                        perOperation:
+                          description: |-
+                            Also evaluate the latency of every operation separately, so a slow
+                            operation is not hidden by fast traffic of others. Operations with their
+                            own latency policy are left to that policy. Default: true.
+                          type: boolean
+                        quantile:
+                          description: Quantile to evaluate, for example 0.95.
+                          exclusiveMinimum: true
+                          maximum: 1
+                          minimum: 0
+                          type: number
+                        severity:
+                          description: |-
+                            Severity of this alert: critical or warning. Default: critical for
+                            critical services, warning for others.
+                          enum:
+                          - warning
+                          - critical
+                          type: string
+                        thresholdMs:
+                          description: Latency threshold in milliseconds.
+                          minimum: 0
+                          type: number
+                      type: object
+                    name:
+                      description: Unique name of the service.
+                      maxLength: 63
+                      pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                      type: string
+                    operations:
+                      description: Operations with their own thresholds.
+                      items:
+                        description: Operation is a single operation (span name) of
+                          a service with its own policy.
+                        properties:
+                          errorRate:
+                            description: Error rate policy for this operation.
+                            properties:
+                              enabled:
+                                description: Set to false to disable this alert.
+                                type: boolean
+                              for:
+                                description: How long the condition must hold before
+                                  the alert fires.
+                                pattern: ^([0-9]+(ms|s|m|h|d|w|y))+$
+                                type: string
+                              message:
+                                description: |-
+                                  Notification text for this alert (also used by the per-operation rule) written by the team, in any language.
+                                  When absent, Kamerton's default text is used.
+                                properties:
+                                  action:
+                                    description: First steps for the person on call.
+                                    maxLength: 1000
+                                    type: string
+                                  text:
+                                    description: What it means, with values, for example
+                                      "Error rate {value} (threshold {threshold})".
+                                    maxLength: 1000
+                                    type: string
+                                  title:
+                                    description: What happened, in the team's words.
+                                      Replaces the title of the notification.
+                                    maxLength: 200
+                                    type: string
+                                type: object
+                              minRequestsPerSecond:
+                                description: |-
+                                  Minimum traffic, in calls per second, for the alert to be evaluated.
+                                  Prevents alerts on a single failed call in an idle service. Not used by
+                                  the per-operation rule, which needs at least 3 failed calls of the
+                                  operation in the window instead.
+                                minimum: 0
+                                type: number
+                              perOperation:
+                                description: |-
+                                  Also evaluate the error rate of every operation separately, so a failure
+                                  of one operation is not hidden by healthy traffic of others. The
+                                  per-operation rule needs at least 3 failed calls of the operation in the
+                                  window. Default: true; set to false to turn it off.
+                                type: boolean
+                              severity:
+                                description: |-
+                                  Severity of this alert: critical or warning. Default: critical for
+                                  critical services, warning for others.
+                                enum:
+                                - warning
+                                - critical
+                                type: string
+                              threshold:
+                                description: Maximum allowed share of failed calls,
+                                  from 0 to 1 (0.05 = 5%).
+                                maximum: 1
+                                minimum: 0
+                                type: number
+                            type: object
+                          latency:
+                            description: Latency policy for this operation.
+                            properties:
+                              aboveNormalFactor:
+                                description: |-
+                                  Alert when the latency quantile of the service is this many times its
+                                  normal value (the quantile over the previous hour, ending 10 minutes
+                                  ago) and above 100 ms, whatever the threshold. Default: 5; 0 turns
+                                  the alert off.
+                                minimum: 0
+                                type: number
+                              enabled:
+                                description: Set to false to disable this alert.
+                                type: boolean
+                              for:
+                                description: How long the condition must hold before
+                                  the alert fires.
+                                pattern: ^([0-9]+(ms|s|m|h|d|w|y))+$
+                                type: string
+                              message:
+                                description: |-
+                                  Notification text for this alert (also used by the per-operation and
+                                  "slower than normal" rules) written by the team, in any language.
+                                  When absent, Kamerton's default text is used.
+                                properties:
+                                  action:
+                                    description: First steps for the person on call.
+                                    maxLength: 1000
+                                    type: string
+                                  text:
+                                    description: What it means, with values, for example
+                                      "Error rate {value} (threshold {threshold})".
+                                    maxLength: 1000
+                                    type: string
+                                  title:
+                                    description: What happened, in the team's words.
+                                      Replaces the title of the notification.
+                                    maxLength: 200
+                                    type: string
+                                type: object
+                              minRequestsPerSecond:
+                                description: |-
+                                  Minimum traffic, in calls per second, for the alert to be evaluated.
+                                  Default: none; the latency rules always need at least 3 calls in the
+                                  window, so a quantile is never computed from one or two requests.
+                                minimum: 0
+                                type: number
+                              perOperation:
+                                description: |-
+                                  Also evaluate the latency of every operation separately, so a slow
+                                  operation is not hidden by fast traffic of others. Operations with their
+                                  own latency policy are left to that policy. Default: true.
+                                type: boolean
+                              quantile:
+                                description: Quantile to evaluate, for example 0.95.
+                                exclusiveMinimum: true
+                                maximum: 1
+                                minimum: 0
+                                type: number
+                              severity:
+                                description: |-
+                                  Severity of this alert: critical or warning. Default: critical for
+                                  critical services, warning for others.
+                                enum:
+                                - warning
+                                - critical
+                                type: string
+                              thresholdMs:
+                                description: Latency threshold in milliseconds.
+                                minimum: 0
+                                type: number
+                            type: object
+                          name:
+                            description: Span name of the operation, for example oteldemo.CheckoutService/PlaceOrder.
+                            minLength: 1
+                            type: string
+                        required:
+                        - name
+                        type: object
+                      type: array
+                      x-kubernetes-list-map-keys:
+                      - name
+                      x-kubernetes-list-type: map
+                    owner:
+                      description: Team or person responsible for the service.
+                      type: string
+                    queue:
+                      description: Queue settings, for services of type queue.
+                      properties:
+                        consumerGroups:
+                          description: Consumer groups to watch. Empty means all groups
+                            of the topic.
+                          items:
+                            type: string
+                          type: array
+                        consumerStoppedEnabled:
+                          description: |-
+                            Set to false to disable the alert on a consumer group that stopped
+                            reading the topic: the group has no members for a minute, or messages
+                            wait for 3 minutes while its committed offset does not move. It needs
+                            no threshold and holds for 1 minute (or the shorter for above).
+                          type: boolean
+                        consumerStoppedMessage:
+                          description: Notification text of the stopped consumer alert
+                            written by the team.
+                          properties:
+                            action:
+                              description: First steps for the person on call.
+                              maxLength: 1000
+                              type: string
+                            text:
+                              description: What it means, with values, for example
+                                "Error rate {value} (threshold {threshold})".
+                              maxLength: 1000
+                              type: string
+                            title:
+                              description: What happened, in the team's words. Replaces
+                                the title of the notification.
+                              maxLength: 200
+                              type: string
+                          type: object
+                        for:
+                          description: How long the condition must hold before the
+                            alert fires.
+                          pattern: ^([0-9]+(ms|s|m|h|d|w|y))+$
+                          type: string
+                        maxLag:
+                          description: Maximum allowed consumer lag (in messages).
+                          minimum: 0
+                          type: number
+                        message:
+                          description: |-
+                            Notification text for this alert written by the team, in any language.
+                            When absent, Kamerton's default text is used.
+                          properties:
+                            action:
+                              description: First steps for the person on call.
+                              maxLength: 1000
+                              type: string
+                            text:
+                              description: What it means, with values, for example
+                                "Error rate {value} (threshold {threshold})".
+                              maxLength: 1000
+                              type: string
+                            title:
+                              description: What happened, in the team's words. Replaces
+                                the title of the notification.
+                              maxLength: 200
+                              type: string
+                          type: object
+                        severity:
+                          description: |-
+                            Severity of the queue alerts (lag and stopped consumer): critical or
+                            warning. Default: critical for critical services, warning for others.
+                          enum:
+                          - warning
+                          - critical
+                          type: string
+                        topic:
+                          description: Topic name.
+                          minLength: 1
+                          type: string
+                      required:
+                      - maxLag
+                      - topic
+                      type: object
+                    runbookURL:
+                      description: Link to the runbook. If empty, a runbook stub is
+                        generated.
+                      type: string
+                    saturation:
+                      description: Resource saturation policy, overriding defaults.
+                      properties:
+                        cpuAboveNormalFactor:
+                          description: |-
+                            Without an explicit CPU threshold: alert when a pod uses more than 0.5
+                            cores and this many times the normal CPU of the service (the average
+                            over the previous hour, ending 10 minutes ago). Default: 3; 0 turns
+                            the alert off.
+                          minimum: 0
+                          type: number
+                        cpuCores:
+                          description: |-
+                            CPU threshold per pod in cores, for example 0.5. When set, it replaces
+                            the alerts on CPU close to the limit and far above normal.
+                          minimum: 0
+                          type: number
+                        cpuLimitShare:
+                          description: |-
+                            Without an explicit CPU threshold: alert when the CPU usage of a pod
+                            exceeds this share of its CPU limit (all containers must have a limit).
+                            From 0 to 1. Default: 0.9; 0 turns the alert off.
+                          maximum: 1
+                          minimum: 0
+                          type: number
+                        cpuMessage:
+                          description: Notification text of the CPU alerts written
+                            by the team.
+                          properties:
+                            action:
+                              description: First steps for the person on call.
+                              maxLength: 1000
+                              type: string
+                            text:
+                              description: What it means, with values, for example
+                                "Error rate {value} (threshold {threshold})".
+                              maxLength: 1000
+                              type: string
+                            title:
+                              description: What happened, in the team's words. Replaces
+                                the title of the notification.
+                              maxLength: 200
+                              type: string
+                          type: object
+                        enabled:
+                          description: Set to false to disable these alerts.
+                          type: boolean
+                        for:
+                          description: How long the condition must hold before the
+                            alert fires.
+                          pattern: ^([0-9]+(ms|s|m|h|d|w|y))+$
+                          type: string
+                        maxRestartsPerHour:
+                          description: Maximum container restarts per hour.
+                          format: int32
+                          minimum: 0
+                          type: integer
+                        memory:
+                          description: |-
+                            Memory threshold per pod as a Kubernetes quantity, for example 512Mi.
+                            When set, it replaces the alert on memory close to the limit.
+                          pattern: ^[0-9]+(\.[0-9]+)?(Ki|Mi|Gi|Ti|k|M|G|T)?$
+                          type: string
+                        memoryLimitShare:
+                          description: |-
+                            Without an explicit memory threshold: alert when the memory of a pod
+                            exceeds this share of its memory limit (all containers must have a
+                            limit) and its trend over the last hour reaches the limit within 30
+                            minutes. From 0 to 1. Default: 0.95; 0 turns the alert off.
+                          maximum: 1
+                          minimum: 0
+                          type: number
+                        memoryMessage:
+                          description: Notification text of the memory alerts written
+                            by the team.
+                          properties:
+                            action:
+                              description: First steps for the person on call.
+                              maxLength: 1000
+                              type: string
+                            text:
+                              description: What it means, with values, for example
+                                "Error rate {value} (threshold {threshold})".
+                              maxLength: 1000
+                              type: string
+                            title:
+                              description: What happened, in the team's words. Replaces
+                                the title of the notification.
+                              maxLength: 200
+                              type: string
+                          type: object
+                        oomKilledEnabled:
+                          description: |-
+                            Set to false to disable the alert on a container killed for running
+                            out of memory (OOMKilled). It fires at once and lasts 10 minutes.
+                          type: boolean
+                        oomKilledMessage:
+                          description: Notification text of the out-of-memory kill
+                            alert written by the team.
+                          properties:
+                            action:
+                              description: First steps for the person on call.
+                              maxLength: 1000
+                              type: string
+                            text:
+                              description: What it means, with values, for example
+                                "Error rate {value} (threshold {threshold})".
+                              maxLength: 1000
+                              type: string
+                            title:
+                              description: What happened, in the team's words. Replaces
+                                the title of the notification.
+                              maxLength: 200
+                              type: string
+                          type: object
+                        restartsEnabled:
+                          description: Set to false to disable only the container
+                            restarts alert.
+                          type: boolean
+                        restartsMessage:
+                          description: Notification text of the restarts alert written
+                            by the team.
+                          properties:
+                            action:
+                              description: First steps for the person on call.
+                              maxLength: 1000
+                              type: string
+                            text:
+                              description: What it means, with values, for example
+                                "Error rate {value} (threshold {threshold})".
+                              maxLength: 1000
+                              type: string
+                            title:
+                              description: What happened, in the team's words. Replaces
+                                the title of the notification.
+                              maxLength: 200
+                              type: string
+                          type: object
+                        severity:
+                          description: |-
+                            Severity of these alerts: critical or warning. Default: critical for
+                            critical services, warning for others.
+                          enum:
+                          - warning
+                          - critical
+                          type: string
+                      type: object
+                    slo:
+                      description: Availability service level objective.
+                      properties:
+                        message:
+                          description: |-
+                            Notification text for both burn-rate alerts written by the team, in any language.
+                            When absent, Kamerton's default text is used.
+                          properties:
+                            action:
+                              description: First steps for the person on call.
+                              maxLength: 1000
+                              type: string
+                            text:
+                              description: What it means, with values, for example
+                                "Error rate {value} (threshold {threshold})".
+                              maxLength: 1000
+                              type: string
+                            title:
+                              description: What happened, in the team's words. Replaces
+                                the title of the notification.
+                              maxLength: 200
+                              type: string
+                          type: object
+                        objective:
+                          description: Target share of successful calls in percent,
+                            for example 99.5.
+                          exclusiveMaximum: true
+                          maximum: 100
+                          minimum: 50
+                          type: number
+                        window:
+                          description: 'SLO window. Default: 30d.'
+                          pattern: ^([0-9]+(ms|s|m|h|d|w|y))+$
+                          type: string
+                      required:
+                      - objective
+                      type: object
+                    telemetryName:
+                      description: Value of the service label in telemetry, if it
+                        differs from name.
+                      type: string
+                    trafficDrop:
+                      description: Policy of the "requests stopped arriving" alert,
+                        overriding defaults.
+                      properties:
+                        enabled:
+                          description: |-
+                            Set to true or false to turn this alert on or off. Default: on for
+                            critical services of type http or grpc, off for others; services of type
+                            queue or database get it only when set on the service itself.
+                          type: boolean
+                        for:
+                          description: 'How long the condition must hold before the
+                            alert fires. Default: 2m.'
+                          pattern: ^([0-9]+(ms|s|m|h|d|w|y))+$
+                          type: string
+                        message:
+                          description: |-
+                            Notification text for this alert written by the team, in any language.
+                            When absent, Kamerton's default text is used.
+                          properties:
+                            action:
+                              description: First steps for the person on call.
+                              maxLength: 1000
+                              type: string
+                            text:
+                              description: What it means, with values, for example
+                                "Error rate {value} (threshold {threshold})".
+                              maxLength: 1000
+                              type: string
+                            title:
+                              description: What happened, in the team's words. Replaces
+                                the title of the notification.
+                              maxLength: 200
+                              type: string
+                          type: object
+                        minRequestsPerSecond:
+                          description: |-
+                            Minimum normal traffic, in calls per second, for the alert to apply:
+                            quieter services go minutes without a call in normal operation.
+                            Default: 0.02 (about one call a minute).
+                          minimum: 0
+                          type: number
+                        severity:
+                          description: |-
+                            Severity of this alert: critical or warning. Default: critical for
+                            critical services, warning for others.
+                          enum:
+                          - warning
+                          - critical
+                          type: string
+                        threshold:
+                          description: |-
+                            Share of the normal traffic at or below which the alert fires, from 0
+                            to 1: 0.1 = 10%, 0 = only when calls stop completely. Default: 0.1.
+                          exclusiveMaximum: true
+                          maximum: 1
+                          minimum: 0
+                          type: number
+                      type: object
+                    type:
+                      description: Kind of service.
+                      enum:
+                      - http
+                      - grpc
+                      - queue
+                      - database
+                      type: string
+                    workload:
+                      description: Where the service pods run.
+                      properties:
+                        namespace:
+                          description: Kubernetes namespace. Defaults to defaults.namespace.
+                          type: string
+                        podRegex:
+                          description: 'RE2 regular expression matching pod names.
+                            Default: "<name>-.*".'
+                          type: string
+                      type: object
+                  required:
+                  - name
+                  - type
+                  type: object
+                minItems: 1
+                type: array
+                x-kubernetes-list-map-keys:
+                - name
+                x-kubernetes-list-type: map
+              stack:
+                description: |-
+                  ID of the set of observability programs (Prometheus, Alertmanager,
+                  Grafana, Loki, Tempo, OpenTelemetry Collector) the system uses, as
+                  shown on Kamerton's status page. Empty: the built-in set. An unknown
+                  ID falls back to the built-in set with a warning.
+                maxLength: 63
+                pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                type: string
+              telemetry:
+                description: |-
+                  Names of metrics and labels in your Prometheus. Defaults follow the
+                  OpenTelemetry span metrics connector and cAdvisor; override them if your
+                  pipeline names things differently.
+                properties:
+                  containers:
+                    description: Container resource metrics.
+                    properties:
+                      containerLabel:
+                        description: 'Label holding the container name (kube-state-metrics).
+                          Default: container.'
+                        type: string
+                      cpuMetric:
+                        description: 'CPU usage counter in seconds. Default: container_cpu_usage_seconds_total.'
+                        type: string
+                      limitsMetric:
+                        description: |-
+                          Container resource limits (from kube-state-metrics, with a "resource"
+                          label of memory or cpu). Default: kube_pod_container_resource_limits.
+                          Set to "-" to disable the alerts on usage close to the limit.
+                        type: string
+                      memoryMetric:
+                        description: 'Memory gauge in bytes. Default: container_memory_working_set_bytes.'
+                        type: string
+                      namespaceLabel:
+                        description: 'Label holding the Kubernetes namespace. Default:
+                          namespace.'
+                        type: string
+                      podLabel:
+                        description: 'Label holding the pod name. Default: pod.'
+                        type: string
+                      restartsMetric:
+                        description: 'Container restarts counter (from kube-state-metrics).
+                          Default: kube_pod_container_status_restarts_total. Set to
+                          "-" to disable restart alerts.'
+                        type: string
+                      terminatedReasonMetric:
+                        description: |-
+                          Reason of the last container termination (from kube-state-metrics, with
+                          a "reason" label). Default: kube_pod_container_status_last_terminated_reason.
+                          Set to "-" to disable the out-of-memory kill alert.
+                        type: string
+                    type: object
+                  queues:
+                    description: Queue consumer lag metrics.
+                    properties:
+                      groupLabel:
+                        description: 'Label holding the consumer group. Default: group.'
+                        type: string
+                      lagMetric:
+                        description: 'Consumer lag gauge. Default: kafka_consumer_group_lag_ratio.'
+                        type: string
+                      membersMetric:
+                        description: |-
+                          Number of members of a consumer group (with the group label only).
+                          Default: kafka_consumer_group_members. Set to "-" to stop treating a
+                          group without members as a stopped consumer.
+                        type: string
+                      offsetMetric:
+                        description: |-
+                          Committed offset of a consumer group (per group, topic and partition).
+                          Default: kafka_consumer_group_offset_ratio. Set to "-" to stop treating
+                          an offset that does not move while messages wait as a stopped consumer.
+                        type: string
+                      topicLabel:
+                        description: 'Label holding the topic. Default: topic.'
+                        type: string
+                    type: object
+                  spans:
+                    description: Span metrics (RED metrics derived from traces).
+                    properties:
+                      callsMetric:
+                        description: 'Counter of calls. Default: traces_span_metrics_calls_total.'
+                        type: string
+                      durationBucketMetric:
+                        description: 'Histogram bucket series of call durations. Default:
+                          traces_span_metrics_duration_milliseconds_bucket.'
+                        type: string
+                      durationUnit:
+                        description: 'Unit of the duration histogram buckets. Default:
+                          ms.'
+                        enum:
+                        - ms
+                        - s
+                        type: string
+                      errorStatusValue:
+                        description: 'Value of the status code label that marks an
+                          error. Default: STATUS_CODE_ERROR.'
+                        type: string
+                      operationLabel:
+                        description: 'Label holding the operation (span) name. Default:
+                          span_name.'
+                        type: string
+                      serverSpanKinds:
+                        description: 'Span kinds that represent incoming work of a
+                          service. Default: SPAN_KIND_SERVER, SPAN_KIND_CONSUMER.'
+                        items:
+                          type: string
+                        type: array
+                      serviceLabel:
+                        description: 'Label holding the service name. Default: service_name.'
+                        type: string
+                      spanKindLabel:
+                        description: 'Label holding the span kind. Default: span_kind.'
+                        type: string
+                      statusCodeLabel:
+                        description: 'Label holding the span status code. Default:
+                          status_code.'
+                        type: string
+                    type: object
+                type: object
+            required:
+            - services
+            type: object
+          status:
+            description: SystemDescriptionStatus is the observed state written by
+              the controller.
+            properties:
+              conditions:
+                description: 'Conditions: Valid, Generated, Applied.'
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              generatedRules:
+                description: Number of generated alerting rules.
+                format: int32
+                type: integer
+              observedGeneration:
+                description: Generation of the spec that was last processed.
+                format: int64
+                type: integer
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

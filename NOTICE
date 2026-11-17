@@ -1,0 +1,37 @@
+Kamerton
+Copyright 2026 The Kamerton Authors
+Licensed under the GNU Affero General Public License v3.0 only (AGPL-3.0-only).
+See LICENSE.
+
+Third-party programs installed by the Helm chart
+------------------------------------------------
+
+The Kamerton Helm chart (deploy/helm/kamerton) installs the following
+programs as dependencies, from their upstream Helm charts and container
+images, unmodified. They are separate programs, distributed by their own
+authors under their own licences; Kamerton only configures them through
+their public interfaces (Kubernetes resources and HTTP APIs).
+
+  Program                   Licence      Installed through the chart
+  Prometheus                Apache-2.0   kube-prometheus-stack (prometheus-community)
+  Prometheus Operator       Apache-2.0   kube-prometheus-stack (prometheus-community)
+  Alertmanager              Apache-2.0   kube-prometheus-stack (prometheus-community)
+  OpenTelemetry Collector   Apache-2.0   opentelemetry-collector (open-telemetry)
+  Grafana                   AGPL-3.0     grafana (grafana-community)
+  Loki                      AGPL-3.0     loki (grafana-community)
+  Tempo                     AGPL-3.0     tempo (grafana-community)
+
+Chart versions are pinned in deploy/helm/kamerton/Chart.yaml. The upstream
+charts may install further components (for example kube-state-metrics and
+node-exporter in kube-prometheus-stack); see each chart for its contents and
+licences.
+
+Libraries compiled into the Kamerton binary and the web UI are listed with
+their versions in go.mod / go.sum and web/package.json / web/pnpm-lock.yaml;
+each keeps its own licence.
+
+Bundled in the web UI
+---------------------
+
+  shadcn/ui components (web/src/components/ui)   MIT
+  Geist variable font (@fontsource-variable/geist)   SIL Open Font License 1.1

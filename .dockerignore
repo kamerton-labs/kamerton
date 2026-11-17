@@ -1,0 +1,15 @@
+.git
+bin
+out
+**/node_modules
+web/dist
+deploy/helm/kamerton/charts
+e2e
+docs
+**/reports
+**/.DS_Store
+*.local.yaml
+.kamerton-stacks.json
+.env
+.env.*
+!.env.example

@@ -1,0 +1,319 @@
+# Kamerton Helm chart values.
+#
+# Secrets (Telegram bot token, SMTP password, Grafana admin password) are never
+# set here. The Telegram bot token is entered in the UI and stored by the core
+# in a Secret (see telegram below), or created by hand; the SMTP password is
+# likewise entered in the UI and stored in a Secret (see email below), or
+# created by hand; the Grafana chart generates its admin password into its
+# own Secret (default).
+
+# ---------------------------------------------------------------------------
+# Kamerton core
+# ---------------------------------------------------------------------------
+# Override the chart name / full name of the Kamerton objects.
+nameOverride: ""
+fullnameOverride: ""
+
+# Published for linux/amd64 and linux/arm64. To run your own build, use
+# `make docker` and point repository/tag at it.
+image:
+  repository: ghcr.io/kamerton-labs/kamerton
+  # Defaults to the chart appVersion.
+  tag: ""
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+replicaCount: 1
+
+# Kubernetes controller that reconciles SystemDescription resources.
+controller:
+  enabled: true
+  # Required when replicaCount > 1.
+  leaderElect: false
+  # Empty: watch SystemDescriptions in all namespaces.
+  watchNamespace: ""
+
+# External URL of the Kamerton UI as people open it (ingress, or
+# http://localhost:8080 behind `kubectl port-forward`). Used for the links in
+# Telegram/email notifications (alert page and runbook) and in runbook_url
+# annotations. Empty: notifications contain no links at all, because
+# in-cluster addresses do not open from a phone.
+externalURL: ""
+
+# SystemDescription edited from the UI when several exist (empty: the one in
+# the release namespace, else the first one found).
+descriptionName: ""
+
+# Telegram setup from the UI (bot token, chat discovery, routing).
+telegram:
+  # Grant the core access to the token Secret below (namespaced Role).
+  # Set to false to manage the Secret yourself; the UI then cannot store tokens.
+  uiSetup: true
+  # Secret in the release namespace holding the token under key "bot-token".
+  # The same name is referenced from the description (botTokenSecret).
+  secretName: kamerton-telegram
+
+# Email setup from the UI (mail server, recipients, routing).
+email:
+  # Grant the core access to the SMTP password Secret below (namespaced Role).
+  # Set to false to manage the Secret yourself; the UI then cannot store passwords.
+  uiSetup: true
+  # Secret in the release namespace holding the SMTP password under key
+  # "password". The same name is referenced from the description
+  # (authPasswordSecret).
+  secretName: kamerton-smtp
+logLevel: info
+
+# Sets of programs. The addresses under
+# endpoints / bringYourOwn below form the built-in set; in the UI each of its
+# addresses can be overridden (and reset), and more sets can be added, for
+# example one Prometheus and Alertmanager per team. Each system chooses its
+# set (spec.stack). Sets are kept in a ConfigMap in the release namespace
+# (addresses and labels only, nothing secret); a change re-reconciles the
+# systems.
+stacks:
+  configMapName: kamerton-stacks
+  # "Find installed" in the UI: lists Services in all namespaces and
+  # reads Prometheus Operator Prometheus/Alertmanager resources (read-only
+  # ClusterRole rules: services get/list, prometheuses/alertmanagers
+  # get/list), then confirms each candidate with an HTTP check. Set to false
+  # to drop these permissions; addresses can still be typed in by hand.
+  discovery:
+    enabled: true
+
+# Login to the UI and API with one shared user name and password. Off by
+# default (the UI then shows a red notice). The core reads
+# KAMERTON_AUTH_USER / KAMERTON_AUTH_PASSWORD from a Secret (secretKeyRef);
+# the password never goes into a ConfigMap or an annotation.
+# Serve the UI over HTTPS (ingress with TLS): the session cookie is marked
+# Secure when the ingress sets X-Forwarded-Proto: https.
+auth:
+  # Preferred: a Secret you create yourself with keys "username" and
+  # "password" (and optionally "session-secret", the session signing key;
+  # without it the key is derived from the password, so changing the
+  # password ends all sessions). For example:
+  #   kubectl create secret generic kamerton-auth \
+  #     --from-literal=username=admin --from-literal=password='<strong password>'
+  existingSecret: ""
+  # Alternatively the chart creates the Secret from these two values (both
+  # required). Note that Helm keeps values in its release record.
+  username: ""
+  password: ""
+
+service:
+  type: ClusterIP
+  port: 8080
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+rbac:
+  create: true
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    memory: 256Mi
+
+podSecurityContext:
+  runAsNonRoot: true
+  seccompProfile:
+    type: RuntimeDefault
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: [ALL]
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+# ---------------------------------------------------------------------------
+# Bring your own Prometheus / Grafana
+# ---------------------------------------------------------------------------
+# When enabled, disable the corresponding managed chart below
+# (kube-prometheus-stack.enabled / grafana.enabled = false).
+# These URLs become the built-in set of programs (see stacks above); the
+# same can be done later from the UI (status page: change an address, or
+# "Find installed"). Kamerton reads from these programs (service
+# discovery, backtest, rule states, alerts) and delivers rules and routes as
+# PrometheusRule / AlertmanagerConfig objects (dashboards as ConfigMaps), so
+# your Prometheus Operator must select them: if its ruleSelector /
+# alertmanagerConfigSelector needs labels, set them on the set in the UI
+# (auto-filled when the operator resource is found). Pushing to Prometheus
+# or Grafana HTTP APIs directly (without the operator / dashboard sidecar) is
+# not implemented.
+bringYourOwn:
+  prometheus:
+    enabled: false
+    url: ""             # e.g. http://prometheus-operated.monitoring:9090
+    alertmanagerUrl: "" # e.g. http://alertmanager-operated.monitoring:9093
+  grafana:
+    enabled: false
+    url: ""             # e.g. http://grafana.monitoring
+    # Secret holding a Grafana service account token (key "token"). Not used yet.
+    tokenSecret: ""
+
+# Where the core reaches the managed programs. Defaults match the
+# fullnameOverride values of the dependencies below.
+endpoints:
+  prometheus: http://kamerton-kps-prometheus:9090
+  alertmanager: http://kamerton-kps-alertmanager:9093
+  grafana: http://kamerton-grafana
+  loki: http://kamerton-loki:3100
+  tempo: http://kamerton-tempo:3200
+  otelCollectorHealth: http://kamerton-otel-collector:13133
+
+# ---------------------------------------------------------------------------
+# Managed programs (upstream charts, versions pinned in Chart.yaml)
+# ---------------------------------------------------------------------------
+
+kube-prometheus-stack:
+  enabled: true
+  fullnameOverride: kamerton-kps
+  # Grafana is managed as a separate dependency.
+  grafana:
+    enabled: false
+  prometheus:
+    prometheusSpec:
+      # Pick up PrometheusRules created by Kamerton (and everything else).
+      ruleSelectorNilUsesHelmValues: false
+      ruleNamespaceSelector: {}
+      # The OpenTelemetry Collector writes span metrics via remote write.
+      enableRemoteWriteReceiver: true
+      # Rules are evaluated often so that an alert fires soon after the condition holds.
+      evaluationInterval: 15s
+      retention: 15d
+  alertmanager:
+    alertmanagerSpec:
+      alertmanagerConfigSelector:
+        matchLabels:
+          kamerton.dev/managed: "true"
+      alertmanagerConfigNamespaceSelector: {}
+      # Span-metric alerts have no "namespace" label; do not let the operator
+      # add a namespace matcher to Kamerton's routes.
+      alertmanagerConfigMatcherStrategy:
+        type: None
+
+grafana:
+  enabled: true
+  fullnameOverride: kamerton-grafana
+  # admin.existingSecret empty: the chart generates the admin password into
+  # the Secret "kamerton-grafana". Read it with:
+  #   kubectl get secret kamerton-grafana -o jsonpath='{.data.admin-password}' | base64 -d
+  sidecar:
+    dashboards:
+      enabled: true
+      label: grafana_dashboard
+      searchNamespace: ALL
+  datasources:
+    datasources.yaml:
+      apiVersion: 1
+      datasources:
+        - name: Prometheus
+          uid: prometheus
+          type: prometheus
+          url: http://kamerton-kps-prometheus:9090
+          isDefault: true
+        - name: Loki
+          uid: loki
+          type: loki
+          url: http://kamerton-loki:3100
+        - name: Tempo
+          uid: tempo
+          type: tempo
+          url: http://kamerton-tempo:3200
+
+loki:
+  enabled: true
+  fullnameOverride: kamerton-loki
+  deploymentMode: Monolithic
+  loki:
+    auth_enabled: false
+    commonConfig:
+      replication_factor: 1
+    storage:
+      type: filesystem
+    schemaConfig:
+      configs:
+        - from: "2024-04-01"
+          store: tsdb
+          object_store: filesystem
+          schema: v13
+          index:
+            prefix: index_
+            period: 24h
+  # Monolithic mode is configured through the chart's singleBinary section.
+  singleBinary:
+    replicas: 1
+  backend:
+    replicas: 0
+  read:
+    replicas: 0
+  write:
+    replicas: 0
+  chunksCache:
+    enabled: false
+  resultsCache:
+    enabled: false
+  lokiCanary:
+    enabled: false
+  test:
+    enabled: false
+
+tempo:
+  enabled: true
+  fullnameOverride: kamerton-tempo
+
+# Starter pipeline: OTLP in; traces to Tempo; span metrics (spanmetrics
+# connector) to Prometheus via remote write; logs to Loki over OTLP.
+opentelemetry-collector:
+  enabled: true
+  fullnameOverride: kamerton-otel-collector
+  mode: deployment
+  image:
+    repository: otel/opentelemetry-collector-contrib
+  command:
+    name: otelcol-contrib
+  # The health_check extension, so that the core can show the Collector on the
+  # "Kamerton status" page (endpoints.otelCollectorHealth).
+  ports:
+    health:
+      enabled: true
+      containerPort: 13133
+      servicePort: 13133
+      protocol: TCP
+  config:
+    connectors:
+      spanmetrics:
+        namespace: traces.span.metrics
+        # Short flush keeps time-to-alert low: a rule needs two samples to see a change.
+        metrics_flush_interval: 15s
+    exporters:
+      otlp/tempo:
+        endpoint: kamerton-tempo:4317
+        tls:
+          insecure: true
+      prometheusremotewrite:
+        endpoint: http://kamerton-kps-prometheus:9090/api/v1/write
+      otlphttp/loki:
+        endpoint: http://kamerton-loki:3100/otlp
+    service:
+      pipelines:
+        traces:
+          receivers: [otlp]
+          processors: [memory_limiter, batch]
+          exporters: [otlp/tempo, spanmetrics]
+        metrics:
+          receivers: [otlp, spanmetrics]
+          processors: [memory_limiter, batch]
+          exporters: [prometheusremotewrite]
+        logs:
+          receivers: [otlp]
+          processors: [memory_limiter, batch]
+          exporters: [otlphttp/loki]

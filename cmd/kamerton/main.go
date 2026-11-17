@@ -1,0 +1,433 @@
+// Copyright 2026 The Kamerton Authors
+// SPDX-License-Identifier: AGPL-3.0-only
+
+// Command kamerton is the Kamerton core: an HTTP server with the embedded UI
+// and API, an optional Kubernetes controller, and a few CLI helpers.
+//
+//	kamerton [serve] [flags]          run the server (and the controller with --enable-controller)
+//	kamerton validate -f FILE         validate a description
+//	kamerton generate -f FILE [-o DIR] print or write generated rules, dashboards, runbooks
+//	kamerton schema                   print the JSON Schema of the description
+//	kamerton version
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"flag"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"strings"
+	"syscall"
+	"time"
+
+	"github.com/go-logr/logr"
+	"golang.org/x/sync/errgroup"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/fields"
+	"k8s.io/apimachinery/pkg/runtime"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/healthz"
+	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
+
+	"github.com/kamerton-labs/kamerton/api/v1alpha1"
+	"github.com/kamerton-labs/kamerton/internal/clients/alertmanager"
+	"github.com/kamerton-labs/kamerton/internal/clients/prometheus"
+	"github.com/kamerton-labs/kamerton/internal/config"
+	"github.com/kamerton-labs/kamerton/internal/controller"
+	"github.com/kamerton-labs/kamerton/internal/deployer"
+	"github.com/kamerton-labs/kamerton/internal/description"
+	"github.com/kamerton-labs/kamerton/internal/descstore"
+	"github.com/kamerton-labs/kamerton/internal/email"
+	"github.com/kamerton-labs/kamerton/internal/generator"
+	"github.com/kamerton-labs/kamerton/internal/schema"
+	"github.com/kamerton-labs/kamerton/internal/server"
+	"github.com/kamerton-labs/kamerton/internal/stack"
+	"github.com/kamerton-labs/kamerton/internal/telegram"
+	"github.com/kamerton-labs/kamerton/internal/version"
+	"github.com/kamerton-labs/kamerton/web"
+)
+
+func main() {
+	args := os.Args[1:]
+	cmd := "serve"
+	if len(args) > 0 && len(args[0]) > 0 && args[0][0] != '-' {
+		cmd, args = args[0], args[1:]
+	}
+	var err error
+	switch cmd {
+	case "serve":
+		err = serve(args)
+	case "validate":
+		err = validate(args)
+	case "generate":
+		err = generate(args)
+	case "schema":
+		_, err = os.Stdout.Write(schema.JSON())
+	case "version":
+		fmt.Printf("kamerton %s (%s)\n", version.Version, version.Commit)
+	case "help", "-h", "--help":
+		fmt.Println("usage: kamerton [serve|validate|generate|schema|version] [flags]")
+	default:
+		err = fmt.Errorf("unknown command %q", cmd)
+	}
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		os.Exit(1)
+	}
+}
+
+func newLogger(level string) *slog.Logger {
+	var l slog.Level
+	if err := l.UnmarshalText([]byte(level)); err != nil {
+		l = slog.LevelInfo
+	}
+	return slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: l}))
+}
+
+func serve(args []string) error {
+	// The env file is loaded before the flags are registered: flag defaults
+	// come from KAMERTON_* variables. Variables already set win.
+	envFile, envFileGiven := config.EnvFileArg(args)
+	envSet, err := config.LoadEnvFile(envFile, envFileGiven)
+	if err != nil {
+		return err
+	}
+	var cfg config.Config
+	fs := flag.NewFlagSet("serve", flag.ExitOnError)
+	cfg.Register(fs)
+	fs.String("env-file", config.DefaultEnvFile, "file with KAMERTON_* variables (KEY=VALUE lines) loaded at startup; variables already set in the environment win")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if cfg.RunbookBaseURL != "" {
+		// The external URL goes into links of rules and notifications.
+		if problem := description.CheckLinkURL(cfg.RunbookBaseURL); problem != "" {
+			return fmt.Errorf("--external-url: %s", problem)
+		}
+	}
+	log := newLogger(cfg.LogLevel)
+	slog.SetDefault(log)
+	if len(envSet) > 0 {
+		log.Info("loaded env file", "path", envFile, "variables", len(envSet))
+	}
+	authCfg, err := config.AuthFromEnv()
+	if err != nil {
+		return err
+	}
+
+	ui, uiBuilt := web.Dist()
+	if !uiBuilt {
+		log.Warn("web UI is not built; serving a placeholder page (run `make ui`)")
+	}
+	sets := &stack.Sets{Flags: stackFlags(cfg)}
+	opts := server.Options{
+		UI: ui, UIBuilt: uiBuilt, Logger: log,
+		Generator: generator.Options{RunbookBaseURL: cfg.RunbookBaseURL},
+		Sets:      sets,
+	}
+	if authCfg.Enabled() {
+		opts.Auth = server.NewAuth(authCfg.User, authCfg.Password, authCfg.Secret)
+	}
+	if cfg.PrometheusURL != "" {
+		p, err := prometheus.New(cfg.PrometheusURL)
+		if err != nil {
+			return fmt.Errorf("prometheus client: %w", err)
+		}
+		opts.Prometheus = p
+	}
+	if cfg.AlertmanagerURL != "" {
+		opts.Alertmanager = alertmanager.New(cfg.AlertmanagerURL)
+	}
+	var mgr ctrl.Manager
+	if cfg.EnableController {
+		ns := kamertonNamespace(cfg)
+		m, uncached, err := newManager(cfg, log, sets, ns)
+		if err != nil {
+			return err
+		}
+		mgr = m
+		opts.Namespace = ns
+		sets.Namespace = ns
+		sets.Store = &stack.ConfigMapStateStore{Client: uncached, Namespace: ns, Name: cfg.StacksConfigMap}
+		if cfg.StackDiscovery {
+			opts.Discoverer = &stack.Discoverer{Client: uncached}
+		} else {
+			opts.DiscoveryUnavailable = "Discovery is turned off in this installation (Helm: stacks.discovery.enabled=false, flag --stack-discovery=false). Enter the addresses by hand."
+		}
+		opts.Descriptions = &descstore.Cluster{Client: uncached, Namespace: ns, WatchNamespace: cfg.WatchNamespace, Name: cfg.DescriptionName}
+		if cfg.DescriptionFile != "" {
+			log.Warn("--description is ignored in cluster mode; the description is read from SystemDescription resources", "file", cfg.DescriptionFile)
+		}
+		identity, _ := os.Hostname()
+		tg := &telegram.Service{
+			API:          &telegram.Client{BaseURL: cfg.TelegramAPIURL, HTTP: &http.Client{Timeout: 90 * time.Second}},
+			Tokens:       &telegram.SecretTokenStore{Client: uncached, Namespace: ns, Name: cfg.TelegramSecretName, Key: telegram.DefaultSecretKey},
+			State:        &telegram.ConfigMapStateStore{Client: uncached, Namespace: ns, Name: "kamerton-telegram-state"},
+			Descriptions: opts.Descriptions,
+			Namespace:    ns,
+			Identity:     identity,
+			Logger:       log.With("component", "telegram"),
+		}
+		// The polling loop is a leader-only runnable: with leader election
+		// on, only one replica consumes getUpdates.
+		if err := mgr.Add(tg); err != nil {
+			return err
+		}
+		opts.Telegram = tg
+		opts.Email = &email.Service{
+			Passwords:    &telegram.SecretTokenStore{Client: uncached, Namespace: ns, Name: cfg.EmailSecretName, Key: email.DefaultSecretKey, Component: "email"},
+			State:        &email.ConfigMapStateStore{Client: uncached, Namespace: ns, Name: "kamerton-email-state"},
+			Descriptions: opts.Descriptions,
+			Sender:       &email.SMTPSender{},
+			Namespace:    ns,
+			Logger:       log.With("component", "email"),
+		}
+	} else {
+		opts.TelegramUnavailable = "Telegram setup from the UI is available only in a cluster: the core runs without the Kubernetes controller, so there is no safe place to keep the bot token."
+		opts.EmailUnavailable = "Email setup from the UI is available only in a cluster: the core runs without the Kubernetes controller, so there is no safe place to keep the SMTP password."
+		if cfg.DescriptionFile != "" {
+			store, err := descstore.NewFile(cfg.DescriptionFile)
+			if err != nil {
+				return err
+			}
+			list, err := store.List(context.Background())
+			if err != nil {
+				return err
+			}
+			for _, snap := range list {
+				if snap.SD == nil {
+					log.Warn("description has errors; fix it in the UI (YAML mode)", "source", snap.Source, "error", (&descstore.InvalidError{Result: *snap.Invalid}).Error())
+					continue
+				}
+				log.Info("loaded description", "source", snap.Source, "system", snap.ID, "services", len(snap.SD.Spec.Services))
+			}
+			opts.Descriptions = store
+			path := cfg.StacksFile
+			if path == "" {
+				dir := store.Dir
+				if dir == "" && len(store.Paths) > 0 {
+					dir = filepath.Dir(store.Paths[0])
+				}
+				path = filepath.Join(dir, ".kamerton-stacks.json")
+			}
+			sets.Store = &stack.FileStateStore{Path: path}
+			log.Info("sets of programs are kept in a file", "path", path)
+		} else if cfg.StacksFile != "" {
+			sets.Store = &stack.FileStateStore{Path: cfg.StacksFile}
+		}
+		opts.DiscoveryUnavailable = "Discovery of installed programs works only in a cluster: Kamerton runs without the Kubernetes controller and cannot ask the cluster for its services. Enter the addresses by hand."
+	}
+	server.LogAuthMode(log, opts.Auth)
+	srv := server.New(opts)
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	g, ctx := errgroup.WithContext(ctx)
+
+	// No WriteTimeout: backtests and discovery may take up to a minute; each
+	// handler bounds its own work with a context timeout.
+	httpSrv := &http.Server{
+		Addr: cfg.ListenAddress, Handler: srv.Handler(),
+		ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second, IdleTimeout: 2 * time.Minute,
+	}
+	g.Go(func() error {
+		log.Info("serving UI and API", "address", cfg.ListenAddress)
+		if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			return err
+		}
+		return nil
+	})
+	g.Go(func() error {
+		<-ctx.Done()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		return httpSrv.Shutdown(shutdownCtx)
+	})
+	if mgr != nil {
+		g.Go(func() error {
+			log.Info("starting controller")
+			return mgr.Start(ctx)
+		})
+	}
+	return g.Wait()
+}
+
+// stackFlags are the install-time addresses: the built-in set of programs.
+func stackFlags(cfg config.Config) stack.Flags {
+	return stack.Flags{
+		URLs: map[string]string{
+			stack.KindPrometheus: cfg.PrometheusURL, stack.KindAlertmanager: cfg.AlertmanagerURL,
+			stack.KindGrafana: cfg.GrafanaURL, stack.KindLoki: cfg.LokiURL, stack.KindTempo: cfg.TempoURL,
+			stack.KindOTelCollector: cfg.OTelCollectorURL,
+		},
+		External: map[string]bool{
+			stack.KindPrometheus: cfg.ExternalPrometheus, stack.KindAlertmanager: cfg.ExternalPrometheus,
+			stack.KindGrafana: cfg.ExternalGrafana,
+		},
+	}
+}
+
+// kamertonNamespace is --namespace, else the service account namespace.
+func kamertonNamespace(cfg config.Config) string {
+	if cfg.Namespace != "" {
+		return cfg.Namespace
+	}
+	if b, err := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/namespace"); err == nil {
+		if ns := strings.TrimSpace(string(b)); ns != "" {
+			return ns
+		}
+	}
+	return "default"
+}
+
+// newManager builds the controller manager and an uncached client. The
+// uncached client is used for the API (descriptions) and for the one Secret
+// and ConfigMap of the Telegram setup: a cached client would start
+// cluster-wide informers for Secrets, which RBAC deliberately does not allow.
+func newManager(cfg config.Config, log *slog.Logger, sets *stack.Sets, ns string) (ctrl.Manager, client.Client, error) {
+	ctrl.SetLogger(logr.FromSlogHandler(log.Handler()))
+	scheme := runtime.NewScheme()
+	if err := clientgoscheme.AddToScheme(scheme); err != nil {
+		return nil, nil, err
+	}
+	if err := v1alpha1.AddToScheme(scheme); err != nil {
+		return nil, nil, err
+	}
+	restCfg, err := ctrl.GetConfig()
+	if err != nil {
+		return nil, nil, fmt.Errorf("kubernetes config: %w", err)
+	}
+	mgrOpts := ctrl.Options{
+		Scheme:                 scheme,
+		Metrics:                metricsserver.Options{BindAddress: cfg.MetricsBindAddress},
+		HealthProbeBindAddress: cfg.HealthProbeBindAddress,
+		LeaderElection:         cfg.LeaderElect,
+		LeaderElectionID:       "kamerton.kamerton.dev",
+	}
+	if cfg.WatchNamespace != "" {
+		mgrOpts.Cache.DefaultNamespaces = map[string]cache.Config{cfg.WatchNamespace: {}}
+	}
+	// The controller watches one ConfigMap (the sets of programs); the cache
+	// holds only that one, not every ConfigMap of the cluster.
+	mgrOpts.Cache.ByObject = map[client.Object]cache.ByObject{
+		&corev1.ConfigMap{}: {
+			Namespaces: map[string]cache.Config{ns: {}},
+			Field:      fields.OneTermEqualSelector("metadata.name", cfg.StacksConfigMap),
+		},
+	}
+	mgr, err := ctrl.NewManager(restCfg, mgrOpts)
+	if err != nil {
+		return nil, nil, fmt.Errorf("controller manager: %w", err)
+	}
+	uncached, err := client.New(restCfg, client.Options{Scheme: scheme})
+	if err != nil {
+		return nil, nil, fmt.Errorf("kubernetes client: %w", err)
+	}
+	r := &controller.SystemDescriptionReconciler{
+		Client:  mgr.GetClient(),
+		Applier: &deployer.KubernetesApplier{Client: mgr.GetClient()},
+		Options: generator.Options{RunbookBaseURL: cfg.RunbookBaseURL},
+		Sets:    sets, SetsNamespace: ns, SetsConfigMap: cfg.StacksConfigMap,
+	}
+	if err := r.SetupWithManager(mgr); err != nil {
+		return nil, nil, err
+	}
+	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
+		return nil, nil, err
+	}
+	if err := mgr.AddReadyzCheck("readyz", healthz.Ping); err != nil {
+		return nil, nil, err
+	}
+	return mgr, uncached, nil
+}
+
+func validate(args []string) error {
+	fs := flag.NewFlagSet("validate", flag.ExitOnError)
+	file := fs.String("f", "", "description file")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *file == "" {
+		return errors.New("validate: -f is required")
+	}
+	data, err := os.ReadFile(*file)
+	if err != nil {
+		return err
+	}
+	res := description.Validate(data)
+	for _, w := range res.Warnings {
+		fmt.Fprintf(os.Stderr, "warning: %s: %s\n", w.Path, w.Message)
+	}
+	for _, e := range res.Errors {
+		fmt.Fprintf(os.Stderr, "error: %s: %s\n", e.Path, e.Message)
+	}
+	if !res.Valid {
+		return fmt.Errorf("%s is invalid (%d errors)", *file, len(res.Errors))
+	}
+	fmt.Printf("%s is valid (%d services)\n", *file, len(res.Document.Spec.Services))
+	return nil
+}
+
+func generate(args []string) error {
+	fs := flag.NewFlagSet("generate", flag.ExitOnError)
+	file := fs.String("f", "", "description file")
+	outDir := fs.String("o", "", "output directory; prints the rule file to stdout when empty")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *file == "" {
+		return errors.New("generate: -f is required")
+	}
+	sd, _, err := description.LoadFile(*file)
+	if err != nil {
+		return err
+	}
+	b, err := generator.Generate(sd, generator.Options{})
+	if err != nil {
+		return err
+	}
+	if *outDir == "" {
+		_, err = os.Stdout.Write(b.RulesYAML)
+		return err
+	}
+	write := func(rel string, data []byte) error {
+		p := filepath.Join(*outDir, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			return err
+		}
+		return os.WriteFile(p, data, 0o644)
+	}
+	if err := write("rules/"+sd.Name+".rules.yaml", b.RulesYAML); err != nil {
+		return err
+	}
+	for name, d := range b.Dashboards {
+		if err := write("dashboards/"+name, d); err != nil {
+			return err
+		}
+	}
+	for name, rb := range b.Runbooks {
+		if err := write("runbooks/"+name, []byte(rb)); err != nil {
+			return err
+		}
+	}
+	if b.AlertmanagerConfig != nil {
+		j, err := json.MarshalIndent(b.AlertmanagerConfig, "", "  ")
+		if err != nil {
+			return err
+		}
+		if err := write("alertmanager/alertmanagerconfig-spec.json", j); err != nil {
+			return err
+		}
+	}
+	fmt.Printf("wrote %d rules, %d dashboards, %d runbooks to %s\n", b.RuleCount, len(b.Dashboards), len(b.Runbooks), *outDir)
+	return nil
+}

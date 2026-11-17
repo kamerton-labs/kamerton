@@ -1,0 +1,49 @@
+# Build output
+/bin/
+/dist/
+/out/
+
+# Web UI (web/dist is rebuilt by `make ui`; only the placeholder is kept so
+# that go:embed compiles in a fresh clone)
+node_modules/
+web/dist/*
+!web/dist/.gitkeep
+*.tsbuildinfo
+
+# Helm: dependencies are downloaded by `make helm-deps` or
+# `helm install --dependency-update`, never vendored.
+deploy/helm/kamerton/charts/
+
+# Go
+*.test
+*.out
+coverage.*
+
+# Local secrets and env files must never be committed.
+.env
+.env.*
+!.env.example
+*.secret.yaml
+secrets/
+
+# Local state of `kamerton serve` (sets of programs next to the descriptions)
+.kamerton-stacks.json
+.kamerton-stacks-*
+
+# Local copies of examples with real chat IDs and addresses
+*.local.yaml
+
+# End-to-end UI scenarios live in their own repository; a local clone sits here.
+/e2e/
+reports/
+
+# Editors / OS
+.idea/
+.vscode/
+*.swp
+*~
+.DS_Store
+
+# Examples live in their own repository (kamerton-labs/examples); a local
+# clone here is convenient for running the demo stand.
+/examples/

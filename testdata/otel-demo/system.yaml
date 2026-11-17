@@ -1,0 +1,190 @@
+# System description for the OpenTelemetry Demo (tested metric names: demo 3.1.0).
+# Used by the tests and by `make run`. The same description, with the files
+# for installing the demo, is in https://github.com/kamerton-labs/examples.
+#
+# Secrets (Telegram bot token, SMTP password) are NOT stored here. Both are
+# entered in the UI (Channels page): the bot token goes to Secret kamerton-telegram
+# (key bot-token), the SMTP password to Secret kamerton-smtp (key password),
+# and the UI can manage the receivers below. Or create the Secrets yourself:
+#   kubectl -n kamerton create secret generic kamerton-telegram --from-literal=bot-token=<token>
+#   kubectl -n kamerton create secret generic kamerton-smtp --from-literal=password=<password>
+# The chat ID and email addresses below are placeholders: replace them.
+apiVersion: kamerton.dev/v1alpha1
+kind: SystemDescription
+metadata:
+  name: otel-demo
+spec:
+  environment: demo
+
+  # Metric and label names as they appear in Prometheus. These are the defaults,
+  # spelled out here so the mapping is visible; change them for other pipelines.
+  telemetry:
+    spans:
+      callsMetric: traces_span_metrics_calls_total
+      durationBucketMetric: traces_span_metrics_duration_milliseconds_bucket
+      durationUnit: ms
+      serviceLabel: service_name
+      operationLabel: span_name
+      spanKindLabel: span_kind
+      statusCodeLabel: status_code
+      errorStatusValue: STATUS_CODE_ERROR
+    containers:
+      memoryMetric: container_memory_working_set_bytes
+      cpuMetric: container_cpu_usage_seconds_total
+      namespaceLabel: namespace
+      podLabel: pod
+    queues:
+      lagMetric: kafka_consumer_group_lag_ratio
+      membersMetric: kafka_consumer_group_members
+      offsetMetric: kafka_consumer_group_offset_ratio
+      groupLabel: group
+      topicLabel: topic
+
+  defaults:
+    namespace: otel-demo
+    # Short window and short "for" keep time-to-alert within a few minutes.
+    rateWindow: 2m
+    excludeOperations:
+      # flagd streaming connection produces noise errors.
+      - 'flagd\.evaluation\.v2\.Service/EventStream'
+    errorRate:
+      threshold: 0.05
+      minRequestsPerSecond: 0.05
+      for: 1m
+    latency:
+      quantile: 0.95
+      thresholdMs: 1000
+      # No minRequestsPerSecond: latency rules need at least 3 calls in the
+      # window, so rare operations (2 orders a minute) are still checked.
+      for: 2m
+    saturation:
+      maxRestartsPerHour: 3
+      for: 2m
+
+  services:
+    - name: frontend-proxy
+      type: http
+      critical: true
+      description: Envoy entry point for all user traffic
+      dependsOn: [frontend]
+
+    - name: frontend
+      type: http
+      critical: true
+      description: Web shop UI and API gateway
+      dependsOn: [ad, cart, checkout, currency, product-catalog, recommendation, shipping]
+      latency:
+        thresholdMs: 1500
+
+    - name: checkout
+      type: grpc
+      critical: true
+      description: Places orders
+      dependsOn: [cart, currency, email, payment, product-catalog, shipping, orders]
+      errorRate:
+        perOperation: true
+      operations:
+        - name: oteldemo.CheckoutService/PlaceOrder
+          errorRate:
+            threshold: 0.01
+            minRequestsPerSecond: 0.01
+      slo:
+        objective: 99.5
+        window: 30d
+
+    - name: payment
+      type: grpc
+      critical: true
+      description: Charges credit cards
+      operations:
+        - name: oteldemo.PaymentService/Charge
+          errorRate:
+            threshold: 0.01
+            minRequestsPerSecond: 0.01
+      slo:
+        objective: 99.5
+
+    - name: cart
+      type: grpc
+      critical: true
+      dependsOn: [valkey-cart]
+
+    - name: product-catalog
+      type: grpc
+      critical: true
+      errorRate:
+        perOperation: true
+
+    - name: currency
+      type: grpc
+
+    - name: ad
+      type: grpc
+      saturation:
+        memory: 400Mi
+
+    - name: recommendation
+      type: grpc
+      dependsOn: [product-catalog]
+
+    - name: shipping
+      type: http
+      dependsOn: [quote]
+
+    - name: quote
+      type: http
+
+    - name: email
+      type: http
+
+    - name: orders
+      type: queue
+      description: Kafka topic with placed orders
+      workload:
+        podRegex: 'kafka-.*'
+      queue:
+        topic: orders
+        consumerGroups: [fraud-detection, accounting]
+        maxLag: 100
+        for: 2m
+
+    - name: fraud-detection
+      type: grpc
+      description: Consumes orders from Kafka
+      dependsOn: [orders]
+      saturation:
+        memory: 400Mi
+
+    - name: accounting
+      type: grpc
+      description: Consumes orders from Kafka
+      dependsOn: [orders]
+
+    - name: valkey-cart
+      type: database
+      description: Cart storage
+
+  notifications:
+    receivers:
+      - name: oncall-telegram
+        telegram:
+          chatID: -1001234567890 # replace with your chat ID
+          botTokenSecret:
+            name: kamerton-telegram
+            key: bot-token
+      - name: team-email
+        email:
+          to: [oncall@example.com]
+          from: kamerton@example.com
+          smarthost: smtp.example.com:587
+          authUsername: kamerton@example.com
+          authPasswordSecret:
+            name: kamerton-smtp
+            key: password
+    routing:
+      critical: [oncall-telegram, team-email]
+      warning: [team-email]
+      groupBy: [alertname, service]
+      repeatInterval: 4h
+    # Times in messages are UTC unless a zone is set, for example:
+    # timeZone: Asia/Almaty

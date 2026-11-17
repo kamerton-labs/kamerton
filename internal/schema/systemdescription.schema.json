@@ -1,0 +1,1621 @@
+{
+  "$id": "https://kamerton.dev/schemas/v1alpha1/systemdescription.schema.json",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "description": "Kamerton system description: services, thresholds, SLOs and notification routing.",
+  "properties": {
+    "apiVersion": {
+      "description": "API version of the description.",
+      "enum": [
+        "kamerton.dev/v1alpha1"
+      ],
+      "type": "string"
+    },
+    "kind": {
+      "description": "Kind of the description.",
+      "enum": [
+        "SystemDescription"
+      ],
+      "type": "string"
+    },
+    "metadata": {
+      "additionalProperties": false,
+      "description": "Name and labels of the description. When applied to Kubernetes this is the object metadata.",
+      "properties": {
+        "annotations": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "labels": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "name": {
+          "description": "Name of the system.",
+          "maxLength": 253,
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$",
+          "type": "string"
+        },
+        "namespace": {
+          "description": "Kubernetes namespace of the description.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "spec": {
+      "additionalProperties": false,
+      "description": "SystemDescriptionSpec describes the services of one system, their thresholds\nand SLOs, and where notifications go.",
+      "properties": {
+        "defaults": {
+          "additionalProperties": false,
+          "description": "Default policies applied to every service unless the service overrides them.",
+          "properties": {
+            "errorRate": {
+              "additionalProperties": false,
+              "description": "Default error rate policy.",
+              "properties": {
+                "enabled": {
+                  "description": "Set to false to disable this alert.",
+                  "type": "boolean"
+                },
+                "for": {
+                  "description": "How long the condition must hold before the alert fires.",
+                  "pattern": "^([0-9]+(ms|s|m|h|d|w|y))+$",
+                  "type": "string"
+                },
+                "message": {
+                  "additionalProperties": false,
+                  "description": "Notification text for this alert (also used by the per-operation rule) written by the team, in any language.\nWhen absent, Kamerton's default text is used.",
+                  "properties": {
+                    "action": {
+                      "description": "First steps for the person on call.",
+                      "maxLength": 1000,
+                      "type": "string"
+                    },
+                    "text": {
+                      "description": "What it means, with values, for example \"Error rate {value} (threshold {threshold})\".",
+                      "maxLength": 1000,
+                      "type": "string"
+                    },
+                    "title": {
+                      "description": "What happened, in the team's words. Replaces the title of the notification.",
+                      "maxLength": 200,
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                },
+                "minRequestsPerSecond": {
+                  "description": "Minimum traffic, in calls per second, for the alert to be evaluated.\nPrevents alerts on a single failed call in an idle service. Not used by\nthe per-operation rule, which needs at least 3 failed calls of the\noperation in the window instead.",
+                  "minimum": 0,
+                  "type": "number"
+                },
+                "perOperation": {
+                  "description": "Also evaluate the error rate of every operation separately, so a failure\nof one operation is not hidden by healthy traffic of others. The\nper-operation rule needs at least 3 failed calls of the operation in the\nwindow. Default: true; set to false to turn it off.",
+                  "type": "boolean"
+                },
+                "severity": {
+                  "description": "Severity of this alert: critical or warning. Default: critical for\ncritical services, warning for others.",
+                  "enum": [
+                    "warning",
+                    "critical"
+                  ],
+                  "type": "string"
+                },
+                "threshold": {
+                  "description": "Maximum allowed share of failed calls, from 0 to 1 (0.05 = 5%).",
+                  "maximum": 1,
+                  "minimum": 0,
+                  "type": "number"
+                }
+              },
+              "type": "object"
+            },
+            "excludeOperations": {
+              "description": "Operations (span names, RE2 regular expressions) ignored by all request\nrules, for example noisy streaming endpoints.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "latency": {
+              "additionalProperties": false,
+              "description": "Default latency policy.",
+              "properties": {
+                "aboveNormalFactor": {
+                  "description": "Alert when the latency quantile of the service is this many times its\nnormal value (the quantile over the previous hour, ending 10 minutes\nago) and above 100 ms, whatever the threshold. Default: 5; 0 turns\nthe alert off.",
+                  "minimum": 0,
+                  "type": "number"
+                },
+                "enabled": {
+                  "description": "Set to false to disable this alert.",
+                  "type": "boolean"
+                },
+                "for": {
+                  "description": "How long the condition must hold before the alert fires.",
+                  "pattern": "^([0-9]+(ms|s|m|h|d|w|y))+$",
+                  "type": "string"
+                },
+                "message": {
+                  "additionalProperties": false,
+                  "description": "Notification text for this alert (also used by the per-operation and\n\"slower than normal\" rules) written by the team, in any language.\nWhen absent, Kamerton's default text is used.",
+                  "properties": {
+                    "action": {
+                      "description": "First steps for the person on call.",
+                      "maxLength": 1000,
+                      "type": "string"
+                    },
+                    "text": {
+                      "description": "What it means, with values, for example \"Error rate {value} (threshold {threshold})\".",
+                      "maxLength": 1000,
+                      "type": "string"
+                    },
+                    "title": {
+                      "description": "What happened, in the team's words. Replaces the title of the notification.",
+                      "maxLength": 200,
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                },
+                "minRequestsPerSecond": {
+                  "description": "Minimum traffic, in calls per second, for the alert to be evaluated.\nDefault: none; the latency rules always need at least 3 calls in the\nwindow, so a quantile is never computed from one or two requests.",
+                  "minimum": 0,
+                  "type": "number"
+                },
+                "perOperation": {
+                  "description": "Also evaluate the latency of every operation separately, so a slow\noperation is not hidden by fast traffic of others. Operations with their\nown latency policy are left to that policy. Default: true.",
+                  "type": "boolean"
+                },
+                "quantile": {
+                  "description": "Quantile to evaluate, for example 0.95.",
+                  "exclusiveMinimum": 0,
+                  "maximum": 1,
+                  "type": "number"
+                },
+                "severity": {
+                  "description": "Severity of this alert: critical or warning. Default: critical for\ncritical services, warning for others.",
+                  "enum": [
+                    "warning",
+                    "critical"
+                  ],
+                  "type": "string"
+                },
+                "thresholdMs": {
+                  "description": "Latency threshold in milliseconds.",
+                  "minimum": 0,
+                  "type": "number"
+                }
+              },
+              "type": "object"
+            },
+            "namespace": {
+              "description": "Kubernetes namespace where the services run.",
+              "type": "string"
+            },
+            "rateWindow": {
+              "description": "Window for rate() and increase(). Must cover at least two scrapes; with\nmetrics updated once a minute use 2m or more. Default: 5m.",
+              "pattern": "^([0-9]+(ms|s|m|h|d|w|y))+$",
+              "type": "string"
+            },
+            "saturation": {
+              "additionalProperties": false,
+              "description": "Default resource saturation policy.",
+              "properties": {
+                "cpuAboveNormalFactor": {
+                  "description": "Without an explicit CPU threshold: alert when a pod uses more than 0.5\ncores and this many times the normal CPU of the service (the average\nover the previous hour, ending 10 minutes ago). Default: 3; 0 turns\nthe alert off.",
+                  "minimum": 0,
+                  "type": "number"
+                },
+                "cpuCores": {
+                  "description": "CPU threshold per pod in cores, for example 0.5. When set, it replaces\nthe alerts on CPU close to the limit and far above normal.",
+                  "minimum": 0,
+                  "type": "number"
+                },
+                "cpuLimitShare": {
+                  "description": "Without an explicit CPU threshold: alert when the CPU usage of a pod\nexceeds this share of its CPU limit (all containers must have a limit).\nFrom 0 to 1. Default: 0.9; 0 turns the alert off.",
+                  "maximum": 1,
+                  "minimum": 0,
+                  "type": "number"
+                },
+                "cpuMessage": {
+                  "additionalProperties": false,
+                  "description": "Notification text of the CPU alerts written by the team.",
+                  "properties": {
+                    "action": {
+                      "description": "First steps for the person on call.",
+                      "maxLength": 1000,
+                      "type": "string"
+                    },
+                    "text": {
+                      "description": "What it means, with values, for example \"Error rate {value} (threshold {threshold})\".",
+                      "maxLength": 1000,
+                      "type": "string"
+                    },
+                    "title": {
+                      "description": "What happened, in the team's words. Replaces the title of the notification.",
+                      "maxLength": 200,
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                },
+                "enabled": {
+                  "description": "Set to false to disable these alerts.",
+                  "type": "boolean"
+                },
+                "for": {
+                  "description": "How long the condition must hold before the alert fires.",
+                  "pattern": "^([0-9]+(ms|s|m|h|d|w|y))+$",
+                  "type": "string"
+                },
+                "maxRestartsPerHour": {
+                  "description": "Maximum container restarts per hour.",
+                  "format": "int32",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "memory": {
+                  "description": "Memory threshold per pod as a Kubernetes quantity, for example 512Mi.\nWhen set, it replaces the alert on memory close to the limit.",
+                  "pattern": "^[0-9]+(\\.[0-9]+)?(Ki|Mi|Gi|Ti|k|M|G|T)?$",
+                  "type": "string"
+                },
+                "memoryLimitShare": {
+                  "description": "Without an explicit memory threshold: alert when the memory of a pod\nexceeds this share of its memory limit (all containers must have a\nlimit) and its trend over the last hour reaches the limit within 30\nminutes. From 0 to 1. Default: 0.95; 0 turns the alert off.",
+                  "maximum": 1,
+                  "minimum": 0,
+                  "type": "number"
+                },
+                "memoryMessage": {
+                  "additionalProperties": false,
+                  "description": "Notification text of the memory alerts written by the team.",
+                  "properties": {
+                    "action": {
+                      "description": "First steps for the person on call.",
+                      "maxLength": 1000,
+                      "type": "string"
+                    },
+                    "text": {
+                      "description": "What it means, with values, for example \"Error rate {value} (threshold {threshold})\".",
+                      "maxLength": 1000,
+                      "type": "string"
+                    },
+                    "title": {
+                      "description": "What happened, in the team's words. Replaces the title of the notification.",
+                      "maxLength": 200,
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                },
+                "oomKilledEnabled": {
+                  "description": "Set to false to disable the alert on a container killed for running\nout of memory (OOMKilled). It fires at once and lasts 10 minutes.",
+                  "type": "boolean"
+                },
+                "oomKilledMessage": {
+                  "additionalProperties": false,
+                  "description": "Notification text of the out-of-memory kill alert written by the team.",
+                  "properties": {
+                    "action": {
+                      "description": "First steps for the person on call.",
+                      "maxLength": 1000,
+                      "type": "string"
+                    },
+                    "text": {
+                      "description": "What it means, with values, for example \"Error rate {value} (threshold {threshold})\".",
+                      "maxLength": 1000,
+                      "type": "string"
+                    },
+                    "title": {
+                      "description": "What happened, in the team's words. Replaces the title of the notification.",
+                      "maxLength": 200,
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                },
+                "restartsEnabled": {
+                  "description": "Set to false to disable only the container restarts alert.",
+                  "type": "boolean"
+                },
+                "restartsMessage": {
+                  "additionalProperties": false,
+                  "description": "Notification text of the restarts alert written by the team.",
+                  "properties": {
+                    "action": {
+                      "description": "First steps for the person on call.",
+                      "maxLength": 1000,
+                      "type": "string"
+                    },
+                    "text": {
+                      "description": "What it means, with values, for example \"Error rate {value} (threshold {threshold})\".",
+                      "maxLength": 1000,
+                      "type": "string"
+                    },
+                    "title": {
+                      "description": "What happened, in the team's words. Replaces the title of the notification.",
+                      "maxLength": 200,
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                },
+                "severity": {
+                  "description": "Severity of these alerts: critical or warning. Default: critical for\ncritical services, warning for others.",
+                  "enum": [
+                    "warning",
+                    "critical"
+                  ],
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            },
+            "trafficDrop": {
+              "additionalProperties": false,
+              "description": "Default policy of the \"requests stopped arriving\" alert.",
+              "properties": {
+                "enabled": {
+                  "description": "Set to true or false to turn this alert on or off. Default: on for\ncritical services of type http or grpc, off for others; services of type\nqueue or database get it only when set on the service itself.",
+                  "type": "boolean"
+                },
+                "for": {
+                  "description": "How long the condition must hold before the alert fires. Default: 2m.",
+                  "pattern": "^([0-9]+(ms|s|m|h|d|w|y))+$",
+                  "type": "string"
+                },
+                "message": {
+                  "additionalProperties": false,
+                  "description": "Notification text for this alert written by the team, in any language.\nWhen absent, Kamerton's default text is used.",
+                  "properties": {
+                    "action": {
+                      "description": "First steps for the person on call.",
+                      "maxLength": 1000,
+                      "type": "string"
+                    },
+                    "text": {
+                      "description": "What it means, with values, for example \"Error rate {value} (threshold {threshold})\".",
+                      "maxLength": 1000,
+                      "type": "string"
+                    },
+                    "title": {
+                      "description": "What happened, in the team's words. Replaces the title of the notification.",
+                      "maxLength": 200,
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                },
+                "minRequestsPerSecond": {
+                  "description": "Minimum normal traffic, in calls per second, for the alert to apply:\nquieter services go minutes without a call in normal operation.\nDefault: 0.02 (about one call a minute).",
+                  "minimum": 0,
+                  "type": "number"
+                },
+                "severity": {
+                  "description": "Severity of this alert: critical or warning. Default: critical for\ncritical services, warning for others.",
+                  "enum": [
+                    "warning",
+                    "critical"
+                  ],
+                  "type": "string"
+                },
+                "threshold": {
+                  "description": "Share of the normal traffic at or below which the alert fires, from 0\nto 1: 0.1 = 10%, 0 = only when calls stop completely. Default: 0.1.",
+                  "exclusiveMaximum": 1,
+                  "minimum": 0,
+                  "type": "number"
+                }
+              },
+              "type": "object"
+            }
+          },
+          "type": "object"
+        },
+        "environment": {
+          "description": "Human-readable name of the environment, added as the \"environment\" label to every alert.",
+          "type": "string"
+        },
+        "notifications": {
+          "additionalProperties": false,
+          "description": "Notification receivers and routing.",
+          "properties": {
+            "language": {
+              "description": "Language of notification messages and of the plain-words alert text: en (default) or ru.",
+              "enum": [
+                "ru",
+                "en"
+              ],
+              "type": "string"
+            },
+            "receivers": {
+              "description": "Notification receivers.",
+              "items": {
+                "additionalProperties": false,
+                "description": "Receiver is one notification channel. Exactly one of telegram or email must be set.",
+                "properties": {
+                  "email": {
+                    "additionalProperties": false,
+                    "description": "Email recipients.",
+                    "properties": {
+                      "authPasswordSecret": {
+                        "additionalProperties": false,
+                        "description": "Kubernetes Secret key holding the SMTP password.",
+                        "properties": {
+                          "key": {
+                            "description": "Key inside the Secret.",
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "name": {
+                            "description": "Secret name.",
+                            "minLength": 1,
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "key",
+                          "name"
+                        ],
+                        "type": "object"
+                      },
+                      "authUsername": {
+                        "description": "SMTP username.",
+                        "type": "string"
+                      },
+                      "from": {
+                        "description": "Sender address.",
+                        "type": "string"
+                      },
+                      "smarthost": {
+                        "description": "SMTP server as host:port.",
+                        "pattern": "^[^:\\s]+:[0-9]+$",
+                        "type": "string"
+                      },
+                      "to": {
+                        "description": "Recipient addresses.",
+                        "items": {
+                          "type": "string"
+                        },
+                        "minItems": 1,
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "from",
+                      "smarthost",
+                      "to"
+                    ],
+                    "type": "object"
+                  },
+                  "name": {
+                    "description": "Unique receiver name.",
+                    "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                    "type": "string"
+                  },
+                  "telegram": {
+                    "additionalProperties": false,
+                    "description": "Telegram chat.",
+                    "properties": {
+                      "botTokenSecret": {
+                        "additionalProperties": false,
+                        "description": "Kubernetes Secret key holding the bot token. The token never goes into this description.",
+                        "properties": {
+                          "key": {
+                            "description": "Key inside the Secret.",
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "name": {
+                            "description": "Secret name.",
+                            "minLength": 1,
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "key",
+                          "name"
+                        ],
+                        "type": "object"
+                      },
+                      "chatID": {
+                        "description": "Chat ID, for example -1001234567890.",
+                        "format": "int64",
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "botTokenSecret",
+                      "chatID"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "name"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            },
+            "routing": {
+              "additionalProperties": false,
+              "description": "Routing of alerts to receivers.",
+              "properties": {
+                "critical": {
+                  "description": "Receivers for critical alerts.",
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "groupBy": {
+                  "description": "Labels used to group alerts into one notification. Default: alertname, service.",
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "repeatInterval": {
+                  "description": "How often to repeat a notification for an alert that is still firing. Default: 4h.",
+                  "pattern": "^([0-9]+(ms|s|m|h|d|w|y))+$",
+                  "type": "string"
+                },
+                "routes": {
+                  "description": "Routes limited to some services: the receiver gets only alerts of the\nlisted services with the listed severities. Use critical/warning above\nfor receivers that get alerts of every service.",
+                  "items": {
+                    "additionalProperties": false,
+                    "description": "Route sends alerts of some services to one receiver.",
+                    "properties": {
+                      "receiver": {
+                        "description": "Receiver name.",
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "services": {
+                        "description": "Service names whose alerts are delivered.",
+                        "items": {
+                          "type": "string"
+                        },
+                        "minItems": 1,
+                        "type": "array"
+                      },
+                      "severities": {
+                        "description": "Severities to deliver. Empty means all severities.",
+                        "items": {
+                          "description": "Severity of generated alerts.",
+                          "enum": [
+                            "warning",
+                            "critical"
+                          ],
+                          "type": "string"
+                        },
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "receiver",
+                      "services"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
+                },
+                "warning": {
+                  "description": "Receivers for warnings.",
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                }
+              },
+              "type": "object"
+            },
+            "timeZone": {
+              "description": "Time zone of the times in notification messages, as an IANA name such as\nAsia/Almaty or Europe/Berlin. Times are shown with their offset, for\nexample \"09:18 16.11 UTC+5\". Default: UTC.",
+              "maxLength": 64,
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "services": {
+          "description": "Services of the system.",
+          "items": {
+            "additionalProperties": false,
+            "description": "Service is one component of the system.",
+            "properties": {
+              "critical": {
+                "description": "Critical services page on-call; others create warnings.",
+                "type": "boolean"
+              },
+              "customRules": {
+                "description": "Rules for cases the built-in policies do not cover. They get the same\nlabels, notification text and runbook link as built-in rules.",
+                "items": {
+                  "additionalProperties": false,
+                  "description": "CustomRule is an alert written by the user. Exactly one of condition or expr must be set.",
+                  "properties": {
+                    "condition": {
+                      "additionalProperties": false,
+                      "description": "Condition assembled from parts: metric, function, aggregation, comparison.",
+                      "properties": {
+                        "aggregation": {
+                          "description": "How to combine series: max, min, avg, sum or count. Default: max.",
+                          "enum": [
+                            "max",
+                            "min",
+                            "avg",
+                            "sum",
+                            "count"
+                          ],
+                          "type": "string"
+                        },
+                        "by": {
+                          "description": "Labels kept after aggregation: one alert per combination of their values.",
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
+                        },
+                        "function": {
+                          "description": "What to take from the metric: the value as is (none), the per-second\nrate of a counter (rate) or its increase over the rate window (increase). Default: none.",
+                          "enum": [
+                            "none",
+                            "rate",
+                            "increase"
+                          ],
+                          "type": "string"
+                        },
+                        "labels": {
+                          "additionalProperties": {
+                            "type": "string"
+                          },
+                          "description": "Only series with these exact label values.",
+                          "type": "object"
+                        },
+                        "metric": {
+                          "description": "Metric name, for example http_requests_total.",
+                          "pattern": "^[a-zA-Z_:][a-zA-Z0-9_:]*$",
+                          "type": "string"
+                        },
+                        "operator": {
+                          "description": "Comparison with the threshold: gt (>), gte (>=), lt (<), lte (<=), eq (==), ne (!=).",
+                          "enum": [
+                            "gt",
+                            "gte",
+                            "lt",
+                            "lte",
+                            "eq",
+                            "ne"
+                          ],
+                          "type": "string"
+                        },
+                        "threshold": {
+                          "description": "Threshold value.",
+                          "type": "number"
+                        }
+                      },
+                      "required": [
+                        "metric",
+                        "operator",
+                        "threshold"
+                      ],
+                      "type": "object"
+                    },
+                    "enabled": {
+                      "description": "Set to false to disable this alert.",
+                      "type": "boolean"
+                    },
+                    "expr": {
+                      "description": "PromQL expression; the alert fires for every series it returns.",
+                      "type": "string"
+                    },
+                    "for": {
+                      "description": "How long the condition must hold before the alert fires. Default: 5m.",
+                      "pattern": "^([0-9]+(ms|s|m|h|d|w|y))+$",
+                      "type": "string"
+                    },
+                    "message": {
+                      "additionalProperties": false,
+                      "description": "Notification text for this alert written by the team, in any language.\nWhen absent, Kamerton's default text is used.",
+                      "properties": {
+                        "action": {
+                          "description": "First steps for the person on call.",
+                          "maxLength": 1000,
+                          "type": "string"
+                        },
+                        "text": {
+                          "description": "What it means, with values, for example \"Error rate {value} (threshold {threshold})\".",
+                          "maxLength": 1000,
+                          "type": "string"
+                        },
+                        "title": {
+                          "description": "What happened, in the team's words. Replaces the title of the notification.",
+                          "maxLength": 200,
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "name": {
+                      "description": "Identifier, unique within the service: lowercase letters, digits and dashes.",
+                      "maxLength": 63,
+                      "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                      "type": "string"
+                    },
+                    "severity": {
+                      "description": "Severity of this alert: critical or warning. Default: critical for\ncritical services, warning for others.",
+                      "enum": [
+                        "warning",
+                        "critical"
+                      ],
+                      "type": "string"
+                    },
+                    "title": {
+                      "description": "What is wrong, in plain words. Shown as the title of the notification.",
+                      "maxLength": 200,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "unit": {
+                      "description": "Unit shown after the value in notifications, for example %, ms or orders.",
+                      "maxLength": 20,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "title"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "dependsOn": {
+                "description": "Services this service calls. Used to build the service map and to find\nthe probable source of an incident.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "description": {
+                "description": "Short description shown in the UI and in notifications.",
+                "type": "string"
+              },
+              "errorRate": {
+                "additionalProperties": false,
+                "description": "Error rate policy, overriding defaults.",
+                "properties": {
+                  "enabled": {
+                    "description": "Set to false to disable this alert.",
+                    "type": "boolean"
+                  },
+                  "for": {
+                    "description": "How long the condition must hold before the alert fires.",
+                    "pattern": "^([0-9]+(ms|s|m|h|d|w|y))+$",
+                    "type": "string"
+                  },
+                  "message": {
+                    "additionalProperties": false,
+                    "description": "Notification text for this alert (also used by the per-operation rule) written by the team, in any language.\nWhen absent, Kamerton's default text is used.",
+                    "properties": {
+                      "action": {
+                        "description": "First steps for the person on call.",
+                        "maxLength": 1000,
+                        "type": "string"
+                      },
+                      "text": {
+                        "description": "What it means, with values, for example \"Error rate {value} (threshold {threshold})\".",
+                        "maxLength": 1000,
+                        "type": "string"
+                      },
+                      "title": {
+                        "description": "What happened, in the team's words. Replaces the title of the notification.",
+                        "maxLength": 200,
+                        "type": "string"
+                      }
+                    },
+                    "type": "object"
+                  },
+                  "minRequestsPerSecond": {
+                    "description": "Minimum traffic, in calls per second, for the alert to be evaluated.\nPrevents alerts on a single failed call in an idle service. Not used by\nthe per-operation rule, which needs at least 3 failed calls of the\noperation in the window instead.",
+                    "minimum": 0,
+                    "type": "number"
+                  },
+                  "perOperation": {
+                    "description": "Also evaluate the error rate of every operation separately, so a failure\nof one operation is not hidden by healthy traffic of others. The\nper-operation rule needs at least 3 failed calls of the operation in the\nwindow. Default: true; set to false to turn it off.",
+                    "type": "boolean"
+                  },
+                  "severity": {
+                    "description": "Severity of this alert: critical or warning. Default: critical for\ncritical services, warning for others.",
+                    "enum": [
+                      "warning",
+                      "critical"
+                    ],
+                    "type": "string"
+                  },
+                  "threshold": {
+                    "description": "Maximum allowed share of failed calls, from 0 to 1 (0.05 = 5%).",
+                    "maximum": 1,
+                    "minimum": 0,
+                    "type": "number"
+                  }
+                },
+                "type": "object"
+              },
+              "excludeOperations": {
+                "description": "Additional operations (RE2 regular expressions) ignored for this service.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "latency": {
+                "additionalProperties": false,
+                "description": "Latency policy, overriding defaults.",
+                "properties": {
+                  "aboveNormalFactor": {
+                    "description": "Alert when the latency quantile of the service is this many times its\nnormal value (the quantile over the previous hour, ending 10 minutes\nago) and above 100 ms, whatever the threshold. Default: 5; 0 turns\nthe alert off.",
+                    "minimum": 0,
+                    "type": "number"
+                  },
+                  "enabled": {
+                    "description": "Set to false to disable this alert.",
+                    "type": "boolean"
+                  },
+                  "for": {
+                    "description": "How long the condition must hold before the alert fires.",
+                    "pattern": "^([0-9]+(ms|s|m|h|d|w|y))+$",
+                    "type": "string"
+                  },
+                  "message": {
+                    "additionalProperties": false,
+                    "description": "Notification text for this alert (also used by the per-operation and\n\"slower than normal\" rules) written by the team, in any language.\nWhen absent, Kamerton's default text is used.",
+                    "properties": {
+                      "action": {
+                        "description": "First steps for the person on call.",
+                        "maxLength": 1000,
+                        "type": "string"
+                      },
+                      "text": {
+                        "description": "What it means, with values, for example \"Error rate {value} (threshold {threshold})\".",
+                        "maxLength": 1000,
+                        "type": "string"
+                      },
+                      "title": {
+                        "description": "What happened, in the team's words. Replaces the title of the notification.",
+                        "maxLength": 200,
+                        "type": "string"
+                      }
+                    },
+                    "type": "object"
+                  },
+                  "minRequestsPerSecond": {
+                    "description": "Minimum traffic, in calls per second, for the alert to be evaluated.\nDefault: none; the latency rules always need at least 3 calls in the\nwindow, so a quantile is never computed from one or two requests.",
+                    "minimum": 0,
+                    "type": "number"
+                  },
+                  "perOperation": {
+                    "description": "Also evaluate the latency of every operation separately, so a slow\noperation is not hidden by fast traffic of others. Operations with their\nown latency policy are left to that policy. Default: true.",
+                    "type": "boolean"
+                  },
+                  "quantile": {
+                    "description": "Quantile to evaluate, for example 0.95.",
+                    "exclusiveMinimum": 0,
+                    "maximum": 1,
+                    "type": "number"
+                  },
+                  "severity": {
+                    "description": "Severity of this alert: critical or warning. Default: critical for\ncritical services, warning for others.",
+                    "enum": [
+                      "warning",
+                      "critical"
+                    ],
+                    "type": "string"
+                  },
+                  "thresholdMs": {
+                    "description": "Latency threshold in milliseconds.",
+                    "minimum": 0,
+                    "type": "number"
+                  }
+                },
+                "type": "object"
+              },
+              "name": {
+                "description": "Unique name of the service.",
+                "maxLength": 63,
+                "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                "type": "string"
+              },
+              "operations": {
+                "description": "Operations with their own thresholds.",
+                "items": {
+                  "additionalProperties": false,
+                  "description": "Operation is a single operation (span name) of a service with its own policy.",
+                  "properties": {
+                    "errorRate": {
+                      "additionalProperties": false,
+                      "description": "Error rate policy for this operation.",
+                      "properties": {
+                        "enabled": {
+                          "description": "Set to false to disable this alert.",
+                          "type": "boolean"
+                        },
+                        "for": {
+                          "description": "How long the condition must hold before the alert fires.",
+                          "pattern": "^([0-9]+(ms|s|m|h|d|w|y))+$",
+                          "type": "string"
+                        },
+                        "message": {
+                          "additionalProperties": false,
+                          "description": "Notification text for this alert (also used by the per-operation rule) written by the team, in any language.\nWhen absent, Kamerton's default text is used.",
+                          "properties": {
+                            "action": {
+                              "description": "First steps for the person on call.",
+                              "maxLength": 1000,
+                              "type": "string"
+                            },
+                            "text": {
+                              "description": "What it means, with values, for example \"Error rate {value} (threshold {threshold})\".",
+                              "maxLength": 1000,
+                              "type": "string"
+                            },
+                            "title": {
+                              "description": "What happened, in the team's words. Replaces the title of the notification.",
+                              "maxLength": 200,
+                              "type": "string"
+                            }
+                          },
+                          "type": "object"
+                        },
+                        "minRequestsPerSecond": {
+                          "description": "Minimum traffic, in calls per second, for the alert to be evaluated.\nPrevents alerts on a single failed call in an idle service. Not used by\nthe per-operation rule, which needs at least 3 failed calls of the\noperation in the window instead.",
+                          "minimum": 0,
+                          "type": "number"
+                        },
+                        "perOperation": {
+                          "description": "Also evaluate the error rate of every operation separately, so a failure\nof one operation is not hidden by healthy traffic of others. The\nper-operation rule needs at least 3 failed calls of the operation in the\nwindow. Default: true; set to false to turn it off.",
+                          "type": "boolean"
+                        },
+                        "severity": {
+                          "description": "Severity of this alert: critical or warning. Default: critical for\ncritical services, warning for others.",
+                          "enum": [
+                            "warning",
+                            "critical"
+                          ],
+                          "type": "string"
+                        },
+                        "threshold": {
+                          "description": "Maximum allowed share of failed calls, from 0 to 1 (0.05 = 5%).",
+                          "maximum": 1,
+                          "minimum": 0,
+                          "type": "number"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "latency": {
+                      "additionalProperties": false,
+                      "description": "Latency policy for this operation.",
+                      "properties": {
+                        "aboveNormalFactor": {
+                          "description": "Alert when the latency quantile of the service is this many times its\nnormal value (the quantile over the previous hour, ending 10 minutes\nago) and above 100 ms, whatever the threshold. Default: 5; 0 turns\nthe alert off.",
+                          "minimum": 0,
+                          "type": "number"
+                        },
+                        "enabled": {
+                          "description": "Set to false to disable this alert.",
+                          "type": "boolean"
+                        },
+                        "for": {
+                          "description": "How long the condition must hold before the alert fires.",
+                          "pattern": "^([0-9]+(ms|s|m|h|d|w|y))+$",
+                          "type": "string"
+                        },
+                        "message": {
+                          "additionalProperties": false,
+                          "description": "Notification text for this alert (also used by the per-operation and\n\"slower than normal\" rules) written by the team, in any language.\nWhen absent, Kamerton's default text is used.",
+                          "properties": {
+                            "action": {
+                              "description": "First steps for the person on call.",
+                              "maxLength": 1000,
+                              "type": "string"
+                            },
+                            "text": {
+                              "description": "What it means, with values, for example \"Error rate {value} (threshold {threshold})\".",
+                              "maxLength": 1000,
+                              "type": "string"
+                            },
+                            "title": {
+                              "description": "What happened, in the team's words. Replaces the title of the notification.",
+                              "maxLength": 200,
+                              "type": "string"
+                            }
+                          },
+                          "type": "object"
+                        },
+                        "minRequestsPerSecond": {
+                          "description": "Minimum traffic, in calls per second, for the alert to be evaluated.\nDefault: none; the latency rules always need at least 3 calls in the\nwindow, so a quantile is never computed from one or two requests.",
+                          "minimum": 0,
+                          "type": "number"
+                        },
+                        "perOperation": {
+                          "description": "Also evaluate the latency of every operation separately, so a slow\noperation is not hidden by fast traffic of others. Operations with their\nown latency policy are left to that policy. Default: true.",
+                          "type": "boolean"
+                        },
+                        "quantile": {
+                          "description": "Quantile to evaluate, for example 0.95.",
+                          "exclusiveMinimum": 0,
+                          "maximum": 1,
+                          "type": "number"
+                        },
+                        "severity": {
+                          "description": "Severity of this alert: critical or warning. Default: critical for\ncritical services, warning for others.",
+                          "enum": [
+                            "warning",
+                            "critical"
+                          ],
+                          "type": "string"
+                        },
+                        "thresholdMs": {
+                          "description": "Latency threshold in milliseconds.",
+                          "minimum": 0,
+                          "type": "number"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "name": {
+                      "description": "Span name of the operation, for example oteldemo.CheckoutService/PlaceOrder.",
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "name"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "owner": {
+                "description": "Team or person responsible for the service.",
+                "type": "string"
+              },
+              "queue": {
+                "additionalProperties": false,
+                "description": "Queue settings, for services of type queue.",
+                "properties": {
+                  "consumerGroups": {
+                    "description": "Consumer groups to watch. Empty means all groups of the topic.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "consumerStoppedEnabled": {
+                    "description": "Set to false to disable the alert on a consumer group that stopped\nreading the topic: the group has no members for a minute, or messages\nwait for 3 minutes while its committed offset does not move. It needs\nno threshold and holds for 1 minute (or the shorter for above).",
+                    "type": "boolean"
+                  },
+                  "consumerStoppedMessage": {
+                    "additionalProperties": false,
+                    "description": "Notification text of the stopped consumer alert written by the team.",
+                    "properties": {
+                      "action": {
+                        "description": "First steps for the person on call.",
+                        "maxLength": 1000,
+                        "type": "string"
+                      },
+                      "text": {
+                        "description": "What it means, with values, for example \"Error rate {value} (threshold {threshold})\".",
+                        "maxLength": 1000,
+                        "type": "string"
+                      },
+                      "title": {
+                        "description": "What happened, in the team's words. Replaces the title of the notification.",
+                        "maxLength": 200,
+                        "type": "string"
+                      }
+                    },
+                    "type": "object"
+                  },
+                  "for": {
+                    "description": "How long the condition must hold before the alert fires.",
+                    "pattern": "^([0-9]+(ms|s|m|h|d|w|y))+$",
+                    "type": "string"
+                  },
+                  "maxLag": {
+                    "description": "Maximum allowed consumer lag (in messages).",
+                    "minimum": 0,
+                    "type": "number"
+                  },
+                  "message": {
+                    "additionalProperties": false,
+                    "description": "Notification text for this alert written by the team, in any language.\nWhen absent, Kamerton's default text is used.",
+                    "properties": {
+                      "action": {
+                        "description": "First steps for the person on call.",
+                        "maxLength": 1000,
+                        "type": "string"
+                      },
+                      "text": {
+                        "description": "What it means, with values, for example \"Error rate {value} (threshold {threshold})\".",
+                        "maxLength": 1000,
+                        "type": "string"
+                      },
+                      "title": {
+                        "description": "What happened, in the team's words. Replaces the title of the notification.",
+                        "maxLength": 200,
+                        "type": "string"
+                      }
+                    },
+                    "type": "object"
+                  },
+                  "severity": {
+                    "description": "Severity of the queue alerts (lag and stopped consumer): critical or\nwarning. Default: critical for critical services, warning for others.",
+                    "enum": [
+                      "warning",
+                      "critical"
+                    ],
+                    "type": "string"
+                  },
+                  "topic": {
+                    "description": "Topic name.",
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "maxLag",
+                  "topic"
+                ],
+                "type": "object"
+              },
+              "runbookURL": {
+                "description": "Link to the runbook. If empty, a runbook stub is generated.",
+                "type": "string"
+              },
+              "saturation": {
+                "additionalProperties": false,
+                "description": "Resource saturation policy, overriding defaults.",
+                "properties": {
+                  "cpuAboveNormalFactor": {
+                    "description": "Without an explicit CPU threshold: alert when a pod uses more than 0.5\ncores and this many times the normal CPU of the service (the average\nover the previous hour, ending 10 minutes ago). Default: 3; 0 turns\nthe alert off.",
+                    "minimum": 0,
+                    "type": "number"
+                  },
+                  "cpuCores": {
+                    "description": "CPU threshold per pod in cores, for example 0.5. When set, it replaces\nthe alerts on CPU close to the limit and far above normal.",
+                    "minimum": 0,
+                    "type": "number"
+                  },
+                  "cpuLimitShare": {
+                    "description": "Without an explicit CPU threshold: alert when the CPU usage of a pod\nexceeds this share of its CPU limit (all containers must have a limit).\nFrom 0 to 1. Default: 0.9; 0 turns the alert off.",
+                    "maximum": 1,
+                    "minimum": 0,
+                    "type": "number"
+                  },
+                  "cpuMessage": {
+                    "additionalProperties": false,
+                    "description": "Notification text of the CPU alerts written by the team.",
+                    "properties": {
+                      "action": {
+                        "description": "First steps for the person on call.",
+                        "maxLength": 1000,
+                        "type": "string"
+                      },
+                      "text": {
+                        "description": "What it means, with values, for example \"Error rate {value} (threshold {threshold})\".",
+                        "maxLength": 1000,
+                        "type": "string"
+                      },
+                      "title": {
+                        "description": "What happened, in the team's words. Replaces the title of the notification.",
+                        "maxLength": 200,
+                        "type": "string"
+                      }
+                    },
+                    "type": "object"
+                  },
+                  "enabled": {
+                    "description": "Set to false to disable these alerts.",
+                    "type": "boolean"
+                  },
+                  "for": {
+                    "description": "How long the condition must hold before the alert fires.",
+                    "pattern": "^([0-9]+(ms|s|m|h|d|w|y))+$",
+                    "type": "string"
+                  },
+                  "maxRestartsPerHour": {
+                    "description": "Maximum container restarts per hour.",
+                    "format": "int32",
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "memory": {
+                    "description": "Memory threshold per pod as a Kubernetes quantity, for example 512Mi.\nWhen set, it replaces the alert on memory close to the limit.",
+                    "pattern": "^[0-9]+(\\.[0-9]+)?(Ki|Mi|Gi|Ti|k|M|G|T)?$",
+                    "type": "string"
+                  },
+                  "memoryLimitShare": {
+                    "description": "Without an explicit memory threshold: alert when the memory of a pod\nexceeds this share of its memory limit (all containers must have a\nlimit) and its trend over the last hour reaches the limit within 30\nminutes. From 0 to 1. Default: 0.95; 0 turns the alert off.",
+                    "maximum": 1,
+                    "minimum": 0,
+                    "type": "number"
+                  },
+                  "memoryMessage": {
+                    "additionalProperties": false,
+                    "description": "Notification text of the memory alerts written by the team.",
+                    "properties": {
+                      "action": {
+                        "description": "First steps for the person on call.",
+                        "maxLength": 1000,
+                        "type": "string"
+                      },
+                      "text": {
+                        "description": "What it means, with values, for example \"Error rate {value} (threshold {threshold})\".",
+                        "maxLength": 1000,
+                        "type": "string"
+                      },
+                      "title": {
+                        "description": "What happened, in the team's words. Replaces the title of the notification.",
+                        "maxLength": 200,
+                        "type": "string"
+                      }
+                    },
+                    "type": "object"
+                  },
+                  "oomKilledEnabled": {
+                    "description": "Set to false to disable the alert on a container killed for running\nout of memory (OOMKilled). It fires at once and lasts 10 minutes.",
+                    "type": "boolean"
+                  },
+                  "oomKilledMessage": {
+                    "additionalProperties": false,
+                    "description": "Notification text of the out-of-memory kill alert written by the team.",
+                    "properties": {
+                      "action": {
+                        "description": "First steps for the person on call.",
+                        "maxLength": 1000,
+                        "type": "string"
+                      },
+                      "text": {
+                        "description": "What it means, with values, for example \"Error rate {value} (threshold {threshold})\".",
+                        "maxLength": 1000,
+                        "type": "string"
+                      },
+                      "title": {
+                        "description": "What happened, in the team's words. Replaces the title of the notification.",
+                        "maxLength": 200,
+                        "type": "string"
+                      }
+                    },
+                    "type": "object"
+                  },
+                  "restartsEnabled": {
+                    "description": "Set to false to disable only the container restarts alert.",
+                    "type": "boolean"
+                  },
+                  "restartsMessage": {
+                    "additionalProperties": false,
+                    "description": "Notification text of the restarts alert written by the team.",
+                    "properties": {
+                      "action": {
+                        "description": "First steps for the person on call.",
+                        "maxLength": 1000,
+                        "type": "string"
+                      },
+                      "text": {
+                        "description": "What it means, with values, for example \"Error rate {value} (threshold {threshold})\".",
+                        "maxLength": 1000,
+                        "type": "string"
+                      },
+                      "title": {
+                        "description": "What happened, in the team's words. Replaces the title of the notification.",
+                        "maxLength": 200,
+                        "type": "string"
+                      }
+                    },
+                    "type": "object"
+                  },
+                  "severity": {
+                    "description": "Severity of these alerts: critical or warning. Default: critical for\ncritical services, warning for others.",
+                    "enum": [
+                      "warning",
+                      "critical"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              },
+              "slo": {
+                "additionalProperties": false,
+                "description": "Availability service level objective.",
+                "properties": {
+                  "message": {
+                    "additionalProperties": false,
+                    "description": "Notification text for both burn-rate alerts written by the team, in any language.\nWhen absent, Kamerton's default text is used.",
+                    "properties": {
+                      "action": {
+                        "description": "First steps for the person on call.",
+                        "maxLength": 1000,
+                        "type": "string"
+                      },
+                      "text": {
+                        "description": "What it means, with values, for example \"Error rate {value} (threshold {threshold})\".",
+                        "maxLength": 1000,
+                        "type": "string"
+                      },
+                      "title": {
+                        "description": "What happened, in the team's words. Replaces the title of the notification.",
+                        "maxLength": 200,
+                        "type": "string"
+                      }
+                    },
+                    "type": "object"
+                  },
+                  "objective": {
+                    "description": "Target share of successful calls in percent, for example 99.5.",
+                    "exclusiveMaximum": 100,
+                    "minimum": 50,
+                    "type": "number"
+                  },
+                  "window": {
+                    "description": "SLO window. Default: 30d.",
+                    "pattern": "^([0-9]+(ms|s|m|h|d|w|y))+$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "objective"
+                ],
+                "type": "object"
+              },
+              "telemetryName": {
+                "description": "Value of the service label in telemetry, if it differs from name.",
+                "type": "string"
+              },
+              "trafficDrop": {
+                "additionalProperties": false,
+                "description": "Policy of the \"requests stopped arriving\" alert, overriding defaults.",
+                "properties": {
+                  "enabled": {
+                    "description": "Set to true or false to turn this alert on or off. Default: on for\ncritical services of type http or grpc, off for others; services of type\nqueue or database get it only when set on the service itself.",
+                    "type": "boolean"
+                  },
+                  "for": {
+                    "description": "How long the condition must hold before the alert fires. Default: 2m.",
+                    "pattern": "^([0-9]+(ms|s|m|h|d|w|y))+$",
+                    "type": "string"
+                  },
+                  "message": {
+                    "additionalProperties": false,
+                    "description": "Notification text for this alert written by the team, in any language.\nWhen absent, Kamerton's default text is used.",
+                    "properties": {
+                      "action": {
+                        "description": "First steps for the person on call.",
+                        "maxLength": 1000,
+                        "type": "string"
+                      },
+                      "text": {
+                        "description": "What it means, with values, for example \"Error rate {value} (threshold {threshold})\".",
+                        "maxLength": 1000,
+                        "type": "string"
+                      },
+                      "title": {
+                        "description": "What happened, in the team's words. Replaces the title of the notification.",
+                        "maxLength": 200,
+                        "type": "string"
+                      }
+                    },
+                    "type": "object"
+                  },
+                  "minRequestsPerSecond": {
+                    "description": "Minimum normal traffic, in calls per second, for the alert to apply:\nquieter services go minutes without a call in normal operation.\nDefault: 0.02 (about one call a minute).",
+                    "minimum": 0,
+                    "type": "number"
+                  },
+                  "severity": {
+                    "description": "Severity of this alert: critical or warning. Default: critical for\ncritical services, warning for others.",
+                    "enum": [
+                      "warning",
+                      "critical"
+                    ],
+                    "type": "string"
+                  },
+                  "threshold": {
+                    "description": "Share of the normal traffic at or below which the alert fires, from 0\nto 1: 0.1 = 10%, 0 = only when calls stop completely. Default: 0.1.",
+                    "exclusiveMaximum": 1,
+                    "minimum": 0,
+                    "type": "number"
+                  }
+                },
+                "type": "object"
+              },
+              "type": {
+                "description": "Kind of service.",
+                "enum": [
+                  "http",
+                  "grpc",
+                  "queue",
+                  "database"
+                ],
+                "type": "string"
+              },
+              "workload": {
+                "additionalProperties": false,
+                "description": "Where the service pods run.",
+                "properties": {
+                  "namespace": {
+                    "description": "Kubernetes namespace. Defaults to defaults.namespace.",
+                    "type": "string"
+                  },
+                  "podRegex": {
+                    "description": "RE2 regular expression matching pod names. Default: \"<name>-.*\".",
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              }
+            },
+            "required": [
+              "name",
+              "type"
+            ],
+            "type": "object"
+          },
+          "minItems": 1,
+          "type": "array"
+        },
+        "stack": {
+          "description": "ID of the set of observability programs (Prometheus, Alertmanager,\nGrafana, Loki, Tempo, OpenTelemetry Collector) the system uses, as\nshown on Kamerton's status page. Empty: the built-in set. An unknown\nID falls back to the built-in set with a warning.",
+          "maxLength": 63,
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+          "type": "string"
+        },
+        "telemetry": {
+          "additionalProperties": false,
+          "description": "Names of metrics and labels in your Prometheus. Defaults follow the\nOpenTelemetry span metrics connector and cAdvisor; override them if your\npipeline names things differently.",
+          "properties": {
+            "containers": {
+              "additionalProperties": false,
+              "description": "Container resource metrics.",
+              "properties": {
+                "containerLabel": {
+                  "description": "Label holding the container name (kube-state-metrics). Default: container.",
+                  "type": "string"
+                },
+                "cpuMetric": {
+                  "description": "CPU usage counter in seconds. Default: container_cpu_usage_seconds_total.",
+                  "type": "string"
+                },
+                "limitsMetric": {
+                  "description": "Container resource limits (from kube-state-metrics, with a \"resource\"\nlabel of memory or cpu). Default: kube_pod_container_resource_limits.\nSet to \"-\" to disable the alerts on usage close to the limit.",
+                  "type": "string"
+                },
+                "memoryMetric": {
+                  "description": "Memory gauge in bytes. Default: container_memory_working_set_bytes.",
+                  "type": "string"
+                },
+                "namespaceLabel": {
+                  "description": "Label holding the Kubernetes namespace. Default: namespace.",
+                  "type": "string"
+                },
+                "podLabel": {
+                  "description": "Label holding the pod name. Default: pod.",
+                  "type": "string"
+                },
+                "restartsMetric": {
+                  "description": "Container restarts counter (from kube-state-metrics). Default: kube_pod_container_status_restarts_total. Set to \"-\" to disable restart alerts.",
+                  "type": "string"
+                },
+                "terminatedReasonMetric": {
+                  "description": "Reason of the last container termination (from kube-state-metrics, with\na \"reason\" label). Default: kube_pod_container_status_last_terminated_reason.\nSet to \"-\" to disable the out-of-memory kill alert.",
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            },
+            "queues": {
+              "additionalProperties": false,
+              "description": "Queue consumer lag metrics.",
+              "properties": {
+                "groupLabel": {
+                  "description": "Label holding the consumer group. Default: group.",
+                  "type": "string"
+                },
+                "lagMetric": {
+                  "description": "Consumer lag gauge. Default: kafka_consumer_group_lag_ratio.",
+                  "type": "string"
+                },
+                "membersMetric": {
+                  "description": "Number of members of a consumer group (with the group label only).\nDefault: kafka_consumer_group_members. Set to \"-\" to stop treating a\ngroup without members as a stopped consumer.",
+                  "type": "string"
+                },
+                "offsetMetric": {
+                  "description": "Committed offset of a consumer group (per group, topic and partition).\nDefault: kafka_consumer_group_offset_ratio. Set to \"-\" to stop treating\nan offset that does not move while messages wait as a stopped consumer.",
+                  "type": "string"
+                },
+                "topicLabel": {
+                  "description": "Label holding the topic. Default: topic.",
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            },
+            "spans": {
+              "additionalProperties": false,
+              "description": "Span metrics (RED metrics derived from traces).",
+              "properties": {
+                "callsMetric": {
+                  "description": "Counter of calls. Default: traces_span_metrics_calls_total.",
+                  "type": "string"
+                },
+                "durationBucketMetric": {
+                  "description": "Histogram bucket series of call durations. Default: traces_span_metrics_duration_milliseconds_bucket.",
+                  "type": "string"
+                },
+                "durationUnit": {
+                  "description": "Unit of the duration histogram buckets. Default: ms.",
+                  "enum": [
+                    "ms",
+                    "s"
+                  ],
+                  "type": "string"
+                },
+                "errorStatusValue": {
+                  "description": "Value of the status code label that marks an error. Default: STATUS_CODE_ERROR.",
+                  "type": "string"
+                },
+                "operationLabel": {
+                  "description": "Label holding the operation (span) name. Default: span_name.",
+                  "type": "string"
+                },
+                "serverSpanKinds": {
+                  "description": "Span kinds that represent incoming work of a service. Default: SPAN_KIND_SERVER, SPAN_KIND_CONSUMER.",
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "serviceLabel": {
+                  "description": "Label holding the service name. Default: service_name.",
+                  "type": "string"
+                },
+                "spanKindLabel": {
+                  "description": "Label holding the span kind. Default: span_kind.",
+                  "type": "string"
+                },
+                "statusCodeLabel": {
+                  "description": "Label holding the span status code. Default: status_code.",
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            }
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "services"
+      ],
+      "type": "object"
+    }
+  },
+  "required": [
+    "apiVersion",
+    "kind",
+    "metadata",
+    "spec"
+  ],
+  "title": "SystemDescription",
+  "type": "object"
+}
