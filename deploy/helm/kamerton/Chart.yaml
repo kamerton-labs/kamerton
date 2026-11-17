@@ -10,9 +10,10 @@ home: https://github.com/kamerton-labs/kamerton
 sources:
   - https://github.com/kamerton-labs/kamerton
 kubeVersion: ">=1.27.0-0"
-keywords: [observability, monitoring, alerting, prometheus, alertmanager, grafana, loki, tempo, opentelemetry, kubernetes-operator, slo]
+keywords: [observability, monitoring, alerting, prometheus, alertmanager, grafana, loki, tempo, opentelemetry, ebpf, kubernetes-operator, slo]
 # Managed programs are upstream charts, pinned and never vendored.
-# Versions checked against the repositories' index.yaml on 2026-11-15.
+# Versions checked against the repositories' index.yaml on 2026-11-15
+# (opentelemetry-ebpf-instrumentation on 2026-11-17).
 # NOTE: Grafana, Loki and Tempo OSS charts are published by the grafana-community
 # repository; the charts with the same names in grafana.github.io/helm-charts are
 # deprecated (grafana, tempo) or are Grafana Enterprise Logs (loki).
@@ -37,3 +38,9 @@ dependencies:
     version: 0.178.3
     repository: https://open-telemetry.github.io/opentelemetry-helm-charts
     condition: opentelemetry-collector.enabled
+  # OBI v1.0.0. Off by default; its values sit under
+  # opentelemetry-ebpf-instrumentation, the switch is autoInstrument.enabled.
+  - name: opentelemetry-ebpf-instrumentation
+    version: 0.16.1
+    repository: https://open-telemetry.github.io/opentelemetry-helm-charts
+    condition: autoInstrument.enabled
