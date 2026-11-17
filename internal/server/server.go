@@ -615,8 +615,11 @@ type incidentView struct {
 	Evidence *generator.EvidenceSummary `json:"evidence,omitempty"`
 	// HistoryID is the history record of this incident; Previous the earlier
 	// incident most like it.
-	HistoryID string            `json:"historyId,omitempty"`
-	Previous  *history.Previous `json:"previous,omitempty"`
+	HistoryID string `json:"historyId,omitempty"`
+	// AftermathOf is set when this incident is the tail of the record
+	// HistoryID names: no record or follow-up of its own.
+	AftermathOf string            `json:"aftermathOf,omitempty"`
+	Previous    *history.Previous `json:"previous,omitempty"`
 }
 
 func triageAlert(a alertmanager.Alert) triage.Alert {

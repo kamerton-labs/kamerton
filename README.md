@@ -511,10 +511,25 @@ start failing too. Kamerton knows the `dependsOn` graph, so:
   zero the cause arrives first. SLO alerts are only muted, never mute: a
   burning budget says nothing about the services a caller depends on.
   Memory, CPU, restart, out-of-memory, queue, "no data" and custom alerts are
-  never muted. A warning mutes only warnings; services in a dependency cycle
+  never muted by this (starved ones are, below). A warning mutes only warnings; services in a dependency cycle
   do not mute each other. Turn it off with
   `spec.notifications.groupByCause: false`. The system "no data" alert mutes
-  the per-service ones either way. The alerts API lists muted alerts and
+  the per-service ones either way.
+- **Starved services stay quiet.** A failure also takes traffic away from
+  what the failing service calls, or feeds through a queue: with `payment`
+  down, `checkout` places no orders, so `email` gets no calls and the
+  consumers of `orders` get no messages. Their "no data" and "requests
+  stopped" alerts then get the label `kamerton_starved="true"` and are muted
+  while a feeder's alert fires, and they join the incident as affected
+  services. That happens only when the service has no error, latency or
+  "no ready pods" alert of its own, and only when the feeder's failure is
+  not the service's doing: a caller with errors explains a silent callee
+  only while another dependency explains those errors (or the caller has no
+  ready pods, no data or no requests of its own). So a service that is
+  unreachable, whose callers fail because of it, is still the cause. For a
+  queue, a consumer is a service that depends on the queue and is named in
+  its `queue.consumerGroups`; the other services that depend on it produce.
+  The alerts API lists muted alerts and
   incidents (cause, "also affected" and the evidence of the follow-up).
 - **A follow-up with evidence.** Alertmanager still sends the alert straight
   to Telegram and email, so it arrives while Kamerton is down. It also calls
@@ -589,6 +604,14 @@ start failing too. Kamerton knows the `dependsOn` graph, so:
   Times in the last 30 days: 4.
   ```
 
+  After an outage, callers' error and SLO burn alerts may fire for a while
+  (an SLO burn alert clears only when its window no longer holds the
+  errors). For 35 minutes after the cause resolved they count as the
+  incident's aftermath: no new incident, no second follow-up; the message
+  above adds "Still firing after it: checkout (SLO error budget is
+  burning)". If they still fire after that, they become an incident of
+  their own with a follow-up. A failure of the service's own (no ready
+  pods, restarts) is never aftermath.
   The alerts API shows the same as `previous` on each incident, and the
   runbook page of a service lists the last notes about it. At most 300
   incidents of the last 180 days are kept, in the ConfigMap

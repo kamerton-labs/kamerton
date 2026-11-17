@@ -354,7 +354,7 @@ func (s *Service) attempt(ctx context.Context, sd *v1alpha1.SystemDescription, f
 	recipients := Recipients(sd.Spec.Notifications, firing)
 	alerts, complete := s.systemAlerts(ctx, sd, firing, nil)
 	incidents := triage.NewGraph(&sd.Spec).Incidents(sd.Name, alerts)
-	s.observe(ctx, history.Observation{System: sd.Name, Incidents: incidents, Complete: complete})
+	hist := s.observe(ctx, history.Observation{System: sd.Name, Incidents: incidents, Complete: complete})
 
 	byIncident := map[string][]string{}
 	var order []string
@@ -381,6 +381,14 @@ func (s *Service) attempt(ctx context.Context, sd *v1alpha1.SystemDescription, f
 			}
 		}
 		res := Result{Incident: id}
+		if p := s.History.AftermathOf(hist, sd.Name, *inc); p != nil {
+			// Not claimed: should it outlive the grace period, the sweep
+			// starts its follow-up under the same key.
+			res.Skipped = "aftermath of an earlier incident"
+			s.log().Debug("follow-up skipped", "system", sd.Name, "incident", id, "reason", res.Skipped, "of", p.Incident)
+			results = append(results, res)
+			continue
+		}
 		key := id + "@" + strconv.FormatInt(inc.StartsAt.Unix(), 10)
 		rec := Record{At: s.now(), System: sd.Name, Roots: inc.Roots}
 		if len(inc.Roots) > 0 {

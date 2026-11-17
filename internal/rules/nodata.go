@@ -96,7 +96,8 @@ type ServiceNoDataParams struct {
 	MinRequestsPerSecond float64
 	// Traffic is the service's TrafficStopped rule when it is on: a stop it
 	// reports is left to it.
-	Traffic *TrafficParams
+	Traffic    *TrafficParams
+	Starvation *Starvation
 }
 
 // ServiceNoData fires when the service sent span metrics within
@@ -113,6 +114,7 @@ func ServiceNoData(p ServiceNoDataParams) rulefmt.Rule {
 	if p.Traffic != nil {
 		expr += fmt.Sprintf("\nunless on (%s)\n%s", svc, p.Traffic.stopsCovered())
 	}
+	expr = p.Starvation.wrap(expr)
 	m := p.Meta
 	m.For = NoDataPending
 	r := m.rule(AlertServiceTelemetryMissing, SignalNoData, expr, nil)

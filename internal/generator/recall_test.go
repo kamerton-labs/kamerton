@@ -90,3 +90,16 @@ func TestRenderIncidentOver(t *testing.T) {
 		t.Errorf("ru:\n%s\nwant\n%s", ru, want)
 	}
 }
+
+func TestRenderIncidentOverWithAftermath(t *testing.T) {
+	o := IncidentOver{System: "shop", Roots: []string{"payment"}, Title: "No ready pods", Duration: 11 * time.Minute,
+		StillFiring: []Aftermath{{Service: "checkout", Alerts: []string{rules.AlertSLOBurnSlow}}}}
+	en := RenderIncidentOver(o, rules.LanguageEnglish)
+	if !strings.Contains(en, "\nStill firing after it: checkout (SLO error budget is burning). This is expected for a while after an outage.\nWhat helped?") {
+		t.Errorf("en:\n%s", en)
+	}
+	ru := RenderIncidentOver(o, rules.LanguageRussian)
+	if !strings.Contains(ru, "\nЕщё срабатывают после него: checkout (Бюджет ошибок SLO сгорает). Так бывает какое-то время после сбоя.\nЧто помогло?") {
+		t.Errorf("ru:\n%s", ru)
+	}
+}

@@ -39,7 +39,9 @@ func (g *gen) inhibitRules() []any {
 	}
 	sources, targets := rules.SymptomSources(), rules.SymptomTargets()
 	for _, d := range deps {
-		src := side(matcher(rules.LabelService, d), sources)
+		// A starved "requests stopped" explains nothing upstream; letting it
+		// mute its callers would close a loop with the starvation rules below.
+		src := append(side(matcher(rules.LabelService, d), sources), notMatcher(rules.LabelStarved, "true"))
 		dst := side(regexMatcher(rules.LabelService, callers[d]), targets)
 		out = append(out,
 			map[string]any{
@@ -52,7 +54,43 @@ func (g *gen) inhibitRules() []any {
 			},
 		)
 	}
+	return append(out, g.starvationInhibitRules(side)...)
+}
+
+// starvationInhibitRules mute the starved alerts of a service while a feeder
+// alert fires; muted feeder alerts count, so a chain of starved services
+// closes. Severity works as for the dependency rules.
+func (g *gen) starvationInhibitRules(side func(any, []string) []any) []any {
+	feeders := triage.NewGraph(g.spec).Feeders()
+	fed := make([]string, 0, len(feeders))
+	for d := range feeders {
+		fed = append(fed, d)
+	}
+	sort.Strings(fed)
+	var out []any
+	for _, d := range fed {
+		names := make([]string, len(feeders[d]))
+		for i, f := range feeders[d] {
+			names[i] = f.Service
+		}
+		src := side(regexMatcher(rules.LabelService, names), rules.FeederAlerts())
+		dst := append(side(matcher(rules.LabelService, d), rules.StarvedAlerts()), matcher(rules.LabelStarved, "true"))
+		out = append(out,
+			map[string]any{
+				"sourceMatch": append(slices.Clone(src), matcher(rules.LabelSeverity, string(v1alpha1.SeverityCritical))),
+				"targetMatch": dst,
+			},
+			map[string]any{
+				"sourceMatch": append(slices.Clone(src), matcher(rules.LabelSeverity, string(v1alpha1.SeverityWarning))),
+				"targetMatch": append(slices.Clone(dst), matcher(rules.LabelSeverity, string(v1alpha1.SeverityWarning))),
+			},
+		)
+	}
 	return out
+}
+
+func notMatcher(name, value string) map[string]any {
+	return map[string]any{"name": name, "value": value, "matchType": "!="}
 }
 
 // noDataInhibitRule: while the whole system sends nothing, the per-service "no

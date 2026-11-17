@@ -17,6 +17,7 @@ import (
 	"github.com/kamerton-labs/kamerton/api/v1alpha1"
 	"github.com/kamerton-labs/kamerton/internal/description"
 	"github.com/kamerton-labs/kamerton/internal/rules"
+	"github.com/kamerton-labs/kamerton/internal/triage"
 )
 
 // Built-in policy values used when neither defaults nor the service set them.
@@ -131,6 +132,8 @@ type gen struct {
 	window time.Duration
 	opts   Options
 	byName map[string]*v1alpha1.Service
+	// feeders is triage.Graph.Feeders, computed on first use.
+	feeders map[string][]rules.Feeder
 }
 
 func newGen(sd *v1alpha1.SystemDescription, opts Options) *gen {
@@ -340,9 +343,10 @@ func (g *gen) serviceRules(svc *v1alpha1.Service) ([]rulefmt.Rule, error) {
 	nd := mergeNoData(svc, d.NoData, svc.NoData)
 	others := g.otherTelemetryNames(svc)
 	noDataOn := nd.enabled && spansOn && len(others) > 0
+	starved := g.starvation(svc)
 	tparams := rules.TrafficParams{
 		Meta: g.metaSev(svc, tp.forD, tp.severity), Target: g.spanTarget(svc),
-		Threshold: tp.threshold, MinRequestsPerSecond: tp.minRPS, SystemServices: g.telemetryNames(),
+		Threshold: tp.threshold, MinRequestsPerSecond: tp.minRPS, SystemServices: g.telemetryNames(), Starvation: starved,
 	}
 	if trafficOn {
 		out = append(out, g.withMessage(rules.TrafficStopped(tparams), svc, tp.message, ""))
@@ -358,6 +362,7 @@ func (g *gen) serviceRules(svc *v1alpha1.Service) ([]rulefmt.Rule, error) {
 		// The floor is trafficDrop's even where that rule is off.
 		np := rules.ServiceNoDataParams{
 			Meta: g.metaSev(svc, 0, sev), Target: g.spanTarget(svc), After: nd.after, Others: others, MinRequestsPerSecond: tp.minRPS,
+			Starvation: starved,
 		}
 		if trafficOn {
 			np.Traffic = &tparams
@@ -441,6 +446,21 @@ func (g *gen) serviceRules(svc *v1alpha1.Service) ([]rulefmt.Rule, error) {
 		out = append(out, g.withMessage(rules.Custom(p), svc, cr.Message, ""))
 	}
 	return out, nil
+}
+
+// starvation is nil without grouping by cause, which also turns off the
+// inhibit rules that mute starved alerts.
+func (g *gen) starvation(svc *v1alpha1.Service) *rules.Starvation {
+	if !g.spec.Notifications.GroupsByCause() {
+		return nil
+	}
+	if g.feeders == nil {
+		g.feeders = triage.NewGraph(g.spec).Feeders()
+	}
+	if len(g.feeders[svc.Name]) == 0 {
+		return nil
+	}
+	return &rules.Starvation{SystemLabel: LabelSystem, System: g.sd.Name, Service: svc.Name, Feeders: g.feeders[svc.Name]}
 }
 
 func withoutOperations(t rules.SpanTarget, svc *v1alpha1.Service, own func(v1alpha1.Operation) bool) rules.SpanTarget {

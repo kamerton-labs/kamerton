@@ -75,7 +75,8 @@ type Asked struct {
 // Record is stored as is; View is what the API returns.
 type Record struct {
 	ID string `json:"id"`
-	// Incident is the triage incident ID (system:roots) while open.
+	// Incident is the triage incident ID (system:roots) of the last view;
+	// it stays after the record closes.
 	Incident     string                     `json:"incident"`
 	System       string                     `json:"system"`
 	Roots        []string                   `json:"roots"`
@@ -92,6 +93,25 @@ type Record struct {
 	FollowUpTo []string `json:"followUpTo,omitempty"`
 	AskSent    bool     `json:"askSent,omitempty"`
 	Asked      []Asked  `json:"asked,omitempty"`
+	// Firing are the root alerts ("alert@service") of the last view; a
+	// resolved notification ends the record when it covers all of them.
+	Firing    []string    `json:"firing,omitempty"`
+	Aftermath []Aftermath `json:"aftermath,omitempty"`
+	// Merged are the IDs of records opened for the same incident before
+	// triage knew its root.
+	Merged []string `json:"merged,omitempty"`
+	// Promoted: aftermath that outlived AftermathGrace and became an
+	// incident of its own; its follow-up is started by the sweep.
+	Promoted bool `json:"promoted,omitempty"`
+}
+
+// Aftermath are alerts of a service the incident affected that fire on
+// their own while it is open or within AftermathGrace after it ended.
+type Aftermath struct {
+	Service  string    `json:"service"`
+	Alerts   []string  `json:"alerts"`
+	Since    time.Time `json:"since"`
+	LastSeen time.Time `json:"lastSeen"`
 }
 
 func (r Record) end() time.Time {
@@ -121,11 +141,12 @@ type View struct {
 	Open            bool                       `json:"open"`
 	Evidence        *generator.EvidenceSummary `json:"evidence,omitempty"`
 	Note            *Note                      `json:"note,omitempty"`
+	Aftermath       []Aftermath                `json:"aftermath,omitempty"`
 }
 
 func (r Record) View() View {
 	v := View{ID: r.ID, System: r.System, Roots: r.Roots, RootAlerts: r.RootAlerts, Affected: r.Affected,
-		StartedAt: r.StartedAt, Open: r.Open, EndEstimated: r.EndEstimated, Evidence: r.Evidence, Note: r.Note}
+		StartedAt: r.StartedAt, Open: r.Open, EndEstimated: r.EndEstimated, Evidence: r.Evidence, Note: r.Note, Aftermath: r.Aftermath}
 	if v.Roots == nil {
 		v.Roots = []string{}
 	}
@@ -264,163 +285,6 @@ func (s *Service) Observe(ctx context.Context, obs ...Observation) (*State, erro
 		s.OnClose(ctx, closed)
 	}
 	return st, nil
-}
-
-// lastSeenStep: LastSeen is refreshed at most this often, so frequent
-// observations of an unchanged incident do not write.
-const lastSeenStep = time.Minute
-
-func (st *State) observe(o Observation, now time.Time) (closed []Record, changed bool) {
-	matched := map[int]bool{}
-	var rest []triage.Incident
-	for _, inc := range o.Incidents {
-		if len(inc.Roots) == 0 || inc.System != o.System {
-			continue
-		}
-		i := st.openFor(o.System, inc.ID)
-		if i < 0 {
-			id := recordID(o.System, inc.ID, inc.StartsAt)
-			for j := range st.Records {
-				if st.Records[j].ID == id {
-					i = j
-				}
-			}
-		}
-		if i < 0 {
-			rest = append(rest, inc)
-			continue
-		}
-		matched[i] = true
-		changed = st.Records[i].update(inc, now) || changed
-	}
-	for _, inc := range rest {
-		i := st.adoptable(o.System, inc, matched)
-		if i < 0 {
-			st.Records = append(st.Records, Record{
-				ID: recordID(o.System, inc.ID, inc.StartsAt), System: o.System, StartedAt: inc.StartsAt.UTC(),
-			})
-			i = len(st.Records) - 1
-		}
-		matched[i] = true
-		st.Records[i].update(inc, now)
-		changed = true
-	}
-	for i := range st.Records {
-		r := &st.Records[i]
-		if !r.Open || matched[i] {
-			continue
-		}
-		end, ok := r.endedBy(o.Ended)
-		switch {
-		case r.System == o.System && (o.Complete || ok):
-			if !ok {
-				end = now
-				if now.Sub(r.LastSeen) > lateEnd {
-					end, r.EndEstimated = r.LastSeen, true
-				}
-			}
-		case now.Sub(r.LastSeen) > StaleAfter:
-			end, r.EndEstimated = r.LastSeen, true
-		default:
-			continue
-		}
-		if end.Before(r.StartedAt) {
-			end = r.StartedAt
-		}
-		r.Open, r.EndedAt, r.Incident = false, end.UTC(), ""
-		closed = append(closed, *r)
-		changed = true
-	}
-	return closed, changed
-}
-
-// endedBy: every root alert of r has a resolved end; the latest is the end.
-func (r *Record) endedBy(ended map[string]time.Time) (time.Time, bool) {
-	if len(ended) == 0 || len(r.RootAlerts) == 0 {
-		return time.Time{}, false
-	}
-	var end time.Time
-	for _, a := range r.RootAlerts {
-		t, ok := ended[EndKey(a.Name, a.Service)]
-		if !ok {
-			return time.Time{}, false
-		}
-		if t.After(end) {
-			end = t
-		}
-	}
-	return end, true
-}
-
-func (st *State) openFor(system, incident string) int {
-	for i, r := range st.Records {
-		if r.Open && r.System == system && r.Incident == incident {
-			return i
-		}
-	}
-	return -1
-}
-
-// adoptable finds an open record without a note whose roots the incident now
-// explains (they are among its roots or affected services): the same
-// incident seen first from a caller, before the dependency's alert fired.
-func (st *State) adoptable(system string, inc triage.Incident, matched map[int]bool) int {
-	in := map[string]bool{}
-	for _, x := range append(append([]string{}, inc.Roots...), inc.Affected...) {
-		in[x] = true
-	}
-	for i, r := range st.Records {
-		if !r.Open || matched[i] || r.System != system || r.Note != nil || len(r.Roots) == 0 {
-			continue
-		}
-		all := true
-		for _, x := range r.Roots {
-			all = all && in[x]
-		}
-		if all {
-			return i
-		}
-	}
-	return -1
-}
-
-// update takes the incident's current roots and adds its alerts and affected
-// services; it reports whether anything stored changed.
-func (r *Record) update(inc triage.Incident, now time.Time) bool {
-	changed := !r.Open || r.Incident != inc.ID || !equal(r.Roots, inc.Roots)
-	r.Open, r.Incident, r.EndedAt, r.EndEstimated = true, inc.ID, time.Time{}, false
-	r.Roots = append([]string{}, inc.Roots...)
-	if start := inc.StartsAt.UTC(); !start.IsZero() && (r.StartedAt.IsZero() || start.Before(r.StartedAt)) {
-		r.StartedAt, changed = start, true
-	}
-	for _, a := range inc.RootAlerts {
-		if len(r.RootAlerts) >= maxRootAlerts {
-			break
-		}
-		ref := AlertRef{Name: a.Name, Service: a.Service, Title: trim(a.Title, maxTitle), Severity: a.Severity}
-		found := false
-		for _, x := range r.RootAlerts {
-			found = found || (x.Name == ref.Name && x.Service == ref.Service)
-		}
-		if !found {
-			r.RootAlerts = append(r.RootAlerts, ref)
-			changed = true
-		}
-	}
-	for _, a := range inc.Affected {
-		if len(r.Affected) >= maxAffected {
-			break
-		}
-		if !contains(r.Affected, a) {
-			r.Affected = append(r.Affected, a)
-			changed = true
-		}
-	}
-	sort.Strings(r.Affected)
-	if changed || now.Sub(r.LastSeen) >= lastSeenStep {
-		r.LastSeen, changed = now, true
-	}
-	return changed
 }
 
 func (st *State) find(id string) int {
@@ -669,6 +533,15 @@ func (st *State) Recall(system string, inc triage.Incident, now time.Time) *Prev
 		p.Fix = n.Fix
 	}
 	return p
+}
+
+// AftermathOf tells whether a live incident is the tail of an earlier one in
+// a state already read; nil-safe for a Service and a State.
+func (s *Service) AftermathOf(st *State, system string, inc triage.Incident) *Record {
+	if s == nil || st == nil {
+		return nil
+	}
+	return st.AftermathOf(system, inc, s.now())
 }
 
 // RecallFrom finds the earlier incident most like inc in a state already read.

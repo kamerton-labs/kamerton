@@ -4,6 +4,8 @@
 package triage
 
 import (
+	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -62,6 +64,77 @@ func (g *Graph) MutingEdges() map[string][]string {
 		sort.Strings(out[k])
 	}
 	return out
+}
+
+// Feeders maps a service to the services whose failure takes its traffic
+// away: its direct callers, and the producers of a queue it consumes (see
+// rules.LabelStarved). Links inside a cycle of feeding are left out, for the
+// same reason as in MutingEdges. Lists are sorted by feeder.
+func (g *Graph) Feeders() map[string][]rules.Feeder {
+	feeds := map[string][]string{}
+	queue := map[[2]string]bool{}
+	for n := range g.deps {
+		feeds[n] = nil
+	}
+	for caller, deps := range g.deps {
+		for _, d := range deps {
+			if _, known := g.deps[d]; known && d != caller {
+				feeds[caller] = appendUnique(feeds[caller], d)
+			}
+		}
+	}
+	for q, consumers := range g.consumers {
+		for p, deps := range g.deps {
+			if !slices.Contains(deps, q) || slices.Contains(consumers, p) {
+				continue
+			}
+			for _, c := range consumers {
+				if c != p && !slices.Contains(g.deps[p], c) {
+					feeds[p] = appendUnique(feeds[p], c)
+					queue[[2]string{p, c}] = true
+				}
+			}
+		}
+	}
+	mutedBy := map[string][]string{}
+	for dep, callers := range g.MutingEdges() {
+		for _, c := range callers {
+			mutedBy[c] = append(mutedBy[c], dep)
+		}
+	}
+	comp := (&Graph{deps: feeds}).components()
+	out := map[string][]rules.Feeder{}
+	for f, ds := range feeds {
+		for _, d := range ds {
+			if comp[f] == comp[d] {
+				continue
+			}
+			fd := rules.Feeder{Service: f, Queue: queue[[2]string{f, d}]}
+			if !fd.Queue {
+				for _, o := range mutedBy[f] {
+					if o != d {
+						fd.Others = append(fd.Others, o)
+					}
+				}
+				sort.Strings(fd.Others)
+			}
+			out[d] = append(out[d], fd)
+		}
+	}
+	for k := range out {
+		sort.Slice(out[k], func(i, j int) bool { return out[k][i].Service < out[k][j].Service })
+	}
+	return out
+}
+
+// hasSource: a symptom source among alerts, leaving out starved ones.
+func hasSource(alerts []Alert, starved bool) bool {
+	for _, a := range alerts {
+		if rules.IsSymptomSource(a.Name) && (!starved || !slices.Contains(rules.StarvedAlerts(), a.Name)) {
+			return true
+		}
+	}
+	return false
 }
 
 func appendUnique(list []string, v string) []string {
@@ -156,32 +229,84 @@ func (g *Graph) Incidents(system string, alerts []Alert) []Incident {
 	}
 	alerts, wide := systemWide(system, alerts)
 	bySvc := map[string][]Alert{}
-	source, target, ownCause := map[string]bool{}, map[string]bool{}, map[string]bool{}
 	var services []string
 	for _, a := range alerts {
 		if _, seen := bySvc[a.Service]; !seen {
 			services = append(services, a.Service)
 		}
 		bySvc[a.Service] = append(bySvc[a.Service], a)
+	}
+	sort.Strings(services)
+	has := func(s string, names []string) bool {
+		for _, a := range bySvc[s] {
+			if slices.Contains(names, a.Name) {
+				return true
+			}
+		}
+		return false
+	}
+
+	// starvedBy holds the feeders that explain a service's "no data" and
+	// "requests stopped", decided as for rules.LabelStarved. Whether a
+	// feeder's alert is explained depends on which alerts are starved, so
+	// this repeats until nothing changes (Prometheus gets there over
+	// evaluations); the bound only guards against flapping.
+	feeders := g.Feeders()
+	starvedBy := map[string][]string{}
+	for range len(services) + 1 {
+		next := map[string][]string{}
+		for _, s := range services {
+			if has(s, rules.OwnCauseAlerts()) || !has(s, rules.StarvedAlerts()) {
+				continue
+			}
+			for _, f := range feeders[s] {
+				fires := has(f.Service, rules.FeederAlerts())
+				ok := (f.Queue && fires) || has(f.Service, rules.SilentAlerts())
+				for _, o := range f.Others {
+					ok = ok || (fires && hasSource(bySvc[o], len(starvedBy[o]) > 0))
+				}
+				if ok {
+					next[s] = append(next[s], f.Service)
+				}
+			}
+		}
+		if reflect.DeepEqual(next, starvedBy) {
+			break
+		}
+		starvedBy = next
+	}
+	isStarved := func(a Alert) bool {
+		return len(starvedBy[a.Service]) > 0 && slices.Contains(rules.StarvedAlerts(), a.Name)
+	}
+	source, target, ownCause, starved := map[string]bool{}, map[string]bool{}, map[string]bool{}, map[string]bool{}
+	for _, a := range alerts {
+		if isStarved(a) {
+			starved[a.Service] = true
+			continue
+		}
 		source[a.Service] = source[a.Service] || rules.IsSymptomSource(a.Name)
 		target[a.Service] = target[a.Service] || rules.IsSymptomTarget(a.Name)
 		ownCause[a.Service] = ownCause[a.Service] || (rules.IsSymptomSource(a.Name) && !rules.IsSymptomTarget(a.Name))
 	}
-	sort.Strings(services)
 
 	// A service with a symptom target is affected when a dependency it is
 	// muted by has a symptom source, unless it has a cause of its own (no
-	// ready pods). Muting links have no cycles, so walking down always ends.
-	isRoot := func(s string) bool {
-		if !target[s] || ownCause[s] {
-			return true
-		}
+	// ready pods); a starved service is affected by its feeders. Neither
+	// kind of link has cycles, and a starved service is no source, so
+	// walking always ends.
+	explained := func(s string) bool {
 		for _, d := range mutedBy[s] {
 			if source[d] {
-				return false
+				return true
 			}
 		}
-		return true
+		return false
+	}
+	isRoot := func(s string) bool {
+		if ownCause[s] || (target[s] && !explained(s)) {
+			return true
+		}
+		return !target[s] && !starved[s]
 	}
 	memo := map[string][]string{}
 	var rootsOf func(s string, visiting map[string]bool) []string
@@ -199,11 +324,18 @@ func (g *Graph) Incidents(system string, alerts []Alert) []Incident {
 			return memo[s]
 		}
 		set := map[string]bool{}
+		var causes []string
 		for _, d := range mutedBy[s] {
-			if source[d] {
-				for _, r := range rootsOf(d, visiting) {
-					set[r] = true
-				}
+			if target[s] && source[d] {
+				causes = append(causes, d)
+			}
+		}
+		if starved[s] {
+			causes = append(causes, starvedBy[s]...)
+		}
+		for _, d := range causes {
+			for _, r := range rootsOf(d, visiting) {
+				set[r] = true
 			}
 		}
 		memo[s] = sortedKeys(set)
@@ -233,7 +365,7 @@ func (g *Graph) Incidents(system string, alerts []Alert) []Incident {
 	}
 	rootOfAffected := map[string][]string{}
 	for _, s := range services {
-		if !source[s] && !target[s] {
+		if !source[s] && !target[s] && !starved[s] {
 			find(s) // a service with other alerts only: its own group
 			continue
 		}

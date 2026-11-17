@@ -31,11 +31,19 @@ type IncidentOver struct {
 	Roots       []string
 	Title       string
 	Duration    time.Duration
+	// StillFiring are alerts (names) of services the incident affected that
+	// still fired when its roots resolved: the aftermath.
+	StillFiring []Aftermath
+}
+
+type Aftermath struct {
+	Service string
+	Alerts  []string
 }
 
 type recallWords struct {
 	before, lasted, cause, fix, count         string
-	over, overLasted, ask                     string
+	over, overLasted, ask, stillFiring        string
 	underMinute, minutes, hours, hoursMinutes string
 }
 
@@ -45,6 +53,7 @@ var recallTexts = map[string]recallWords{
 		count: "Times in the last 30 days: %d.",
 		over:  "Incident over", overLasted: "lasted %s",
 		ask:         "What helped? Reply to this message, and Kamerton will remind you the next time.",
+		stillFiring: "Still firing after it: %s. This is expected for a while after an outage.",
 		underMinute: "under a minute", minutes: "%d min", hours: "%d h", hoursMinutes: "%d h %d min",
 	},
 	rules.LanguageRussian: {
@@ -52,6 +61,7 @@ var recallTexts = map[string]recallWords{
 		count: "Случаев за последние 30 дней: %d.",
 		over:  "Инцидент закончился", overLasted: "длился %s",
 		ask:         "Что помогло? Ответьте на это сообщение, и в следующий раз Kamerton напомнит.",
+		stillFiring: "Ещё срабатывают после него: %s. Так бывает какое-то время после сбоя.",
 		underMinute: "меньше минуты", minutes: "%d мин", hours: "%d ч", hoursMinutes: "%d ч %d мин",
 	},
 }
@@ -117,6 +127,21 @@ func RenderIncidentOver(o IncidentOver, lang string) string {
 		t.WriteString(" (" + html.EscapeString(trimLine(o.Title, 160)) + ")")
 	}
 	t.WriteString(", " + fmt.Sprintf(w.overLasted, duration(o.Duration, w)) + ".\n")
+	if len(o.StillFiring) > 0 {
+		parts := make([]string, 0, len(o.StillFiring))
+		for _, a := range o.StillFiring {
+			titles := make([]string, 0, len(a.Alerts))
+			for _, name := range a.Alerts {
+				title := rules.Title(lang, name)
+				if title == "" {
+					title = name
+				}
+				titles = append(titles, title)
+			}
+			parts = append(parts, html.EscapeString(a.Service)+" ("+html.EscapeString(strings.Join(titles, "; "))+")")
+		}
+		t.WriteString(fmt.Sprintf(w.stillFiring, strings.Join(parts, ", ")) + "\n")
+	}
 	t.WriteString(w.ask)
 	return t.String()
 }

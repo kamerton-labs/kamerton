@@ -461,10 +461,48 @@ of the Alertmanager). Source and target name different services, so no
 alert inhibits itself; links inside a dependency cycle are dropped
 (`triage.MutingEdges`), so two services that call each other never mute each
 other. Resource (memory, CPU, restarts, OOMKilled), queue, "no data" and
-custom alerts neither mute nor are muted. One more rule, generated whenever
+custom alerts neither mute nor are muted, except starved ones (below). One more rule, generated whenever
 the system "no data" rule is on, whatever `groupByCause` says:
 `KamertonTelemetryMissing` mutes `KamertonServiceTelemetryMissing` of the
 same system.
+
+Starvation is the other direction: a failing service takes traffic away
+from the services it calls, and from the consumers of a queue it produces
+to. `triage.Feeders` lists, per service, its direct callers and the
+producers of the queues it consumes (a consumer depends on the queue and is
+named in `queue.consumerGroups`; every other service depending on the queue
+is a producer), without links inside a cycle of feeding. With
+`groupByCause` on, the "no data" and "requests stopped" rules of a fed
+service multiply their result by a one-series vector that carries
+`kamerton_starved="true"` while (in `ALERTS`, firing, same system) a
+feeder has an alert that the service did not cause and the service has no
+error, latency or "no ready pods" alert of its own. A queue producer's
+alert always counts (a consumer cannot make its producer fail). A direct
+caller's alert counts when it is "no ready pods", "no data" or "requests
+stopped" (the caller stopped calling for its own reason), or when another
+dependency of the caller has an unstarved symptom source (the caller's
+errors come from there). Without that last condition an unreachable
+service would be taken for starved by the callers failing because of it.
+The value of the rule is unchanged; the label changes the alert's identity,
+so an alert that becomes starved starts a new pending period (the feeder
+fires within 1 to 2 minutes, a starved "no data" needs about 6 and a
+"requests stopped" about 4, so in practice it is born starved). Two inhibit
+rules per fed service (critical feeder alert mutes any, warning mutes
+warnings) mute `KamertonServiceTelemetryMissing|KamertonRequestsStopped`
+with `kamerton_starved="true"` of the service while any symptom, "no data"
+or "requests stopped" alert of a feeder fires; a muted one counts, so a
+chain of starved services closes. The dependency rules add
+`kamerton_starved!="true"` to their sources: a starved "requests stopped"
+explains nothing upstream, which also keeps the two kinds of rules from
+muting each other in a loop. Why PromQL decides and Alertmanager only
+mutes: an inhibit rule cannot ask whether the service has an alert of its
+own or whether the caller's alert is explained elsewhere, and without those
+checks the dependency rules and the starvation rules would mute each other
+(nobody told). The demo gets 57 inhibit rules (1 system, 26 dependency, 30
+starvation). `triage.Incidents` makes the same decision on the active alerts
+(repeated until it settles) and lists starved services as affected;
+`internal/noise` counts muted starved firings as consequences from the
+label.
 
 The Prometheus Operator adds `namespace="<namespace of the
 AlertmanagerConfig>"` to both sides of an inhibit rule (and to routes)
@@ -617,7 +655,8 @@ like the other state; memory without a cluster). A record:
   "endEstimated": false,
   "open": false,
   "evidence": {"…": "same object as the live incident's evidence"},
-  "note": {"cause": "…", "fix": "…", "updatedAt": "…", "source": "ui"}
+  "note": {"cause": "…", "fix": "…", "updatedAt": "…", "source": "ui"},
+  "aftermath": [{"service": "checkout", "alerts": ["KamertonSLOBurnRateSlow"], "since": "…", "lastSeen": "…"}]
 }
 ```
 
@@ -629,22 +668,55 @@ record instead of adding one.
 **Opening and updating.** Records follow `triage.Incidents` (system-wide
 incidents without roots are not recorded). The webhook (firing and
 resolved, at once, before the follow-up's wait), each follow-up attempt, the
-sweep and `GET /api/v1/alerts` observe a system's incidents: an open record
-with the same incident ID is updated (roots, up to 5 root alerts, up to 20
-affected services, last seen), else one with the same ID reopens, else an
-open record without a note whose roots are now among the incident's roots
-or affected services is taken over (the caller's alert came first, then the
-dependency's), else a record is opened. The follow-up adds its evidence
-and the names of the Telegram receivers that got it.
+sweep and `GET /api/v1/alerts` observe a system's incidents. An open record
+with the same incident ID follows the current view: its roots are replaced,
+its root alerts are the alerts of the current roots only (earlier alerts of
+the same roots kept, at most 5, the most explaining first), affected
+services accumulate (up to 20, former roots included), the earliest start
+stays; `incident` keeps the last incident ID, also after the record
+closes. Otherwise a record with the same ID reopens, or the incident is
+aftermath (below), or an open record without a note whose roots are now
+among the incident's roots or affected services is taken over (the
+caller's alert came first, then the dependency's), or a record is opened.
+Other open records whose roots a live incident now explains are merged into
+its record (earliest start, follow-up receivers and note kept, their IDs in
+`merged`): one incident, even when a caller's record was opened before
+triage knew the cause. The follow-up layer needs nothing new for this: an
+attempt re-triages, so a caller's follow-up not yet sent becomes the
+cause's, and one already sent is named by the cause's follow-up ("This
+explains the earlier alert about checkout"). The follow-up adds its
+evidence and the names of the Telegram receivers that got it.
+
+**Aftermath.** After an outage, callers' alerts are unmuted for a moment
+and SLO burn alerts keep firing until their window no longer holds the
+errors (the slow burn's short window is 30 minutes). An incident whose root
+alerts are all symptom targets (errors, latency, stopped requests, SLO
+burn), whose roots were all roots or affected services of a record that is
+open or ended within `AftermathGrace` (35 minutes: that 30 minute window
+plus 5 for rule evaluation and Alertmanager), is that record's aftermath:
+no record, no follow-up (`aftermathOf` and the record's `historyId` in the
+alerts API), and its alerts are listed on the record (`aftermath`: at most
+10 services, 5 alert names each, first and last seen). The root's own SLO
+burn left after its real alerts resolved ends the record the same way. An
+alert of a service's own (no ready pods, restarts, memory, custom rules) is
+never aftermath and opens its own incident with a follow-up. Aftermath
+still firing when the grace period ends becomes an incident of its own
+from that moment (`promoted`, start = end + 35 minutes); since Alertmanager
+notified while it was a tail, the sweep starts its follow-up (the usual
+attempt bounds apply). The sweep watches systems with open records and,
+for 50 minutes after the end, systems whose record has aftermath.
 
 **Closing.** A resolved notification gives the end: when every root alert
-of an open record is in it, the latest `endsAt` is the end. An observation
+of the record's last view is in it, the latest `endsAt` is the end; the end
+is the moment the roots resolved, whatever aftermath follows. An observation
 in which the system's Alertmanager answered closes the other open records
 of that system: at the time of the observation when the record was seen
 within 10 minutes, else at the time it was last seen with `endEstimated`.
 So a missed resolve is caught by the next notification of the system, by
 `GET /api/v1/alerts`, or by the leader's sweep every 5 minutes (only
-systems with open records are asked). A record nobody could confirm for 24
+systems with open records or recent aftermath are asked). Merged records
+are gone, so only the record they went into is closed; promoted aftermath
+closes like any record. A record nobody could confirm for 24
 hours (Alertmanager not answering) closes at its last-seen time, estimated;
 a record of a deleted system closes at the next sweep.
 
@@ -663,8 +735,10 @@ follow-up in Telegram, whose end was seen (not estimated), that lasted at
 least 2 minutes, and `spec.notifications.askWhatHelped` is not false (it
 needs the follow-up too), the follow-up service claims the record and sends
 one message, through Kamerton's bot only, to the Telegram receivers that
-got the follow-up, in the language of the description. The chat and
-message IDs are kept with the record. Email receivers get nothing: a reply
+got the follow-up, in the language of the description. When aftermath was
+seen at the end, one line names it ("Still firing after it: checkout (SLO
+error budget is burning). This is expected for a while after an outage.").
+The chat and message IDs are kept with the record. Email receivers get nothing: a reply
 to an email does not come back to Kamerton.
 
 **Replies.** The polling loop (after storing the offset) passes a text

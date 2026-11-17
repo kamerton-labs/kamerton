@@ -21,7 +21,11 @@ All notable changes to Kamerton are listed here. The format follows
   long, cause, what helped, how many times in 30 days), and a note alone
   is worth a follow-up. `GET /api/v1/incidents/history`, `previous` and
   `historyId` on live incidents in the alerts API, and `experience` in a
-  service's runbook data.
+  service's runbook data. Callers' alerts in the 35 minutes after the
+  cause resolved (unmuted errors, a lingering SLO burn) are the incident's
+  aftermath, not a new incident with a second follow-up; still firing
+  after that, they become an incident of their own. A record opened for a
+  caller before the cause's alert fired is merged into the cause's.
 - Quieter rules. `GET /api/v1/systems/{id}/noise?window=7d` (1d, 3d, 7d)
   returns, per rule, how often it fired in the window, how many firings
   cleared within 5 minutes, the longest firing, when it last fired, the
@@ -164,6 +168,16 @@ All notable changes to Kamerton are listed here. The format follows
   a critical service that stops completely gets one notification. The
   first-day exception: a drop to a few percent of normal still fires after
   an hour of history; a complete stop needs a day.
+- Starved services no longer page. When a service fails, the services it
+  calls and the consumers of a queue it produces to lose their traffic, and
+  their "no data" and "requests stopped" alerts fired on their own (with
+  `payment` down: `email`, `accounting`, `fraud-detection`). Such an alert
+  now carries `kamerton_starved="true"` while a feeder's alert that the
+  service did not cause fires and the service has no error, latency or "no
+  ready pods" alert of its own; inhibit rules mute it, the incident lists
+  the service as affected, and the noise statistics count it as a
+  consequence. Queue consumers are the services named in
+  `queue.consumerGroups`. Off with `spec.notifications.groupByCause: false`.
 
 ## [0.1.0] - 2026-11-17
 

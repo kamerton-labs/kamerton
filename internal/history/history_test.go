@@ -393,3 +393,131 @@ func TestExperience(t *testing.T) {
 		t.Errorf("no experience: %#v", exp)
 	}
 }
+
+func TestRecordFollowsTriage(t *testing.T) {
+	c := &clock{t: at(1)}
+	s := newService(c)
+	// First seen with two roots, then explained by payment.
+	early := incident(at(0), []string{"checkout", "frontend"}, nil, alert(rules.AlertErrorRate, "checkout", at(0)), alert(rules.AlertOperationErrorRate, "frontend", at(0)))
+	observe(t, s, Observation{System: "shop", Incidents: []triage.Incident{early}, Complete: true})
+	c.add(time.Minute)
+	late := incident(at(1), []string{"payment"}, []string{"checkout", "frontend"}, alert(rules.AlertNoReadyPods, "payment", at(1)))
+	observe(t, s, Observation{System: "shop", Incidents: []triage.Incident{late}, Complete: true})
+	c.add(time.Minute)
+	late.RootAlerts = []triage.Alert{alert(rules.AlertRequestsStopped, "payment", at(2))}
+	late.Affected = []string{"checkout"}
+	st := observe(t, s, Observation{System: "shop", Incidents: []triage.Incident{late}, Complete: true})
+	r := st.Records[0]
+	if len(st.Records) != 1 || r.Incident != "shop:payment" || r.StartedAt != at(0) || strings.Join(r.Affected, ",") != "checkout,frontend" {
+		t.Errorf("record %+v", r)
+	}
+	if len(r.RootAlerts) != 2 || r.RootAlerts[0].Name != rules.AlertNoReadyPods || r.RootAlerts[1].Name != rules.AlertRequestsStopped ||
+		strings.Join(r.Firing, ",") != rules.AlertRequestsStopped+"@payment" {
+		t.Errorf("root alerts %+v, firing %v", r.RootAlerts, r.Firing)
+	}
+	// Closed records keep their incident ID.
+	c.add(time.Minute)
+	st = observe(t, s, Observation{System: "shop", Complete: true})
+	if st.Records[0].Open || st.Records[0].Incident != "shop:payment" {
+		t.Errorf("closed %+v", st.Records[0])
+	}
+}
+
+func TestMergeWhenAttributionArrivesLate(t *testing.T) {
+	c := &clock{t: at(1)}
+	s := newService(c)
+	ctx := context.Background()
+	caller := incident(at(0), []string{"checkout"}, nil, alert(rules.AlertErrorRate, "checkout", at(0)))
+	st := observe(t, s, Observation{System: "shop", Incidents: []triage.Incident{caller}, Complete: true})
+	callerID := st.Records[0].ID
+	if err := s.FollowUpSent(ctx, "shop", "shop:checkout", []string{"oncall"}); err != nil {
+		t.Fatal(err)
+	}
+	// Alertmanager did not answer: the notification alone shows payment as
+	// an incident of its own, so it gets a record.
+	c.add(time.Minute)
+	cause := incident(at(1), []string{"payment"}, nil, alert(rules.AlertNoReadyPods, "payment", at(1)))
+	st = observe(t, s, Observation{System: "shop", Incidents: []triage.Incident{cause}})
+	if len(st.Records) != 2 {
+		t.Fatalf("records %+v", st.Records)
+	}
+	// Now the full view: checkout is affected by payment.
+	c.add(time.Minute)
+	cause.Affected = []string{"checkout"}
+	var closed []Record
+	s.OnClose = func(_ context.Context, r []Record) { closed = append(closed, r...) }
+	st = observe(t, s, Observation{System: "shop", Incidents: []triage.Incident{cause}, Complete: true})
+	if len(st.Records) != 1 || len(closed) != 0 {
+		t.Fatalf("records %+v, closed %+v", st.Records, closed)
+	}
+	r := st.Records[0]
+	if r.Roots[0] != "payment" || r.StartedAt != at(0) || strings.Join(r.Merged, ",") != callerID || strings.Join(r.FollowUpTo, ",") != "oncall" ||
+		strings.Join(r.Affected, ",") != "checkout" {
+		t.Errorf("merged %+v", r)
+	}
+}
+
+func TestAftermathRules(t *testing.T) {
+	c := &clock{t: at(1)}
+	s := newService(c)
+	cause := incident(at(0), []string{"payment"}, []string{"checkout"}, alert(rules.AlertNoReadyPods, "payment", at(0)))
+	observe(t, s, Observation{System: "shop", Incidents: []triage.Incident{cause}, Complete: true})
+	// The root's own SLO burn after its real alert resolved: the record ends,
+	// the burn is its aftermath.
+	c.t = at(20)
+	burn := incident(at(5), []string{"payment"}, nil, alert(rules.AlertSLOBurnSlow, "payment", at(5)))
+	tail := incident(at(2), []string{"checkout"}, nil, alert(rules.AlertSLOBurnSlow, "checkout", at(2)), alert(rules.AlertErrorRate, "checkout", at(2)))
+	st := observe(t, s, Observation{System: "shop", Incidents: []triage.Incident{burn, tail}, Complete: true})
+	r := st.Records[0]
+	if len(st.Records) != 1 || r.Open || r.EndedAt != at(20) || len(r.Aftermath) != 2 || len(r.StillFiring()) != 2 {
+		t.Fatalf("records %+v", st.Records)
+	}
+	if p := st.AftermathOf("shop", tail, c.t); p == nil || p.ID != r.ID {
+		t.Errorf("aftermath of %+v", p)
+	}
+	// A cause of its own is never aftermath.
+	own := incident(at(21), []string{"checkout"}, nil, alert(rules.AlertRestarts, "checkout", at(21)))
+	if p := st.AftermathOf("shop", own, c.t); p != nil {
+		t.Errorf("restarts are not aftermath: %+v", p)
+	}
+	// A service the incident did not involve is never aftermath.
+	if p := st.AftermathOf("shop", incident(at(21), []string{"ad"}, nil, alert(rules.AlertErrorRate, "ad", at(21))), c.t); p != nil {
+		t.Errorf("unrelated service: %+v", p)
+	}
+	// Bounded.
+	c.add(time.Minute)
+	for i := 0; i < 15; i++ {
+		inc := incident(at(2), []string{fmt.Sprintf("svc%d", i)}, nil)
+		for j := 0; j < 8; j++ {
+			inc.RootAlerts = append(inc.RootAlerts, alert(fmt.Sprintf("KamertonCustom%d", j), inc.Roots[0], at(2)))
+		}
+		st.Records[0].Affected = append(st.Records[0].Affected, inc.Roots[0])
+		st.Records[0].addAftermath(triage.Incident{RootAlerts: inc.RootAlerts}, c.t)
+	}
+	if a := st.Records[0].Aftermath; len(a) != maxAftermath || len(a[2].Alerts) != maxAftermathAlert {
+		t.Errorf("aftermath not bounded: %d", len(a))
+	}
+	// After the grace period the tail is an incident of its own, started
+	// when the grace period ended.
+	c.t = at(20).Add(AftermathGrace + 5*time.Minute)
+	st = observe(t, s, Observation{System: "shop", Incidents: []triage.Incident{tail}, Complete: true})
+	if len(st.Records) != 2 {
+		t.Fatalf("records %+v", st.Records)
+	}
+	p := st.Records[1]
+	if !p.Open || !p.Promoted || p.StartedAt != at(20).Add(AftermathGrace) || p.Incident != "shop:checkout" {
+		t.Errorf("promoted %+v", p)
+	}
+	if got := st.SystemsToWatch(c.t); len(got) != 1 {
+		t.Errorf("systems to watch %v", got)
+	}
+	// Nobody confirms it for a day: the 24 hour bound closes it.
+	c.add(StaleAfter + time.Minute)
+	st = observe(t, s, Observation{System: "shop"})
+	if st.Records[1].Open || !st.Records[1].EndEstimated {
+		t.Errorf("stale %+v", st.Records[1])
+	}
+	if got := st.SystemsToWatch(c.t); len(got) != 0 {
+		t.Errorf("nothing to watch any more: %v", got)
+	}
+}

@@ -161,12 +161,17 @@ func TestIncidentsSourcesAndTargets(t *testing.T) {
 			a("payment", rules.AlertSLOBurnFast, 0, false),
 			a("checkout", rules.AlertSLOBurnFast, 1, false),
 		}, "[payment]<-[] [checkout]<-[]"},
-		{"a caller without ready pods has a cause of its own", []Alert{
+		{"a caller without ready pods has a cause of its own, and starves its callee", []Alert{
 			a("payment", rules.AlertRequestsStopped, 0, false),
 			a("checkout", rules.AlertNoReadyPods, 1, false),
 			a("checkout", rules.AlertErrorRate, 1, true),
+		}, "[checkout]<-[payment]"},
+		{"a callee with a symptom of its own is not starved", []Alert{
+			a("payment", rules.AlertRequestsStopped, 0, false),
+			a("payment", rules.AlertLatency, 0, false),
+			a("checkout", rules.AlertNoReadyPods, 1, false),
 		}, "[payment]<-[] [checkout]<-[]"},
-		{"a service without data neither explains nor is explained", []Alert{
+		{"a service without data whose caller fails on its own neither explains nor is explained", []Alert{
 			a("payment", rules.AlertServiceTelemetryMissing, 0, false),
 			a("checkout", rules.AlertErrorRate, 1, false),
 		}, "[payment]<-[] [checkout]<-[]"},
@@ -205,5 +210,106 @@ func TestIncidentsSystemWide(t *testing.T) {
 	}
 	if IncidentOf(graph().Incidents("shop", alerts[1:]), "") != nil {
 		t.Error("a system incident without a system alert")
+	}
+}
+
+// starveGraph: checkout calls payment and email and produces to the queue
+// orders; accounting consumes it and calls ledger; audit depends on orders
+// without being a named consumer group.
+func starveGraph() *Graph {
+	return NewGraph(&v1alpha1.SystemDescriptionSpec{Services: []v1alpha1.Service{
+		{Name: "frontend", DependsOn: []string{"checkout"}},
+		{Name: "checkout", DependsOn: []string{"payment", "email", "orders"}},
+		{Name: "payment"},
+		{Name: "email"},
+		{Name: "orders", Type: v1alpha1.ServiceTypeQueue, Queue: &v1alpha1.QueueSpec{Topic: "orders", ConsumerGroups: []string{"accounting"}}},
+		{Name: "accounting", DependsOn: []string{"orders", "ledger"}},
+		{Name: "audit", DependsOn: []string{"orders"}},
+		{Name: "ledger"},
+		{Name: "loop-a", DependsOn: []string{"loop-b"}},
+		{Name: "loop-b", DependsOn: []string{"loop-a"}},
+		// A queue whose consumer calls its producer: a cycle of feeding.
+		{Name: "q", Type: v1alpha1.ServiceTypeQueue, Queue: &v1alpha1.QueueSpec{Topic: "q", ConsumerGroups: []string{"worker"}}},
+		{Name: "producer", DependsOn: []string{"q"}},
+		{Name: "worker", DependsOn: []string{"q", "producer"}},
+	}})
+}
+
+func TestFeeders(t *testing.T) {
+	got := map[string]string{}
+	for svc, fs := range starveGraph().Feeders() {
+		var parts []string
+		for _, f := range fs {
+			p := f.Service
+			if f.Queue {
+				p += "(queue)"
+			}
+			if len(f.Others) > 0 {
+				p += "/" + strings.Join(f.Others, ",")
+			}
+			parts = append(parts, p)
+		}
+		got[svc] = strings.Join(parts, " ")
+	}
+	// audit is not a named consumer group, so it counts as a producer of
+	// orders. worker calls producer and producer feeds worker through q: a
+	// cycle, left out.
+	want := map[string]string{
+		"checkout":   "frontend",
+		"payment":    "checkout/email,orders",
+		"email":      "checkout/orders,payment",
+		"orders":     "accounting/ledger audit checkout/email,payment",
+		"accounting": "audit(queue) checkout(queue)",
+		"ledger":     "accounting/orders",
+		"q":          "producer worker/producer",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("Feeders =\n%v\nwant\n%v", got, want)
+	}
+}
+
+func TestIncidentsStarvedServices(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		alerts []Alert
+		want   string
+	}{
+		{"payment down: the callee and the consumer that checkout starves join payment's incident", []Alert{
+			a("payment", rules.AlertNoReadyPods, 0, false),
+			a("payment", rules.AlertRequestsStopped, 3, false),
+			a("checkout", rules.AlertErrorRate, 1, true),
+			a("frontend", rules.AlertErrorRate, 1, true),
+			a("email", rules.AlertServiceTelemetryMissing, 6, true),
+			a("accounting", rules.AlertServiceTelemetryMissing, 6, true),
+			a("ledger", rules.AlertServiceTelemetryMissing, 7, true),
+		}, "[payment]<-[accounting checkout email frontend ledger]"},
+		{"a starved service with errors of its own stays a root", []Alert{
+			a("payment", rules.AlertNoReadyPods, 0, false),
+			a("checkout", rules.AlertErrorRate, 1, true),
+			a("email", rules.AlertServiceTelemetryMissing, 6, false),
+			a("email", rules.AlertErrorRate, 2, false),
+		}, "[email payment]<-[checkout]"},
+		{"only requests stopped on the callee: it is the cause, not starved", []Alert{
+			a("payment", rules.AlertRequestsStopped, 3, false),
+			a("checkout", rules.AlertErrorRate, 1, true),
+		}, "[payment]<-[checkout]"},
+		{"a caller failing on its own does not starve a callee", []Alert{
+			a("checkout", rules.AlertErrorRate, 1, false),
+			a("email", rules.AlertServiceTelemetryMissing, 6, false),
+		}, "[checkout]<-[] [email]<-[]"},
+		{"a producer failing on its own starves the consumer", []Alert{
+			a("checkout", rules.AlertErrorRate, 1, false),
+			a("accounting", rules.AlertRequestsStopped, 4, true),
+		}, "[checkout]<-[accounting]"},
+		{"a service depending on a queue without being its consumer group is not starved", []Alert{
+			a("checkout", rules.AlertErrorRate, 1, false),
+			a("audit", rules.AlertServiceTelemetryMissing, 6, false),
+		}, "[checkout]<-[] [audit]<-[]"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := summary(starveGraph().Incidents("shop", tc.alerts)); got != tc.want {
+				t.Errorf("incidents %s, want %s", got, tc.want)
+			}
+		})
 	}
 }

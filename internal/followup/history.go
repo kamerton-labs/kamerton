@@ -7,6 +7,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/kamerton-labs/kamerton/api/v1alpha1"
 	"github.com/kamerton-labs/kamerton/internal/clients/alertmanager"
 	"github.com/kamerton-labs/kamerton/internal/generator"
 	"github.com/kamerton-labs/kamerton/internal/history"
@@ -18,13 +19,18 @@ import (
 // so a resolve Kamerton missed closes the record within it.
 const SweepInterval = 5 * time.Minute
 
-func (s *Service) observe(ctx context.Context, o history.Observation) {
+// observe returns the history after the write; nil without history or when
+// it is unavailable.
+func (s *Service) observe(ctx context.Context, o history.Observation) *history.State {
 	if s.History == nil {
-		return
+		return nil
 	}
-	if _, err := s.History.Observe(ctx, o); err != nil {
+	st, err := s.History.Observe(ctx, o)
+	if err != nil {
 		s.log().Warn("incident history unavailable", "system", o.System, "error", err)
+		return nil
 	}
+	return st
 }
 
 // observeHook brings the history up to date at once on every notification,
@@ -83,8 +89,8 @@ func (s *Service) Start(ctx context.Context) error {
 	}
 }
 
-// Sweep checks the systems with open records against Alertmanager. A record
-// of a deleted system ends now.
+// Sweep checks the systems with open records or recent aftermath against
+// Alertmanager. A record of a deleted system ends now.
 func (s *Service) Sweep(ctx context.Context) {
 	if s.History == nil {
 		return
@@ -94,7 +100,7 @@ func (s *Service) Sweep(ctx context.Context) {
 		s.log().Warn("incident history unavailable", "error", err)
 		return
 	}
-	for _, system := range st.OpenSystems() {
+	for _, system := range st.SystemsToWatch(s.now()) {
 		sd := s.description(ctx, system)
 		if sd == nil {
 			if s.Descriptions != nil {
@@ -113,7 +119,32 @@ func (s *Service) Sweep(ctx context.Context) {
 			s.observe(ctx, history.Observation{System: system})
 			continue
 		}
-		s.observe(ctx, history.Observation{System: system, Incidents: triage.NewGraph(&sd.Spec).Incidents(sd.Name, alerts), Complete: true})
+		incidents := triage.NewGraph(&sd.Spec).Incidents(sd.Name, alerts)
+		st := s.observe(ctx, history.Observation{System: system, Incidents: incidents, Complete: true})
+		s.followPromoted(ctx, sd, st, incidents)
+	}
+}
+
+// followPromoted starts the follow-up of aftermath that outlived the grace
+// period: no notification comes for it, as Alertmanager notified while it
+// was still the tail of the earlier incident. The follow-up's own bounds
+// (attempts, give up after 10 minutes) apply.
+func (s *Service) followPromoted(ctx context.Context, sd *v1alpha1.SystemDescription, st *history.State, incidents []triage.Incident) {
+	if st == nil || !sd.Spec.Notifications.SendsEvidence() {
+		return
+	}
+	for _, inc := range incidents {
+		r := st.OpenRecord(sd.Name, inc.ID)
+		if r == nil || !r.Promoted || len(r.FollowUpTo) > 0 {
+			continue
+		}
+		var firing []alertmanager.WebhookAlert
+		for _, a := range inc.RootAlerts {
+			firing = append(firing, alertmanager.WebhookAlert{Status: "firing", Fingerprint: a.Fingerprint, StartsAt: a.StartsAt,
+				Labels: map[string]string{"alertname": a.Name, rules.LabelService: a.Service, rules.LabelSeverity: a.Severity,
+					rules.LabelManaged: "true", generator.LabelSystem: sd.Name}})
+		}
+		s.attempt(ctx, sd, firing, false)
 	}
 }
 
@@ -149,9 +180,11 @@ func (s *Service) askWhatHelped(ctx context.Context, r history.Record) {
 	if lang == "" {
 		lang = rules.LanguageEnglish
 	}
-	msg := generator.RenderIncidentOver(generator.IncidentOver{
-		System: sd.Name, Environment: sd.Spec.Environment, Roots: r.Roots, Title: overTitle(r), Duration: r.Duration(),
-	}, lang)
+	over := generator.IncidentOver{System: sd.Name, Environment: sd.Spec.Environment, Roots: r.Roots, Title: overTitle(r), Duration: r.Duration()}
+	for _, a := range r.StillFiring() {
+		over.StillFiring = append(over.StillFiring, generator.Aftermath{Service: a.Service, Alerts: a.Alerts})
+	}
+	msg := generator.RenderIncidentOver(over, lang)
 	var asked []history.Asked
 	seen := map[int64]bool{}
 	for i := range n.Receivers {

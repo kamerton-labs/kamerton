@@ -85,6 +85,8 @@ type TrafficParams struct {
 	// apply, and the floor of expectedNow.
 	MinRequestsPerSecond float64
 	SystemServices       []string
+	// Starvation, when set, marks the alert as starved while a feeder fires.
+	Starvation *Starvation
 }
 
 func (p TrafficParams) normal(indent string) string {
@@ -132,6 +134,7 @@ func TrafficStopped(p TrafficParams) rulefmt.Rule {
 	expr := fmt.Sprintf("60 * (\n  (\n    %s > 0\n  or on (%s)\n    0 * %s\n  )\n  <= on (%s)\n  %s * (%s > %s)\n)\nand on ()\n(\n%s\n)\nand on ()\n(\n%s\n)",
 		current, svc, indentLines(p.expected(), "    "), svc, num(p.Threshold), normal, num(p.MinRequestsPerSecond),
 		p.visible(0), p.visible(t.Window))
+	expr = p.Starvation.wrap(expr)
 
 	r := p.rule(AlertRequestsStopped, SignalTraffic, expr, nil)
 	minPerMinute := num(round(p.MinRequestsPerSecond*60, 2))
