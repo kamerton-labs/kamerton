@@ -151,7 +151,10 @@ Prometheus' or Grafana's HTTP APIs. The bundled Collector and Grafana are
 pre-wired to the bundled Prometheus (`opentelemetry-collector.config.exporters.prometheusremotewrite.endpoint`,
 `grafana.datasources`): point them at yours or disable them
 (`opentelemetry-collector.enabled=false`, `grafana.enabled=false`).
-`bringYourOwn.grafana` works the same way for Grafana.
+`bringYourOwn.grafana` works the same way for Grafana. A Collector of your
+own needs the spanmetrics connector with `namespace: traces.span.metrics`
+(or matching `spec.telemetry` names) and `metrics_expiration` (see
+[Rules that need no threshold](#rules-that-need-no-threshold)).
 
 ### Try it with the OpenTelemetry Demo
 
@@ -241,6 +244,19 @@ person on call hears about missing data about 5 minutes after the last
 sample. If Prometheus loses its storage, "before" is lost with it and the
 rules arm again once data arrives.
 
+The per-service "no data" rule needs the series of a silent service to
+disappear. The spanmetrics connector keeps exporting them as flat counters
+forever unless `metrics_expiration` is set; the bundled Collector sets
+`metrics_expiration: 2m`. **If you bring your own Collector, set it too**,
+or `KamertonServiceTelemetryMissing` can never fire. With it, a service is
+reported about 6 minutes after its last span (2 minutes of expiration, the
+3-minute window, 1 minute pending). Two consequences: a critical service
+that stops completely first gets "requests stopped" (its series still
+exist, flat), which resolves when the series expire and is followed by "no
+data"; and a service, or a whole system, with no calls at all for that long
+(an idle test cluster at night) is reported as sending no data, because
+"idle" and "broken" look the same in span metrics.
+
 ## Services without OpenTelemetry
 
 Almost every rule reads span metrics, which the Collector derives from
@@ -263,15 +279,31 @@ with `service_name`, `span_name`, `span_kind`, `status_code`), so the
 rules, the dashboards and "found in telemetry" work unchanged.
 
 **What it needs.** Linux 5.8+ with BTF (`ls /sys/kernel/btf/vmlinux`), amd64
-or arm64. On every node the pod runs with `hostPID: true`, as UID 0, with the
-capabilities `BPF`, `PERFMON`, `SYS_PTRACE`, `DAC_READ_SEARCH`,
-`CHECKPOINT_RESTORE` and `NET_RAW` (all others dropped), a read-only root
-filesystem, no host paths and not on the host network. Some kernels and
-security policies still block it (for example `kernel.perf_event_paranoid`
-above 2); then set `opentelemetry-ebpf-instrumentation.privileged=true`,
-which makes it a privileged container. Its namespace must allow such pods
-(Pod Security level `privileged`). It reads pods, services, nodes and
-ReplicaSets in all namespaces. Requests 100m CPU and 256Mi, memory limit 1Gi.
+or arm64. By default the pod on every node is a **privileged container with
+`hostPID: true`** (all capabilities, host devices, no AppArmor or seccomp
+confinement), not on the host network and without host paths. Its namespace
+must allow such pods (Pod Security level `privileged`). It reads pods,
+services, nodes and ReplicaSets in all namespaces.
+
+Tried on single-node k3s (colima, Ubuntu kernel 6.8.0 aarch64, BTF present,
+`kernel.perf_event_paranoid=4`, AppArmor on): with only the capabilities
+OBI's documentation lists (`BPF`, `PERFMON`, `SYS_PTRACE`,
+`DAC_READ_SEARCH`, `CHECKPOINT_RESTORE`, `NET_RAW`) the agent attached its
+probes but could not enter the pods' network namespaces (`join target netns:
+operation not permitted`) and recorded nothing. Privileged, it worked.
+Entering a network namespace (`setns`) needs `CAP_SYS_ADMIN` (setns(2), and
+OBI's `pkg/internal/netns`), so
+`opentelemetry-ebpf-instrumentation.privileged=false` runs as UID 0 with
+hostPID, those six capabilities plus `SYS_ADMIN`
+(`opentelemetry-ebpf-instrumentation.extraCapabilities`) and a read-only root
+filesystem. That mode follows from the documentation and source and has not
+been tried on a cluster yet; `SYS_ADMIN` is close to root anyway.
+
+Memory grows with the number of processes it observes: about 900Mi on one
+node with 26 OpenTelemetry Demo pods; 1Gi was OOMKilled. Default request
+512Mi, limit 2Gi, CPU request 100m. Narrow `autoInstrument.namespaces.include`
+to use less. The log line `creating or accessing OTEL namespace in bpffs
+failed` followed by `OBI will use process-internal maps` is harmless.
 
 **What it sees.** HTTP/1, HTTP/2, gRPC, also Kafka, NATS, MQTT, Redis,
 Memcached, PostgreSQL, MySQL and others, in Go, Java, .NET, Python, Ruby,
@@ -309,20 +341,52 @@ response at all (timeout, reset) is not counted as an error.
 - Duration starts when the request reaches the socket, so it can be slightly
   longer than the SDK's.
 
-**Counted twice?** Services that already send OpenTelemetry are left out by
-default (`autoInstrument.skipSDKInstrumented`): pods injected by the
-OpenTelemetry Operator, and processes that the agent has seen making a
-successful OTLP export. The second check reacts to traffic, so the first
-requests of such a service are counted twice, and it can miss a service whose
-SDK sends every signal over one gRPC connection that the agent cannot decode
-(seen with Python `grpcio`; [details](https://github.com/open-telemetry/opentelemetry-ebpf-instrumentation/blob/v1.0.0/devdocs/exclude-otel-instrumented-services.md)).
-Check after turning it on: the query lists services the agent reports
-(`job` is `<service.namespace>/<service.name>`). A service that appears there
-and also sends with its SDK is counted twice; annotate its pods
-`kamerton.dev/auto-instrument: "false"`.
+**Start with an include list.** Observing every namespace also instruments
+programs nobody would describe. On the test cluster a second Prometheus
+showed up as a service; databases (`astronomy-db`, `valkey-cart`) did too,
+which is useful. Monitoring programs (Prometheus, Alertmanager, Grafana,
+Loki, Tempo, Collectors, kube-state-metrics, node-exporter and similar) and
+browsers such as a load generator's headless Chromium are now excluded by
+executable (`autoInstrument.excludeExecutables`). On a real cluster set
+`autoInstrument.namespaces.include` to the namespaces of the services that
+have no SDK.
+
+**Counted twice.** Services that already send OpenTelemetry should be left
+out (`autoInstrument.skipSDKInstrumented`, on): pods injected by the
+OpenTelemetry Operator, and processes the agent has seen making a successful
+OTLP export. That second check reacts to traffic and
+[misses some SDKs](https://github.com/open-telemetry/opentelemetry-ebpf-instrumentation/blob/v1.0.0/devdocs/exclude-otel-instrumented-services.md),
+mainly those that send every signal over one gRPC connection whose method
+the agent cannot decode. On the test cluster, server call rates with the
+agent on against an hour before, under slightly lower load:
+
+| Service (SDK) | With agent | Before |
+| --- | --- | --- |
+| image-provider (nginx, OTel module) | 12.9/s | 4.4/s |
+| currency (C++) | 1.78/s | 1.18/s |
+| recommendation (Python, grpcio) | 1.68/s | 0.98/s |
+
+Go, Java, .NET and Node.js services were not counted twice. OBI's capture
+rules cannot match environment variables or loaded libraries, and excluding
+by language would also drop the uninstrumented services of that language, so
+there is no better default. Doubling leaves error ratios and latency
+quantiles mostly as they are (both sources count the same calls), but
+request rates are too high, and "requests stopped" and "far below normal"
+compare against a normal that changes when the agent is turned on or off.
+Find the services the agent reports (`job` is
+`<service.namespace>/<service.name>`); one that also has its own SDK is
+counted twice:
 
 ```promql
 count by (job) (target_info{telemetry_distro_name="opentelemetry-ebpf-instrumentation"})
+```
+
+Leave such pods out with the annotation `kamerton.dev/auto-instrument:
+"false"` on the pod template, for example:
+
+```sh
+kubectl -n shop patch deployment currency --type merge \
+  -p '{"spec":{"template":{"metadata":{"annotations":{"kamerton.dev/auto-instrument":"false"}}}}}'
 ```
 
 Settings are read when the agent starts: after changing `autoInstrument`
@@ -639,8 +703,8 @@ Not done yet, or known limits:
   Alertmanager's webhook: after a restart, or from another replica, an
   incident shows none until its next follow-up.
 - No chart repository yet: the chart is installed from a clone.
-- eBPF auto-instrumentation (`autoInstrument`) is rendered and linted but not
-  yet tried on a live cluster.
+- eBPF auto-instrumentation (`autoInstrument`) was tried on one single-node
+  k3s cluster only; its capability mode (`privileged=false`) not at all.
 
 ## Contributing and security
 

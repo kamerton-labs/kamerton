@@ -40,8 +40,11 @@ All notable changes to Kamerton are listed here. The format follows
   `exclude` (default: all but `kube-system` and Kamerton's own namespace) and
   the pod annotation `kamerton.dev/auto-instrument: "false"`; services that
   already send OpenTelemetry are left out by default
-  (`autoInstrument.skipSDKInstrumented`). Needs `hostPID` and the
-  capabilities listed in SECURITY.md.
+  (`autoInstrument.skipSDKInstrumented`), though the agent's detection
+  misses some SDKs (nginx OTel module, C++, Python grpcio in the test).
+  Monitoring programs and browsers are excluded by executable
+  (`autoInstrument.excludeExecutables`). Runs as a privileged container
+  with `hostPID` by default (see SECURITY.md); memory limit 2Gi.
 - One message per incident: generated AlertmanagerConfigs carry inhibit
   rules built from `dependsOn`. While a service has an error, latency or
   "requests stopped" alert, the same kinds of alerts of the services that
@@ -124,6 +127,15 @@ All notable changes to Kamerton are listed here. The format follows
 - The bundled Prometheus accepts samples up to 30 minutes late
   (`tsdb.outOfOrderTimeWindow`). Before, one late sample made it reject the
   Collector's whole write request and span metrics stopped arriving.
+- The per-service "no data" alert (`KamertonServiceTelemetryMissing`) could
+  never fire with the bundled Collector: its spanmetrics connector kept
+  exporting a silent service's series as flat counters forever. It now sets
+  `metrics_expiration: 2m`, so a silent service is reported about 6 minutes
+  after its last span. A Collector of your own needs the same setting. Side
+  effects: a critical service that stops completely gets "requests stopped",
+  which resolves when its series expire and is followed by "no data"; a
+  service or system with no calls at all for that long is reported as
+  sending no data.
 
 ## [0.1.0] - 2026-11-17
 

@@ -10,9 +10,10 @@
 {{- end }}
 {{- $exclude := concat (list .Release.Namespace) ($ai.namespaces.exclude | default list) | uniq }}
 {{- $include := $ai.namespaces.include | default (list "*") }}
+{{- $executables := concat (list "*/obi" "obi" "*ebpf-instrument*" "*otelcol*") ($ai.excludeExecutables | default list) | uniq }}
 {{- $rules := list
-  (dict "action" "exclude" "name" "agents-and-collectors"
-    "match" (dict "process" (dict "exe_path_glob" (list "*/obi" "obi" "*ebpf-instrument*" "*otelcol*"))))
+  (dict "action" "exclude" "name" "excluded-executables"
+    "match" (dict "process" (dict "exe_path_glob" $executables)))
   (dict "action" "exclude" "name" "excluded-namespaces"
     "match" (dict "kubernetes" (dict "namespace_glob" $exclude)))
   (dict "action" "exclude" "name" "opted-out"

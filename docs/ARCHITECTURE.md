@@ -60,7 +60,8 @@ construction and also land in Tempo.
 The agent's configuration file is rendered by the Kamerton chart
 (`templates/auto-instrument.yaml`) from the `autoInstrument` values; the
 upstream chart only runs the DaemonSet. Capture rules, in OBI's Config v2:
-exclude the agent and collector binaries, the release namespace and
+exclude the agent and collector binaries and `excludeExecutables`
+(monitoring programs, browsers), the release namespace and
 `namespaces.exclude`, pods annotated `kamerton.dev/auto-instrument: "false"`,
 pods injected by the OpenTelemetry Operator and processes seen exporting OTLP
 (`skipSDKInstrumented`); include `namespaces.include` (all by default).
@@ -75,6 +76,14 @@ the owner workload name; HTTP span names use a path heuristic (`GET
 is not an error; server spans of Redis, PostgreSQL and MySQL servers appear
 as services of kind server. Details and the duplicate check are in the
 README ("Services without OpenTelemetry").
+
+Verified on single-node k3s with the OpenTelemetry Demo: privileged, the
+agent's series for a Go gRPC service with its SDK export off had the same
+names, labels and span names as the SDK's. With only the documented
+capabilities it recorded nothing (no `CAP_SYS_ADMIN` for `setns` into pod
+network namespaces), hence the privileged default. The OTLP-export
+detection missed nginx with the OTel module, a C++ and a Python grpcio
+service, which were counted twice.
 
 ## Single source of truth
 
@@ -173,6 +182,22 @@ README ("Services without OpenTelemetry").
   rule is on (the vanished-series case moved here), else warning. Both carry
   Kamerton's own message text and first steps (`kamerton_message_text`,
   `kamerton_message_action`), which a team message replaces.
+  Series vanish only if the Collector stops exporting them: the spanmetrics
+  connector keeps a resource (one pod of one service) as flat counters
+  forever unless `metrics_expiration` is set (bundled Collector: 2m, removed
+  on the first flush at least 2m after its last span). A resource that
+  comes back starts its counters from zero; rate() reads the drop as a
+  reset, and only a series whose old total was not above the new one loses
+  those calls (a pod idle longer than 2m that gets about one call per
+  active spell). `series_expiration` is not set: it would do the same per
+  operation and status, where quiet series are common. Open problem: with
+  expiration, a full stop of a critical service gives "requests stopped",
+  then its resolve when the series expire (the presence condition fails),
+  then "no data"; and an idle service or system is reported as sending no
+  data. A fix belongs in the rules: gate both no-data rules on expected
+  traffic (normal rate above `minRequestsPerSecond`, as "requests stopped"
+  does) and let "requests stopped" keep firing when the series vanish,
+  muting the per-service no-data alert while it fires.
 - **No ready pods** (`KamertonNoReadyPods`, `internal/rules/pods.go`): from
   kube-state-metrics `kube_pod_status_ready{condition="true"}` with the
   workload locator of the saturation rules. Fires while pods exist and none

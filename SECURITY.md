@@ -46,13 +46,20 @@ Kamerton is at 0.1.x. Fixes go into the latest release only.
   but not scrubbed: whatever the service logs may appear in the chat.
 - eBPF auto-instrumentation (`autoInstrument.enabled`, off by default)
   installs OpenTelemetry eBPF Instrumentation as a DaemonSet in Kamerton's
-  namespace. Each pod has `hostPID: true` and runs as UID 0 with the Linux
-  capabilities `BPF`, `PERFMON`, `SYS_PTRACE`, `DAC_READ_SEARCH`,
-  `CHECKPOINT_RESTORE` and `NET_RAW` (others dropped, read-only root
-  filesystem, no host paths, no host network). With
-  `opentelemetry-ebpf-instrumentation.privileged=true` it is a privileged
-  container instead. This is node-level access: it can load eBPF programs,
-  read every process's executable and `/proc` entries and see request
+  namespace. By default each pod is a **privileged container** with
+  `hostPID: true` (all capabilities, host devices, no AppArmor or seccomp
+  confinement; no host paths, no host network). Verified on a k3s cluster
+  (Ubuntu kernel 6.8, AppArmor on): with only the capabilities OBI's
+  documentation lists (`BPF`, `PERFMON`, `SYS_PTRACE`, `DAC_READ_SEARCH`,
+  `CHECKPOINT_RESTORE`, `NET_RAW`) it could not enter pods' network
+  namespaces and recorded nothing; privileged, it worked. From the
+  documentation and source only, not tried: with
+  `opentelemetry-ebpf-instrumentation.privileged=false` it runs as UID 0
+  with hostPID, those capabilities plus `SYS_ADMIN` (needed by `setns`
+  into a network namespace), others dropped and a read-only root
+  filesystem; `SYS_ADMIN` is close to root. Either way this is node-level
+  access: it can load eBPF programs, read every process's executable and
+  `/proc` entries and see request
   metadata (method, path, status, peer addresses) of HTTP, gRPC, SQL and
   other calls on the node, including TLS traffic of Go and OpenSSL programs.
   Trace context propagation (writing headers into application traffic) and

@@ -44,7 +44,7 @@ Kamerton is installed in namespace {{ .Release.Namespace }}.
 {{- if .Values.autoInstrument.enabled }}
 
 eBPF auto-instrumentation is ON: DaemonSet kamerton-auto-instrument runs on every
-node with hostPID and {{ if (index .Values "opentelemetry-ebpf-instrumentation").privileged }}privileged: true{{ else }}added Linux capabilities{{ end }} (see SECURITY.md) and records
+node {{ if (index .Values "opentelemetry-ebpf-instrumentation").privileged }}as a privileged container{{ else }}with SYS_ADMIN and other added capabilities{{ end }} with hostPID (see SECURITY.md) and records
 HTTP/gRPC calls of pods in {{ with .Values.autoInstrument.namespaces.include }}{{ join ", " . }}{{ else }}all namespaces{{ end }} except {{ .Release.Namespace }}{{ range .Values.autoInstrument.namespaces.exclude }}, {{ . }}{{ end }}.
 Restart workloads that were already running so gRPC method names are read from
 new connections, and restart the DaemonSet after changing autoInstrument values:
