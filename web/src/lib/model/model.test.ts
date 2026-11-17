@@ -19,7 +19,7 @@ import {
   toCanvas,
 } from './canvas'
 import { edit, initDraft, isDirty, setText } from './draft'
-import { addRule, deriveRules, removeRule, setRule, ruleState } from './rules'
+import { addRule, deriveRules, generatedCount, removeRule, setRule, ruleState } from './rules'
 import { addTelegramDestination, deriveDestinations, receiversFor, removeDestination, setDestination } from './routing'
 import type { Description } from './types'
 import { parseDescriptionYaml, writeDescriptionYaml } from './yaml'
@@ -202,10 +202,10 @@ describe('rules in plain words', () => {
     expect(byId['email/oomKilled'].sentence).toBe('Контейнер убит из-за нехватки памяти (OOMKilled) - сразу')
   })
 
-  it('counts the rules of the example (the rules list shows "N of N rules enabled")', () => {
+  it('counts the rules of the example as the core does (an SLO card is two rules)', () => {
     const all = deriveRules(example())
     const d = addRule(example(), 'currency', { kind: 'slo', threshold: 99.5 })
-    expect([all.length, all.filter((r) => r.enabled).length, deriveRules(d).length, deriveRules(d).filter((r) => r.enabled).length]).toEqual([162, 162, 163, 163])
+    expect([all.length, generatedCount(all), deriveRules(d).length, generatedCount(deriveRules(d))]).toEqual([193, 195, 194, 197])
   })
 
   it('has the rules that need no threshold, and turns them off with their own setting', () => {

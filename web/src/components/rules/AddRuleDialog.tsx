@@ -10,7 +10,7 @@ import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { useT } from '@/i18n'
 import { useEditor } from '@/lib/editor'
-import { addRule, BUILTIN, deriveRules, hasRequestRules, kindHint, kindLabel, nextCustomName, ruleId, SUGGESTED, thresholdSpec, type RuleKind } from '@/lib/model/rules'
+import { addRule, BUILTIN, deriveRules, hasRequestRules, isNoDataKind, kindHint, kindLabel, nextCustomName, ruleId, SUGGESTED, thresholdSpec, type RuleKind } from '@/lib/model/rules'
 import type { Description, Service, Severity } from '@/lib/model/types'
 import CustomRuleForm from './CustomRuleForm'
 import RuleBacktest from './RuleBacktest'
@@ -34,6 +34,8 @@ const KINDS: RuleKind[] = [
   'cpuAboveNormal',
   'oomKilled',
   'queueStopped',
+  'noData',
+  'noReadyPods',
   'custom',
 ]
 
@@ -45,6 +47,7 @@ function applicable(kind: RuleKind, s: Service): boolean {
   // Rules against the limit and the normal apply only while no explicit threshold is set.
   if (kind === 'memoryLimit') return !s.saturation?.memory
   if (kind === 'cpuLimit' || kind === 'cpuAboveNormal') return !s.saturation?.cpuCores
+  if (kind === 'systemNoData') return false
   return true
 }
 
@@ -73,6 +76,9 @@ function defaults(desc: Description, service: string, kind: RuleKind, operation:
     cpuAboveNormal: [BUILTIN.cpuFactor, BUILTIN.saturationFor],
     oomKilled: [NaN, ''],
     queueStopped: [NaN, ''],
+    noData: [NaN, BUILTIN.noDataAfter],
+    noReadyPods: [NaN, BUILTIN.noReadyPodsFor],
+    systemNoData: [NaN, BUILTIN.noDataAfter],
   }
   return { threshold: t[kind][0], for: t[kind][1], exists: false }
 }
@@ -206,7 +212,7 @@ function Body({ service, initialKind, onDone }: { service?: string; initialKind?
                 </Field>
               )}
               {v.for !== '' && (
-                <Field label={t('ruleCard.for')}>
+                <Field label={isNoDataKind(kind) ? t('ruleCard.after') : t('ruleCard.for')}>
                   <DurationInput value={v.for} onChange={(x) => setV({ for: x })} />
                 </Field>
               )}

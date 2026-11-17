@@ -7,6 +7,7 @@ package generator
 import (
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -39,11 +40,17 @@ const (
 	builtinMaxRestarts         = 3
 	builtinQueueFor            = 2 * time.Minute
 	// A shorter queue "for" wins. The rule's conditions already span one to three minutes.
-	builtinQueueStoppedFor   = time.Minute
-	builtinCustomFor         = 2 * time.Minute
-	builtinTrafficThreshold  = 0.1
-	builtinTrafficMinRPS     = 0.02
-	builtinTrafficFor        = 2 * time.Minute
+	builtinQueueStoppedFor  = time.Minute
+	builtinCustomFor        = 2 * time.Minute
+	builtinTrafficThreshold = 0.1
+	builtinTrafficMinRPS    = 0.02
+	builtinTrafficFor       = 2 * time.Minute
+	// With the fixed 1m pending period of the rule this pages about 5 minutes
+	// after the last data (plus evaluation interval and group wait).
+	builtinNoDataAfter = 3 * time.Minute
+	// One scrape of kube-state-metrics (30s in the bundled chart) and one
+	// evaluation: about a minute from the last ready pod to the alert.
+	builtinNoReadyPodsFor    = 30 * time.Second
 	builtinSLOWindow         = 30 * 24 * time.Hour
 	builtinRepeatInterval    = "4h"
 	defaultPodRegexSuffix    = `-([a-z0-9]+-[a-z0-9]{5}|[0-9]+)` // Deployment or StatefulSet pod names
@@ -76,6 +83,9 @@ type Bundle struct {
 func Generate(sd *v1alpha1.SystemDescription, opts Options) (*Bundle, error) {
 	g := newGen(sd, opts)
 	b := &Bundle{System: sd.Name, Dashboards: map[string][]byte{}, Runbooks: map[string]string{}}
+	if rs := g.systemRules(); len(rs) > 0 {
+		b.RuleGroups.Groups = append(b.RuleGroups.Groups, rulefmt.RuleGroup{Name: systemGroup(sd.Name), Rules: rs})
+	}
 	for i := range sd.Spec.Services {
 		svc := &sd.Spec.Services[i]
 		rs, err := g.serviceRules(svc)
@@ -104,6 +114,10 @@ func Generate(sd *v1alpha1.SystemDescription, opts Options) (*Bundle, error) {
 	b.Dashboards[fmt.Sprintf("kamerton-%s.json", sd.Name)] = dash
 	b.AlertmanagerConfig = g.alertmanagerConfig()
 	for _, rg := range b.RuleGroups.Groups {
+		if rg.Name == systemGroup(sd.Name) {
+			b.Runbooks[SystemRunbook+".md"] = runbook(sd, nil, rg.Rules)
+			continue
+		}
 		svc := g.service(rg.Name)
 		b.Runbooks[svc.Name+".md"] = runbook(sd, svc, rg.Rules)
 	}
@@ -230,6 +244,7 @@ func (g *gen) podTarget(svc *v1alpha1.Service) rules.PodTarget {
 		RestartsMetric:   c.RestartsMetric,
 		LimitsMetric:     c.LimitsMetric,
 		TerminatedMetric: c.TerminatedReasonMetric,
+		ReadyMetric:      c.ReadyMetric,
 		NamespaceLabel:   c.NamespaceLabel,
 		PodLabel:         c.PodLabel,
 		ContainerLabel:   c.ContainerLabel,
@@ -320,11 +335,31 @@ func (g *gen) serviceRules(svc *v1alpha1.Service) ([]rulefmt.Rule, error) {
 		}
 	}
 
-	if tp := mergeTraffic(svc, d.TrafficDrop, svc.TrafficDrop); tp.enabled && spansOn && trafficApplies(svc) {
-		out = append(out, g.withMessage(rules.TrafficStopped(rules.TrafficParams{
+	tp := mergeTraffic(svc, d.TrafficDrop, svc.TrafficDrop)
+	trafficOn := tp.enabled && spansOn && trafficApplies(svc)
+	nd := mergeNoData(svc, d.NoData, svc.NoData)
+	others := g.otherTelemetryNames(svc)
+	noDataOn := nd.enabled && spansOn && len(others) > 0
+	if trafficOn {
+		p := rules.TrafficParams{
 			Meta: g.metaSev(svc, tp.forD, tp.severity), Target: g.spanTarget(svc),
 			Threshold: tp.threshold, MinRequestsPerSecond: tp.minRPS, SystemServices: g.telemetryNames(),
-		}), svc, tp.message, ""))
+		}
+		if noDataOn {
+			p.PresentWithin = nd.after
+		}
+		out = append(out, g.withMessage(rules.TrafficStopped(p), svc, tp.message, ""))
+	}
+	if noDataOn {
+		sev := nd.severity
+		if sev == "" && trafficOn {
+			sev = v1alpha1.Severity(g.metaSev(svc, 0, tp.severity).Severity)
+		}
+		if sev == "" {
+			sev = v1alpha1.SeverityWarning
+		}
+		r := rules.ServiceNoData(rules.ServiceNoDataParams{Meta: g.metaSev(svc, 0, sev), Target: g.spanTarget(svc), After: nd.after, Others: others})
+		out = append(out, g.withMessage(g.withDefaultMessage(r, serviceNoDataMessage, nd.after), svc, nd.message, ""))
 	}
 
 	sp := mergeSaturation(d.Saturation, svc.Saturation)
@@ -358,6 +393,12 @@ func (g *gen) serviceRules(svc *v1alpha1.Service) ([]rulefmt.Rule, error) {
 		if sp.oomKilled && pt.RestartsMetric != description.DisabledMetric && pt.TerminatedMetric != description.DisabledMetric {
 			out = append(out, g.withMessage(rules.OOMKilled(rules.OOMKilledParams{Meta: g.metaSev(svc, 0, sp.severity), Target: pt}), svc, sp.oomKilledMessage, ""))
 		}
+	}
+
+	if np := mergeNoReadyPods(d.NoReadyPods, svc.NoReadyPods); np.enabled && g.tel.Containers.ReadyMetric != description.DisabledMetric {
+		out = append(out, g.withMessage(rules.NoReadyPods(rules.NoReadyPodsParams{
+			Meta: g.metaSev(svc, np.forD, np.severity), Target: g.podTarget(svc),
+		}), svc, np.message, ""))
 	}
 
 	if q := svc.Queue; q != nil && g.tel.Queues.LagMetric != description.DisabledMetric {
@@ -419,6 +460,43 @@ func trafficApplies(svc *v1alpha1.Service) bool {
 	}
 }
 
+// SystemRunbook names the runbook of the system-wide rules; service names cannot start with "_".
+const SystemRunbook = "_system"
+
+func systemGroup(system string) string { return "kamerton/" + system }
+
+// systemRules are the rules about the whole system; they carry no service label.
+func (g *gen) systemRules() []rulefmt.Rule {
+	n := g.spec.NoData
+	if (n != nil && n.Enabled != nil && !*n.Enabled) || g.tel.Spans.CallsMetric == description.DisabledMetric {
+		return nil
+	}
+	after := builtinNoDataAfter
+	var msg *v1alpha1.NotificationMessage
+	if n != nil {
+		after = mustDuration(string(n.After), after)
+		msg = n.Message
+	}
+	m := g.metaSev(&v1alpha1.Service{}, 0, v1alpha1.SeverityCritical)
+	m.Service = ""
+	if m.RunbookPerAlert {
+		m.RunbookURL = fmt.Sprintf("%s/systems/%s/runbooks/%s", strings.TrimRight(g.opts.RunbookBaseURL, "/"), g.sd.Name, SystemRunbook)
+	}
+	r := rules.SystemNoData(rules.SystemNoDataParams{Meta: m, Target: g.spanTarget(&v1alpha1.Service{}), After: after, Services: g.telemetryNames()})
+	return []rulefmt.Rule{g.withMessage(g.withDefaultMessage(r, systemNoDataMessage, after), &v1alpha1.Service{}, msg, "")}
+}
+
+func (g *gen) otherTelemetryNames(svc *v1alpha1.Service) []string {
+	self := description.TelemetryName(svc)
+	var out []string
+	for _, n := range g.telemetryNames() {
+		if n != self && !slices.Contains(out, n) {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
 func (g *gen) telemetryNames() []string {
 	out := make([]string, 0, len(g.spec.Services))
 	for i := range g.spec.Services {
@@ -461,6 +539,65 @@ func mergeTraffic(svc *v1alpha1.Service, layers ...*v1alpha1.TrafficDropPolicy) 
 		t.message = lastMessage(t.message, l.Message)
 	}
 	return t
+}
+
+type noData struct {
+	enabled  bool
+	after    time.Duration
+	severity v1alpha1.Severity
+	message  *v1alpha1.NotificationMessage
+}
+
+// mergeNoData: like the traffic rule, queues and databases usually send no
+// spans of their own, so for them the rule needs noData on the service.
+func mergeNoData(svc *v1alpha1.Service, layers ...*v1alpha1.NoDataPolicy) noData {
+	n := noData{enabled: svc.NoData != nil || svc.Type == v1alpha1.ServiceTypeHTTP || svc.Type == v1alpha1.ServiceTypeGRPC, after: builtinNoDataAfter}
+	if !n.enabled {
+		return n
+	}
+	for _, l := range layers {
+		if l == nil {
+			continue
+		}
+		if l.Enabled != nil {
+			n.enabled = *l.Enabled
+		}
+		if l.After != "" {
+			n.after = mustDuration(string(l.After), n.after)
+		}
+		if l.Severity != "" {
+			n.severity = l.Severity
+		}
+		n.message = lastMessage(n.message, l.Message)
+	}
+	return n
+}
+
+type noReadyPods struct {
+	enabled  bool
+	forD     time.Duration
+	severity v1alpha1.Severity
+	message  *v1alpha1.NotificationMessage
+}
+
+func mergeNoReadyPods(layers ...*v1alpha1.NoReadyPodsPolicy) noReadyPods {
+	n := noReadyPods{enabled: true, forD: builtinNoReadyPodsFor}
+	for _, l := range layers {
+		if l == nil {
+			continue
+		}
+		if l.Enabled != nil {
+			n.enabled = *l.Enabled
+		}
+		if l.For != "" {
+			n.forD = mustDuration(string(l.For), n.forD)
+		}
+		if l.Severity != "" {
+			n.severity = l.Severity
+		}
+		n.message = lastMessage(n.message, l.Message)
+	}
+	return n
 }
 
 type errorRate struct {

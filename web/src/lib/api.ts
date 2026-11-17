@@ -259,8 +259,10 @@ export interface Runbook {
   systemID: string
   service: {
     name: string
-    type: string
-    critical: boolean
+    /** The runbook of the alerts about the whole system (name "_system"); it has no type or criticality. */
+    system?: boolean
+    type?: string
+    critical?: boolean
     description?: string
     owner?: string
     dependsOn?: string[]
@@ -417,11 +419,59 @@ export interface ActiveAlert {
   threshold?: string
   labels: Record<string, string>
   triage?: TriageFinding
+  fingerprint?: string
+  muted?: boolean
+  /** ID of the incident the alert's service belongs to. */
+  incident?: string
+  /** Kamerton's or the team's text and first steps, {since} filled in. */
+  text?: string
+  action?: string
+}
+
+/** triage.Alert in internal/triage/incidents.go. */
+export interface IncidentAlert {
+  fingerprint?: string
+  name: string
+  service: string
+  severity: string
+  startsAt: string
+  title?: string
+  value?: string
+  muted: boolean
+}
+
+/** What the core found out about the cause; strings are in the system's notification language. */
+export interface IncidentEvidence {
+  collectedAt?: string
+  cause?: string
+  likely?: boolean
+  changes?: string[]
+  operation?: string
+  operationFailures?: number
+  logLine?: string
+  tracesURL?: string
+  /** Services of earlier incidents whose alerts this cause explains. */
+  explains?: string[]
+}
+
+/** triage.Incident in internal/triage/incidents.go. */
+export interface Incident {
+  id: string
+  system: string
+  roots: string[]
+  rootAlerts: IncidentAlert[]
+  affected: string[]
+  affectedAlerts: IncidentAlert[]
+  startsAt: string
+  evidence?: IncidentEvidence
 }
 
 export interface AlertsResponse {
   configured: boolean
   alerts: ActiveAlert[]
+  /** Alerts Alertmanager inhibits because their cause fires. */
+  muted?: ActiveAlert[]
+  incidents?: Incident[]
   message?: string
 }
 

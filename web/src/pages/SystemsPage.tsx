@@ -10,12 +10,13 @@ import { Page, StatePill } from '@/components/common'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
-import { useSystems, type SystemSummary } from '@/lib/api'
+import { useAlerts, useSystems, type Incident, type SystemSummary } from '@/lib/api'
 import { useT } from '@/i18n'
 import { systemStateText } from '@/lib/format'
+import { systemIncidents } from '@/lib/incidents'
 import { stackBadge, stackName } from '@/lib/stacks'
 
-function SystemCard({ s, stacks }: { s: SystemSummary; stacks: number }) {
+function SystemCard({ s, stacks, incidents }: { s: SystemSummary; stacks: number; incidents: Incident[] }) {
   const { t, tn } = useT()
   const set = stackBadge(stacks, stackName(s.stack, s.stackName))
   return (
@@ -28,7 +29,7 @@ function SystemCard({ s, stacks }: { s: SystemSummary; stacks: number }) {
           <div className="truncate text-base font-semibold">{s.name}</div>
           <div className="truncate text-sm text-muted-foreground">{s.description || (s.environment ? t('systems.environment', { env: s.environment }) : ' ')}</div>
         </div>
-        <StatePill state={s.state}>{systemStateText(s)}</StatePill>
+        <StatePill state={s.state}>{systemStateText(s, incidents)}</StatePill>
       </div>
       {s.valid ? (
         <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm text-muted-foreground">
@@ -55,6 +56,8 @@ function SystemCard({ s, stacks }: { s: SystemSummary; stacks: number }) {
 
 export default function SystemsPage() {
   const systems = useSystems()
+  // The shell's alert counter keeps this query alive, so reading it here sends no extra request.
+  const alerts = useAlerts()
   const { t } = useT()
   const [creating, setCreating] = useState(false)
   const list = systems.data?.systems ?? []
@@ -94,7 +97,7 @@ export default function SystemsPage() {
       ) : (
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
           {list.map((s) => (
-            <SystemCard key={s.id} s={s} stacks={systems.data?.stacks ?? 1} />
+            <SystemCard key={s.id} s={s} stacks={systems.data?.stacks ?? 1} incidents={systemIncidents(alerts.data, s.id)} />
           ))}
         </div>
       )}

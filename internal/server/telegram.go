@@ -76,6 +76,9 @@ func (s *Server) runbook(w http.ResponseWriter, r *http.Request) {
 				match = snap
 			}
 		}
+		if name == generator.SystemRunbook && match == nil {
+			match = snap
+		}
 	}
 	if match == nil {
 		if len(list) == 0 {
@@ -88,9 +91,14 @@ func (s *Server) runbook(w http.ResponseWriter, r *http.Request) {
 	s.runbookFor(w, match, name)
 }
 
+// runbookFor serves the runbook of a service, or with generator.SystemRunbook
+// the one of the alerts about the whole system (service: {name, system: true}).
 func (s *Server) runbookFor(w http.ResponseWriter, snap *descstore.Snapshot, name string) {
-	var found bool
+	found := name == generator.SystemRunbook
 	var svcView map[string]any
+	if found {
+		svcView = map[string]any{"name": name, "system": true, "dependsOn": []string{}, "calledBy": []string{}}
+	}
 	for _, svc := range snap.SD.Spec.Services {
 		if svc.Name == name {
 			found = true
@@ -122,7 +130,7 @@ func (s *Server) runbookFor(w http.ResponseWriter, snap *descstore.Snapshot, nam
 	alerts := []runbookAlert{}
 	for _, g := range b.RuleGroups.Groups {
 		for _, rl := range g.Rules {
-			if rl.Labels[rules.LabelService] != name {
+			if svc := rl.Labels[rules.LabelService]; svc != name && (name != generator.SystemRunbook || svc != "") {
 				continue
 			}
 			alerts = append(alerts, runbookAlert{

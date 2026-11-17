@@ -41,6 +41,10 @@ type TrafficParams struct {
 	// MinRequestsPerSecond is the normal traffic below which the rule does not apply.
 	MinRequestsPerSecond float64
 	SystemServices       []string
+	// PresentWithin, when set, requires some span-metric series of the service
+	// to have a sample within it: a service without any data is left to
+	// ServiceNoData with the same window. Zero: an absent series counts as zero.
+	PresentWithin time.Duration
 }
 
 // TrafficStopped counts an absent series as zero. Normal traffic is summed over
@@ -63,6 +67,9 @@ func TrafficStopped(p TrafficParams) rulefmt.Rule {
 	expr := fmt.Sprintf("60 * (\n  (\n    %s\n  or on (%s)\n    0 * %s\n  )\n  <= on (%s)\n  %s * (%s > %s)\n)\nand on ()\n(\n%s\n)\nand on ()\n(\n%s\n)",
 		current, svc, normal, svc, num(p.Threshold), normal, num(p.MinRequestsPerSecond),
 		visible(""), visible(" offset "+dur(t.Window)))
+	if p.PresentWithin > 0 {
+		expr += fmt.Sprintf("\nand on (%s)\n  group by (%s) (%s)", svc, svc, t.present(t.serviceSpans(t.ServiceValue), p.PresentWithin))
+	}
 
 	r := p.rule(AlertRequestsStopped, SignalTraffic, expr, nil)
 	minPerMinute := num(round(p.MinRequestsPerSecond*60, 2))

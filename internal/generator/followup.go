@@ -26,6 +26,28 @@ type FollowUp struct {
 	Roots    []RootEvidence
 	Affected []string
 	Window   time.Duration
+	// Likely are dependencies of a root that look failing now although none
+	// of their alerts fired yet.
+	Likely []LikelyCause
+	// Explains are services named by earlier follow-ups that this incident's
+	// roots turn out to cause; ExplainsSince is when the earliest one started.
+	Explains      []string
+	ExplainsSince time.Time
+}
+
+type LikelyCause struct {
+	Service string
+	// Of is the root that calls it.
+	Of       string
+	Observed []Observation
+	Evidence RootEvidence
+}
+
+// Observation is a rule whose condition holds now; Pending: Prometheus
+// reports its alert as pending, otherwise the condition was queried directly.
+type Observation struct {
+	Alert   string
+	Pending bool
 }
 
 // RootEvidence parts are all optional.
@@ -83,7 +105,7 @@ func (f *FollowUp) Worth() bool {
 	if f == nil {
 		return false
 	}
-	if len(f.Affected) > 0 || len(f.Alerting) > 0 {
+	if len(f.Affected) > 0 || len(f.Alerting) > 0 || len(f.Likely) > 0 || len(f.Explains) > 0 {
 		return true
 	}
 	for _, r := range f.Roots {
@@ -109,6 +131,9 @@ type followUpWords struct {
 	mostErrors                                  string // operation, count, window
 	log, quoteOpen, quoteClose, traces          string
 	minutes, and                                string
+	// likely takes the dependency, the root and the observations; explains
+	// the services and their start time.
+	alert, likely, pending, explains string
 }
 
 var followUpTexts = map[string]followUpWords{
@@ -122,6 +147,10 @@ var followUpTexts = map[string]followUpWords{
 		mostErrors: "Most errors: operation %s (%s failed calls in %s).",
 		log:        "Log:", quoteOpen: "“", quoteClose: "”", traces: "Failing traces in Grafana",
 		minutes: "%d min", and: "and",
+		alert:    "Alert:",
+		likely:   "Likely cause: %s, called by %s (observed now: %s). Its own alerts have not fired yet.",
+		pending:  "alert pending",
+		explains: "This explains the earlier alert about %s (since %s).",
 	},
 	rules.LanguageRussian: {
 		header: "Вероятная причина", causeIs: "вероятная причина в", cause: "Вероятная причина:", since: "с",
@@ -133,6 +162,10 @@ var followUpTexts = map[string]followUpWords{
 		mostErrors: "Больше всего ошибок в операции %s: %s за %s.",
 		log:        "Лог:", quoteOpen: "«", quoteClose: "»", traces: "Трассы с ошибками в Grafana",
 		minutes: "%d мин", and: "и",
+		alert:    "Оповещение:",
+		likely:   "Вероятно, причина в %s, его вызывает %s (сейчас видно: %s). Его собственные оповещения ещё не сработали.",
+		pending:  "оповещение ожидает срабатывания",
+		explains: "Это причина более раннего оповещения о %s (с %s).",
 	},
 }
 
@@ -147,7 +180,7 @@ func RenderFollowUp(f *FollowUp, lang, timeZone string) FollowUpMessage {
 	if err != nil || loc == nil {
 		loc = time.UTC
 	}
-	tg := followUpBody(f, w, loc, true)
+	tg := followUpBody(f, w, lang, loc, true)
 	subject := w.header + ": " + f.System
 	if len(f.Roots) > 0 {
 		subject += " / " + strings.Join(rootNames(f.Roots), ", ")
@@ -156,7 +189,7 @@ func RenderFollowUp(f *FollowUp, lang, timeZone string) FollowUpMessage {
 		TelegramHTML: tg,
 		EmailSubject: subject,
 		EmailHTML:    `<div style="font-family:sans-serif;white-space:pre-line">` + tg + `</div>`,
-		EmailText:    followUpBody(f, w, loc, false),
+		EmailText:    followUpBody(f, w, lang, loc, false),
 	}
 }
 
@@ -168,7 +201,7 @@ func rootNames(roots []RootEvidence) []string {
 	return out
 }
 
-func followUpBody(f *FollowUp, w followUpWords, loc *time.Location, htmlMode bool) string {
+func followUpBody(f *FollowUp, w followUpWords, lang string, loc *time.Location, htmlMode bool) string {
 	esc := func(s string) string {
 		if htmlMode {
 			return html.EscapeString(s)
@@ -181,11 +214,7 @@ func followUpBody(f *FollowUp, w followUpWords, loc *time.Location, htmlMode boo
 		}
 		return s
 	}
-	at := func(t time.Time) string {
-		lt := t.In(loc)
-		_, off := lt.Zone()
-		return lt.Format("15:04") + " " + OffsetLabel(off)
-	}
+	at := clockAt(loc)
 	minutes := fmt.Sprintf(w.minutes, int(f.Window.Minutes()))
 	join := func(items []string) string {
 		if len(items) <= 1 {
@@ -204,24 +233,30 @@ func followUpBody(f *FollowUp, w followUpWords, loc *time.Location, htmlMode boo
 	var roots, details []string
 	for _, r := range f.Roots {
 		roots = append(roots, b(esc(r.Service)))
-		d := esc(r.Service)
-		if r.Title != "" {
-			d += ": " + esc(r.Title)
-		}
-		if !r.Since.IsZero() {
-			d += " " + w.since + " " + at(r.Since)
-		}
-		details = append(details, d)
+		details = append(details, esc(rootCause(r, w, at)))
 	}
 	cause := join(roots) + " (" + strings.Join(details, "; ") + ")."
-	if len(f.Alerting) > 0 {
+	switch {
+	case len(f.Alerting) == 0 && len(f.Likely) > 0:
+		t.WriteString(w.alert + " " + cause + "\n")
+	case len(f.Alerting) > 0:
 		names := make([]string, len(f.Alerting))
 		for i, s := range f.Alerting {
 			names[i] = b(esc(s))
 		}
 		t.WriteString(strings.Join(names, ", ") + ": " + w.causeIs + " " + cause + "\n")
-	} else {
+	default:
 		t.WriteString(w.cause + " " + cause + "\n")
+	}
+	for _, l := range f.Likely {
+		t.WriteString(fmt.Sprintf(w.likely, b(esc(l.Service)), esc(l.Of), esc(observed(l.Observed, w, lang))) + "\n")
+	}
+	if len(f.Explains) > 0 {
+		names := make([]string, len(f.Explains))
+		for i, s := range f.Explains {
+			names[i] = b(esc(s))
+		}
+		t.WriteString(fmt.Sprintf(w.explains, join(names), at(f.ExplainsSince)) + "\n")
 	}
 	if len(f.Affected) > 0 {
 		names := make([]string, len(f.Affected))
@@ -231,7 +266,13 @@ func followUpBody(f *FollowUp, w followUpWords, loc *time.Location, htmlMode boo
 		t.WriteString(w.alsoAffected + " " + strings.Join(names, ", ") + ".\n")
 	}
 
-	for _, r := range f.Roots {
+	all := append([]RootEvidence{}, f.Roots...)
+	for _, l := range f.Likely {
+		if l.Evidence.Service != "" {
+			all = append(all, l.Evidence)
+		}
+	}
+	for _, r := range all {
 		if parts := changeParts(r.Changes, w, at, esc); len(parts) > 0 {
 			t.WriteString(fmt.Sprintf(w.changed, b(esc(r.Service)), minutes) + " " + strings.Join(parts, "; ") + ".\n")
 		}
@@ -241,7 +282,7 @@ func followUpBody(f *FollowUp, w followUpWords, loc *time.Location, htmlMode boo
 		}
 		if line := trimLogLine(r.LogLine); line != "" {
 			prefix := w.log
-			if len(f.Roots) > 1 {
+			if len(all) > 1 {
 				prefix = esc(r.Service) + " " + w.log
 			}
 			q := w.quoteOpen + esc(line) + w.quoteClose
@@ -252,7 +293,7 @@ func followUpBody(f *FollowUp, w followUpWords, loc *time.Location, htmlMode boo
 		}
 		if u := safeLink(r.TraceURL); u != "" {
 			text := w.traces
-			if len(f.Roots) > 1 {
+			if len(all) > 1 {
 				text += " (" + r.Service + ")"
 			}
 			if htmlMode {
@@ -263,6 +304,98 @@ func followUpBody(f *FollowUp, w followUpWords, loc *time.Location, htmlMode boo
 		}
 	}
 	return t.String()
+}
+
+func clockAt(loc *time.Location) func(time.Time) string {
+	return func(t time.Time) string {
+		lt := t.In(loc)
+		_, off := lt.Zone()
+		return lt.Format("15:04") + " " + OffsetLabel(off)
+	}
+}
+
+func rootCause(r RootEvidence, w followUpWords, at func(time.Time) string) string {
+	d := r.Service
+	if r.Title != "" {
+		d += ": " + r.Title
+	}
+	if !r.Since.IsZero() {
+		d += " " + w.since + " " + at(r.Since)
+	}
+	return d
+}
+
+func observed(obs []Observation, w followUpWords, lang string) string {
+	parts := make([]string, 0, len(obs))
+	for _, o := range obs {
+		p := rules.Title(lang, o.Alert)
+		if p == "" {
+			p = o.Alert
+		}
+		if o.Pending {
+			p += " (" + w.pending + ")"
+		}
+		parts = append(parts, p)
+	}
+	return strings.Join(parts, "; ")
+}
+
+// EvidenceSummary is the evidence of an incident as the alerts API returns
+// it; strings are rendered in the description's language and time zone.
+type EvidenceSummary struct {
+	CollectedAt       time.Time `json:"collectedAt"`
+	Cause             string    `json:"cause,omitempty"`
+	Likely            bool      `json:"likely"`
+	Changes           []string  `json:"changes,omitempty"`
+	Operation         string    `json:"operation,omitempty"`
+	OperationFailures int       `json:"operationFailures,omitempty"`
+	LogLine           string    `json:"logLine,omitempty"`
+	TracesURL         string    `json:"tracesURL,omitempty"`
+	// Explains names services of earlier incidents this one causes.
+	Explains []string `json:"explains,omitempty"`
+}
+
+// Summarize describes the first root, or the first likely cause when there is
+// one; a part the likely cause lacks comes from the root.
+func Summarize(f *FollowUp, lang, timeZone string, collected time.Time) EvidenceSummary {
+	w, ok := followUpTexts[lang]
+	if !ok {
+		w = followUpTexts[rules.LanguageEnglish]
+	}
+	loc, err := description.LoadTimeZone(timeZone)
+	if err != nil || loc == nil {
+		loc = time.UTC
+	}
+	at := clockAt(loc)
+	out := EvidenceSummary{CollectedAt: collected.UTC().Truncate(time.Second), Explains: f.Explains}
+	var ev []RootEvidence
+	if len(f.Likely) > 0 {
+		l := f.Likely[0]
+		out.Cause, out.Likely = l.Service+": "+observed(l.Observed, w, lang), true
+		ev = append(ev, l.Evidence)
+	}
+	if len(f.Roots) > 0 {
+		if out.Cause == "" {
+			out.Cause = rootCause(f.Roots[0], w, at)
+		}
+		ev = append(ev, f.Roots[0])
+	}
+	plain := func(s string) string { return s }
+	for _, r := range ev {
+		if out.Changes == nil {
+			out.Changes = changeParts(r.Changes, w, at, plain)
+		}
+		if out.Operation == "" && len(r.Operations) > 0 {
+			out.Operation, out.OperationFailures = r.Operations[0].Operation, int(r.Operations[0].Failed+0.5)
+		}
+		if out.LogLine == "" {
+			out.LogLine = trimLogLine(r.LogLine)
+		}
+		if out.TracesURL == "" {
+			out.TracesURL = safeLink(r.TraceURL)
+		}
+	}
+	return out
 }
 
 func changeParts(c WorkloadChanges, w followUpWords, at func(time.Time) string, esc func(string) string) []string {

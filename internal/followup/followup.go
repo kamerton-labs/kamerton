@@ -14,7 +14,10 @@ import (
 	"time"
 
 	"github.com/kamerton-labs/kamerton/api/v1alpha1"
+	"github.com/prometheus/common/model"
+
 	"github.com/kamerton-labs/kamerton/internal/clients/alertmanager"
+	"github.com/kamerton-labs/kamerton/internal/clients/prometheus"
 	"github.com/kamerton-labs/kamerton/internal/descstore"
 	"github.com/kamerton-labs/kamerton/internal/evidence"
 	"github.com/kamerton-labs/kamerton/internal/generator"
@@ -25,10 +28,14 @@ import (
 const (
 	// DefaultDelay makes the follow-up arrive after the alert itself.
 	DefaultDelay = 10 * time.Second
-	// DefaultTTL is how long an incident is remembered.
+	// DefaultTTL is how long an incident and its evidence are remembered.
 	DefaultTTL     = 24 * time.Hour
 	maxRoots       = 3
 	processTimeout = time.Minute
+	maxEvidence    = 200
+	maxLikely      = 3
+	// checkConcurrency bounds the instant queries of the dependency check.
+	checkConcurrency = 8
 )
 
 type TelegramSender interface {
@@ -49,15 +56,23 @@ type Service struct {
 	// Telegram and Email are nil when that channel is unavailable.
 	Telegram TelegramSender
 	Email    EmailSender
-	Delay    time.Duration
-	TTL      time.Duration
-	Logger   *slog.Logger
-	Now      func() time.Time
-	Sleep    func(ctx context.Context, d time.Duration)
+	// State remembers incidents across restarts and replicas; nil: memory.
+	State  StateStore
+	Delay  time.Duration
+	TTL    time.Duration
+	Logger *slog.Logger
+	Now    func() time.Time
+	Sleep  func(ctx context.Context, d time.Duration)
 
-	mu   sync.Mutex
-	sent map[string]time.Time
-	wg   sync.WaitGroup
+	mu        sync.Mutex
+	memory    MemoryStateStore
+	collected map[string]cachedEvidence
+	wg        sync.WaitGroup
+}
+
+type cachedEvidence struct {
+	at      time.Time
+	summary generator.EvidenceSummary
 }
 
 func (s *Service) now() time.Time {
@@ -105,29 +120,94 @@ func (s *Service) Handle(hook *alertmanager.Webhook) {
 
 func (s *Service) Wait() { s.wg.Wait() }
 
-// claim reports false when the incident was already recorded. Records live
-// in this replica's memory for TTL.
-func (s *Service) claim(key string) bool {
+func (s *Service) ttl() time.Duration {
+	if s.TTL > 0 {
+		return s.TTL
+	}
+	return DefaultTTL
+}
+
+// update writes to State and falls back to memory when State fails, so a
+// broken store never stops a follow-up (at worst one is sent twice).
+func (s *Service) update(ctx context.Context, mutate func(*State) error) {
+	if s.State != nil {
+		_, err := s.State.Update(ctx, mutate)
+		if err == nil {
+			return
+		}
+		s.log().Warn("follow-up state unavailable; remembering in memory", "error", err)
+	}
+	_, _ = s.memory.Update(ctx, mutate)
+}
+
+// claim records the incident and reports false when it was already recorded.
+// earlier are the follow-ups sent for other incidents of the same system.
+func (s *Service) claim(ctx context.Context, key string, rec Record) (claimed bool, earlier []Record) {
+	now := s.now()
+	s.update(ctx, func(st *State) error {
+		claimed, earlier = false, nil
+		st.prune(now, s.ttl())
+		if _, ok := st.Records[key]; ok {
+			return ErrNoChange
+		}
+		for _, r := range st.Records {
+			if r.System == rec.System && r.Sent {
+				earlier = append(earlier, r)
+			}
+		}
+		st.Records[key] = rec
+		claimed = true
+		return nil
+	})
+	return claimed, earlier
+}
+
+func (s *Service) markSent(ctx context.Context, key string, likely []string) {
+	s.update(ctx, func(st *State) error {
+		r, ok := st.Records[key]
+		if !ok {
+			return ErrNoChange
+		}
+		r.Sent, r.Likely = true, likely
+		st.Records[key] = r
+		return nil
+	})
+}
+
+func (s *Service) remember(incident string, sum generator.EvidenceSummary) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.collected == nil {
+		s.collected = map[string]cachedEvidence{}
+	}
 	now := s.now()
-	ttl := s.TTL
-	if ttl <= 0 {
-		ttl = DefaultTTL
-	}
-	if s.sent == nil {
-		s.sent = map[string]time.Time{}
-	}
-	for k, t := range s.sent {
-		if now.Sub(t) > ttl {
-			delete(s.sent, k)
+	oldest := ""
+	for k, e := range s.collected {
+		if now.Sub(e.at) > s.ttl() {
+			delete(s.collected, k)
+			continue
+		}
+		if oldest == "" || e.at.Before(s.collected[oldest].at) {
+			oldest = k
 		}
 	}
-	if _, ok := s.sent[key]; ok {
-		return false
+	if _, ok := s.collected[incident]; !ok && len(s.collected) >= maxEvidence {
+		delete(s.collected, oldest)
 	}
-	s.sent[key] = now
-	return true
+	s.collected[incident] = cachedEvidence{at: now, summary: sum}
+}
+
+// Evidence returns the last evidence collected for an incident ID, kept in
+// this replica's memory for TTL; nil when there is none.
+func (s *Service) Evidence(incident string) *generator.EvidenceSummary {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	e, ok := s.collected[incident]
+	if !ok || s.now().Sub(e.at) > s.ttl() {
+		return nil
+	}
+	sum := e.summary
+	return &sum
 }
 
 type Result struct {
@@ -172,6 +252,9 @@ func (s *Service) Process(ctx context.Context, hook *alertmanager.Webhook, recei
 	var order []string
 	for _, a := range firing {
 		svc := a.Labels[rules.LabelService]
+		if svc == "" {
+			continue // about the whole system: there is no data to collect evidence from
+		}
 		inc := triage.IncidentOf(incidents, svc)
 		if inc == nil {
 			continue
@@ -191,13 +274,14 @@ func (s *Service) Process(ctx context.Context, hook *alertmanager.Webhook, recei
 		}
 		res := Result{Incident: id}
 		key := id + "@" + strconv.FormatInt(inc.StartsAt.Unix(), 10)
-		switch {
-		case len(recipients) == 0:
-			res.Skipped = "no recipients"
-		case !s.claim(key):
+		rec := Record{At: s.now(), System: sd.Name, Roots: inc.Roots}
+		if len(inc.Roots) > 0 {
+			_, rec.Since = rootAlert(inc.RootAlerts, inc.Roots[0])
+		}
+		if claimed, earlier := s.claim(ctx, key, rec); claimed {
+			res = s.send(ctx, sd, inc, key, byIncident[id], recipients, earlier, received)
+		} else {
 			res.Skipped = "already sent"
-		default:
-			res = s.send(ctx, sd, inc, byIncident[id], recipients, received)
 		}
 		if res.Skipped != "" {
 			s.log().Debug("follow-up skipped", "system", sd.Name, "incident", id, "reason", res.Skipped)
@@ -207,13 +291,13 @@ func (s *Service) Process(ctx context.Context, hook *alertmanager.Webhook, recei
 	return results
 }
 
-func (s *Service) send(ctx context.Context, sd *v1alpha1.SystemDescription, inc *triage.Incident, services []string, recipients []v1alpha1.Receiver, received time.Time) Result {
+// send collects the evidence, keeps it for the alerts API and sends it when it
+// says more than the alert and someone got the alert.
+func (s *Service) send(ctx context.Context, sd *v1alpha1.SystemDescription, inc *triage.Incident, key string, services []string,
+	recipients []v1alpha1.Receiver, earlier []Record, received time.Time) Result {
 	res := Result{Incident: inc.ID}
 	f := s.evidence(ctx, sd, inc, services)
-	if !f.Worth() {
-		res.Skipped = "nothing worth sending"
-		return res
-	}
+	f.Explains, f.ExplainsSince = explains(earlier, inc)
 	n := sd.Spec.Notifications
 	lang, tz := rules.LanguageEnglish, ""
 	if n != nil {
@@ -221,6 +305,15 @@ func (s *Service) send(ctx context.Context, sd *v1alpha1.SystemDescription, inc 
 			lang = n.Language
 		}
 		tz = n.TimeZone
+	}
+	s.remember(inc.ID, generator.Summarize(f, lang, tz, s.now()))
+	switch {
+	case len(recipients) == 0:
+		res.Skipped = "no recipients"
+		return res
+	case !f.Worth():
+		res.Skipped = "nothing worth sending"
+		return res
 	}
 	msg := generator.RenderFollowUp(f, lang, tz)
 	delay := s.Delay
@@ -249,10 +342,55 @@ func (s *Service) send(ctx context.Context, sd *v1alpha1.SystemDescription, inc 
 	}
 	if res.Telegram+res.Email == 0 {
 		res.Skipped = "no message could be sent"
-	} else {
-		s.log().Info("follow-up sent", "system", sd.Name, "incident", inc.ID, "telegram", res.Telegram, "email", res.Email)
+		return res
 	}
+	likely := make([]string, 0, len(f.Likely))
+	for _, l := range f.Likely {
+		likely = append(likely, l.Service)
+	}
+	s.markSent(ctx, key, likely)
+	s.log().Info("follow-up sent", "system", sd.Name, "incident", inc.ID, "telegram", res.Telegram, "email", res.Email)
 	return res
+}
+
+// explains finds earlier follow-ups whose roots this incident now explains:
+// they are among its affected services, or they named one of its roots as
+// the likely cause (their alert may have resolved since).
+func explains(earlier []Record, inc *triage.Incident) ([]string, time.Time) {
+	affected, roots := map[string]bool{}, map[string]bool{}
+	for _, a := range inc.Affected {
+		affected[a] = true
+	}
+	for _, r := range inc.Roots {
+		roots[r] = true
+	}
+	var names []string
+	var since time.Time
+	for _, r := range earlier {
+		hit := false
+		for _, x := range r.Roots {
+			hit = hit || affected[x]
+		}
+		for _, x := range r.Likely {
+			hit = hit || roots[x]
+		}
+		if !hit {
+			continue
+		}
+		for _, x := range r.Roots {
+			if !roots[x] {
+				names = appendUnique(names, x)
+			}
+		}
+		if !r.Since.IsZero() && (since.IsZero() || r.Since.Before(since)) {
+			since = r.Since
+		}
+	}
+	sort.Strings(names)
+	if len(names) == 0 {
+		return nil, time.Time{}
+	}
+	return names, since
 }
 
 func (s *Service) evidence(ctx context.Context, sd *v1alpha1.SystemDescription, inc *triage.Incident, services []string) *generator.FollowUp {
@@ -289,6 +427,7 @@ func (s *Service) evidence(ctx context.Context, sd *v1alpha1.SystemDescription, 
 	}
 	f.Roots = make([]generator.RootEvidence, len(roots))
 	var wg sync.WaitGroup
+	defer wg.Wait()
 	for i, root := range roots {
 		title, since := rootAlert(inc.RootAlerts, root)
 		f.Roots[i] = generator.RootEvidence{Service: root, Title: title, Since: since}
@@ -304,21 +443,149 @@ func (s *Service) evidence(ctx context.Context, sd *v1alpha1.SystemDescription, 
 			f.Roots[i] = ev
 		}(i)
 	}
-	wg.Wait()
+	if src.Prom == nil {
+		return f
+	}
+	for _, root := range roots {
+		if svc := service(sd, root); svc != nil && needsDependencyCheck(inc, root) {
+			f.Likely = append(f.Likely, s.likelyCauses(ctx, sd, svc, src.Prom)...)
+		}
+	}
+	if len(f.Likely) > maxLikely {
+		f.Likely = f.Likely[:maxLikely]
+	}
+	if len(f.Likely) > 0 && s.Collector != nil {
+		if svc := service(sd, f.Likely[0].Service); svc != nil {
+			f.Likely[0].Evidence = s.Collector.Collect(ctx, sd, svc, src, inc.StartsAt)
+		}
+	}
 	return f
 }
 
-// rootAlert picks a root's earliest symptom alert, else its earliest alert.
+// needsDependencyCheck: the root shows what a failing dependency causes (a
+// symptom target) and has no cause of its own such as no ready pods.
+func needsDependencyCheck(inc *triage.Incident, root string) bool {
+	consequence := false
+	for _, a := range inc.RootAlerts {
+		if a.Service != root {
+			continue
+		}
+		if rules.IsSymptomSource(a.Name) && !rules.IsSymptomTarget(a.Name) {
+			return false
+		}
+		consequence = consequence || rules.IsSymptomTarget(a.Name)
+	}
+	return consequence
+}
+
+func (s *Service) checkTimeout() time.Duration {
+	if s.Collector != nil && s.Collector.Timeout > 0 {
+		return s.Collector.Timeout
+	}
+	return evidence.DefaultTimeout
+}
+
+// likelyCauses looks at the direct dependencies of a root whose own alerts
+// have not fired: alerts Prometheus reports as pending, and the conditions of
+// generator.DependencyChecks queried now. Most observations first.
+func (s *Service) likelyCauses(ctx context.Context, sd *v1alpha1.SystemDescription, root *v1alpha1.Service, prom prometheus.Querier) []generator.LikelyCause {
+	var deps []string
+	for _, d := range root.DependsOn {
+		if service(sd, d) != nil {
+			deps = append(deps, d)
+		}
+	}
+	if len(deps) == 0 {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, s.checkTimeout())
+	defer cancel()
+	now := s.now()
+	var mu sync.Mutex
+	seen := map[string]map[string]bool{} // dependency -> alert -> pending
+	add := func(dep, alert string, pending bool) {
+		mu.Lock()
+		defer mu.Unlock()
+		if seen[dep] == nil {
+			seen[dep] = map[string]bool{}
+		}
+		seen[dep][alert] = seen[dep][alert] || pending
+	}
+	sem := make(chan struct{}, checkConcurrency)
+	var wg sync.WaitGroup
+	query := func(expr string, found func(model.Vector)) {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			v, err := prom.Query(ctx, expr, now)
+			if err != nil {
+				s.log().Debug("dependency check failed", "system", sd.Name, "error", err)
+				return
+			}
+			if vec, ok := v.(model.Vector); ok && len(vec) > 0 {
+				found(vec)
+			}
+		}()
+	}
+	pending := rules.Matchers{}.Eq(rules.LabelManaged, "true").Eq(generator.LabelSystem, sd.Name).Eq("alertstate", "pending").
+		Re(rules.LabelService, rules.QuoteValues(deps)...).Selector("ALERTS")
+	query(pending, func(vec model.Vector) {
+		for _, smp := range vec {
+			if name := string(smp.Metric["alertname"]); rules.IsSymptomSource(name) {
+				add(string(smp.Metric[model.LabelName(rules.LabelService)]), name, true)
+			}
+		}
+	})
+	for _, d := range deps {
+		for _, c := range generator.DependencyChecks(sd, service(sd, d)) {
+			query(c.Expr, func(model.Vector) { add(d, c.Alert, false) })
+		}
+	}
+	wg.Wait()
+
+	var out []generator.LikelyCause
+	for _, d := range deps {
+		if len(seen[d]) == 0 {
+			continue
+		}
+		l := generator.LikelyCause{Service: d, Of: root.Name}
+		// No ready pods first: it is the most direct of the observations.
+		if p, ok := seen[d][rules.AlertNoReadyPods]; ok {
+			l.Observed = append(l.Observed, generator.Observation{Alert: rules.AlertNoReadyPods, Pending: p})
+		}
+		for _, alert := range rules.SymptomSources() {
+			if p, ok := seen[d][alert]; ok && alert != rules.AlertNoReadyPods {
+				l.Observed = append(l.Observed, generator.Observation{Alert: alert, Pending: p})
+			}
+		}
+		out = append(out, l)
+	}
+	sort.SliceStable(out, func(i, j int) bool { return len(out[i].Observed) > len(out[j].Observed) })
+	return out
+}
+
+// rootAlert picks a root's earliest alert of the kind that explains others
+// most (a symptom source, then a target), else its earliest alert.
 func rootAlert(alerts []triage.Alert, svc string) (string, time.Time) {
+	rank := func(name string) int {
+		switch {
+		case rules.IsSymptomSource(name):
+			return 2
+		case rules.IsSymptomTarget(name):
+			return 1
+		}
+		return 0
+	}
 	var best *triage.Alert
 	for i := range alerts {
 		a := &alerts[i]
 		if a.Service != svc {
 			continue
 		}
-		better := best == nil ||
-			(rules.IsSymptom(a.Name) && !rules.IsSymptom(best.Name)) ||
-			(rules.IsSymptom(a.Name) == rules.IsSymptom(best.Name) && a.StartsAt.Before(best.StartsAt))
+		better := best == nil || rank(a.Name) > rank(best.Name) ||
+			(rank(a.Name) == rank(best.Name) && a.StartsAt.Before(best.StartsAt))
 		if better {
 			best = a
 		}

@@ -219,12 +219,27 @@ default:
 | CPU near the limit (`KamertonCPUNearLimit`) | no `saturation.cpuCores`: CPU above 90% of the pod CPU limit; `saturation.cpuLimitShare` |
 | CPU far above normal (`KamertonCPUAboveNormal`) | no `saturation.cpuCores`: above 0.5 cores and 3× the previous hour; `saturation.cpuAboveNormalFactor` |
 | Out of memory (`KamertonOOMKilled`) | the last termination was OOMKilled and the container restarted in the last 10 min; fires at once; `saturation.oomKilledEnabled: false` |
+| No ready pods (`KamertonNoReadyPods`) | pods of the service (found by `workload`) exist and none is ready, or the last one is gone (then only within an hour of the last ready pod: a deliberate scale to zero cannot be told from a failure); pending 30s; a cause for the grouping below; `noReadyPods.enabled: false`, `noReadyPods.for`; metric `telemetry.containers.readyMetric` (kube-state-metrics `kube_pod_status_ready`) |
+| No data from the service (`KamertonServiceTelemetryMissing`) | http/grpc services: the service sent span metrics in the last day, none for 3 min, and other services of the system still send; pending 1m; severity of its "requests stopped" rule where that is on, else warning; `noData.enabled`, `noData.after`, `noData.severity` |
+| Kamerton cannot see the system (`KamertonTelemetryMissing`) | none of the system's services has sent span metrics for 3 min although some did in the last day (Collector, remote write or Prometheus broken); pending 1m, critical; the message says that no other alert can fire until data returns; mutes the per-service "no data" alerts; `spec.noData.enabled`, `spec.noData.after` |
 | Nobody reads the queue (`KamertonQueueConsumerStopped`) | services with `queue`: a consumer group of the topic has had no members for 1 min, or its lag stayed above 0 for 3 min while its committed offset did not move; pending 1m; same severity as the lag rule; `queue.consumerStoppedEnabled: false`; metrics `telemetry.queues.membersMetric` / `offsetMetric` |
 
 The service latency rule needs at least 3 calls in the window instead of a
 default minimum rate, so a rare operation (two orders a minute) is checked.
 Rules with a "normal" stay silent without enough history (a new service, the
 first hour after a gap in the data).
+
+Every other rule is an expression over span metrics, and with no samples it
+returns nothing: if the Collector stops writing to Prometheus, those rules go
+quiet. The two "no data" rules catch that, and they never page for what never
+sent data: a service counts only if it sent span metrics for about a quarter
+of an hour within the last day. A service gone for a day (renamed, removed)
+stops alerting by itself. "Requests stopped arriving" and the per-service "no
+data" rule split the work: calls far below normal while series still exist,
+or no series at all. With 3 minutes and the 1-minute pending period, the
+person on call hears about missing data about 5 minutes after the last
+sample. If Prometheus loses its storage, "before" is lost with it and the
+rules arm again once data arrives.
 
 ## Configuration
 
@@ -325,14 +340,19 @@ When `payment` goes down, `checkout`, `frontend` and everything above it
 start failing too. Kamerton knows the `dependsOn` graph, so:
 
 - **One message per incident.** The generated AlertmanagerConfig has inhibit
-  rules: while a service has an error, latency or "requests stopped" alert,
-  the same kinds of alerts of the services that call it directly are muted
-  (a muted alert still mutes its own callers, so whole chains collapse to the
-  cause). Memory, CPU, restart, out-of-memory, queue, SLO and custom alerts
-  are never muted. A warning mutes only warnings; services in a dependency
-  cycle do not mute each other. Turn it off with
-  `spec.notifications.groupByCause: false`. The alerts API lists muted alerts
-  and incidents (cause and "also affected").
+  rules: while a service has an error, latency, "requests stopped" or "no
+  ready pods" alert, the error, latency, "requests stopped" and SLO
+  burn-rate alerts of the services that call it directly are muted (a muted
+  alert still mutes its own callers, so whole chains collapse to the cause).
+  "No ready pods" fires within about a minute, so with a service scaled to
+  zero the cause arrives first. SLO alerts are only muted, never mute: a
+  burning budget says nothing about the services a caller depends on.
+  Memory, CPU, restart, out-of-memory, queue, "no data" and custom alerts are
+  never muted. A warning mutes only warnings; services in a dependency cycle
+  do not mute each other. Turn it off with
+  `spec.notifications.groupByCause: false`. The system "no data" alert mutes
+  the per-service ones either way. The alerts API lists muted alerts and
+  incidents (cause, "also affected" and the evidence of the follow-up).
 - **A follow-up with evidence.** Alertmanager still sends the alert straight
   to Telegram and email, so it arrives while Kamerton is down. It also calls
   Kamerton's webhook, and about ten seconds later Kamerton sends one short
@@ -347,13 +367,25 @@ start failing too. Kamerton knows the `dependsOn` graph, so:
   Log: "card declined: upstream timeout"
   ```
 
+  When the alerting service has no failing dependency yet (its alert came
+  first), Kamerton looks at its direct dependencies at that moment: alerts
+  Prometheus reports as pending, no ready pods, error rate or calls far below
+  normal by the same queries as the rules. What it sees is named as the
+  likely cause ("Likely cause: payment, called by checkout (observed now: No
+  ready pods). Its own alerts have not fired yet."). When the cause's own
+  alert fires later, its follow-up says that it explains the earlier alert
+  ("This explains the earlier alert about checkout").
+
   Each part appears only when found: the workload changes come from the
   Kubernetes API (pods, ReplicaSets, StatefulSets, Warning events of the
   service's `workload`), the operation from the span metrics in the
   system's Prometheus, the log line from its Loki, and a link to failing
   traces needs `incidents.grafanaExternalURL`. Nothing is sent when nothing
   useful is found, and one incident gets one follow-up (Alertmanager's
-  repeats send nothing new). The follow-up goes only through Kamerton's own
+  repeats send nothing new; sent incidents are kept for a day in the
+  ConfigMap `kamerton-followup-state`, so a restart or another replica does
+  not send them again). The alerts API returns the last evidence of each
+  incident as `evidence`. The follow-up goes only through Kamerton's own
   bot and mail server, only for descriptions in Kamerton's namespace, and
   only in a cluster. Turn it off per system with
   `spec.notifications.evidenceFollowUp: false`, or for the installation with
@@ -439,7 +471,7 @@ Development, tests and the checks to run before a pull request:
 
 Works and is covered by unit tests: the description format with validation
 and JSON Schema; the rule library (every rule file validated with Prometheus' own
-parser; the requests-stopped rule also tested with Prometheus' engine); generation of rules, a
+parser; the requests-stopped, "no data" and "no ready pods" rules also tested with Prometheus' engine); generation of rules, a
 basic dashboard, Alertmanager routes and runbook stubs; the controller with
 status conditions; discovery, backtest and probable-source search; the UI
 (systems list, canvas, rules with plain-words cards, backtest and custom
@@ -467,8 +499,9 @@ Not done yet, or known limits:
 - One cluster per installation; several clusters are not supported.
 - The UI and notifications come in English and Russian only.
 - Dashboards are basic.
-- The follow-up remembers sent incidents in memory per replica: after a
-  restart, or with several replicas, an incident may get a second follow-up.
+- The evidence shown in the UI is kept in the memory of the replica that got
+  Alertmanager's webhook: after a restart, or from another replica, an
+  incident shows none until its next follow-up.
 - No chart repository yet: the chart is installed from a clone.
 
 ## Contributing and security

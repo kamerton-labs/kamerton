@@ -14,7 +14,7 @@ import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import { getLang, t, useT } from '@/i18n'
 import { useEditor } from '@/lib/editor'
-import { BUILTIN, kindHint, kindLabel, removeRule, ruleState, setRule, stateLabel, thresholdSpec, type RuleItem } from '@/lib/model/rules'
+import { BUILTIN, isNoDataKind, kindHint, kindLabel, removeRule, ruleState, setRule, stateLabel, thresholdSpec, type RuleItem } from '@/lib/model/rules'
 import { severityLabel, type CustomRule } from '@/lib/model/types'
 import CustomRuleForm from './CustomRuleForm'
 import MessageEditor from './MessageEditor'
@@ -36,7 +36,8 @@ function ThresholdInput({ rule, disabled }: { rule: RuleItem; disabled: boolean 
   const spec = thresholdSpec(rule.kind) ?? (rule.custom?.condition ? { unit: rule.custom.unit ?? '', step: 1, min: undefined, max: undefined, label: t('ruleCard.threshold') } : null)
   const [text, setText] = useState(String(rule.threshold))
   const [prev, setPrev] = useState(rule.threshold)
-  if (prev !== rule.threshold) {
+  // Rules without a threshold carry NaN, and NaN !== NaN: compare as React does.
+  if (!Object.is(prev, rule.threshold)) {
     setPrev(rule.threshold)
     setText(String(rule.threshold))
   }
@@ -117,15 +118,16 @@ export function RuleEditor({ rule, className }: { rule: RuleItem; className?: st
   const [editing, setEditing] = useState(false)
   const { t } = useT()
   const svc = desc.spec.services.find((s) => s.name === rule.service)
-  const inheritedSev = svc?.critical ? 'critical' : 'warning'
+  const inheritedSev = rule.severityDefault ?? (svc?.critical ? 'critical' : 'warning')
   return (
     <>
       <div className={cn('space-y-3', className)}>
         <p className="text-xs text-muted-foreground">{kindHint(rule.kind)}</p>
+        {rule.note && <p className="text-xs text-muted-foreground">{rule.note}</p>}
         <div className="flex flex-wrap items-end gap-x-4 gap-y-3">
           <ThresholdInput rule={rule} disabled={readOnly} />
           {rule.for !== '' && (
-            <Field label={t('ruleCard.for')}>
+            <Field label={isNoDataKind(rule.kind) ? t('ruleCard.after') : t('ruleCard.for')}>
               <DurationInput value={rule.for} onChange={(v) => edit((d) => setRule(d, rule.id, { for: v }))} disabled={readOnly} />
             </Field>
           )}

@@ -13,7 +13,7 @@ import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { tl, useT } from '@/i18n'
 import { useEditor } from '@/lib/editor'
-import { checkMessageText, defaultTitle, fill, getMessage, notificationLang, PLACEHOLDER_KEYS, placeholderLabel, previewValues, setMessage, thresholdText as thresholdIn } from '@/lib/model/message'
+import { checkMessageText, defaultMessage, defaultTitle, fill, getMessage, notificationLang, PLACEHOLDER_KEYS, placeholderLabel, previewValues, setMessage, thresholdText as thresholdIn } from '@/lib/model/message'
 import type { RuleItem } from '@/lib/model/rules'
 import { getTimeZone, offsetLabel, offsetMinutes } from '@/lib/model/timezone'
 import type { NotificationMessage } from '@/lib/model/types'
@@ -62,6 +62,9 @@ export default function MessageEditor({ rule }: { rule: RuleItem }) {
   const values = previewValues(rule, desc.metadata.name, thresholdText, offsetLabel(offsetMinutes(getTimeZone(desc))))
   const fallbackTitle = rule.kind === 'custom' ? (rule.custom?.title ?? '') : defaultTitle(rule.kind, ml)
   const title = draft.title?.trim() ? fill(draft.title, values) : fallbackTitle
+  const own = defaultMessage(rule, ml)
+  const text = draft.text?.trim() ? fill(draft.text, values) : (own?.text ?? '')
+  const action = draft.action?.trim() ? fill(draft.action, values) : (own?.action ?? '')
   const shared = rule.kind === 'errors' || rule.kind === 'errorsPerOp'
   const sharedLatency = rule.kind === 'latency' || rule.kind === 'latencyPerOp' || rule.kind === 'latencyAboveNormal'
   const sharedCPU = rule.kind === 'cpu' || rule.kind === 'cpuLimit' || rule.kind === 'cpuAboveNormal'
@@ -101,7 +104,7 @@ export default function MessageEditor({ rule }: { rule: RuleItem }) {
               rows={2}
               value={draft.text ?? ''}
               disabled={readOnly}
-              placeholder={t('message.textPlaceholder')}
+              placeholder={own?.text ?? t('message.textPlaceholder')}
               onFocus={() => setFocus('text')}
               onChange={(e) => setDraft({ ...draft, text: e.target.value })}
               onBlur={() => commit(draft)}
@@ -113,7 +116,7 @@ export default function MessageEditor({ rule }: { rule: RuleItem }) {
               rows={2}
               value={draft.action ?? ''}
               disabled={readOnly}
-              placeholder={t('message.actionPlaceholder')}
+              placeholder={own?.action ?? t('message.actionPlaceholder')}
               onFocus={() => setFocus('action')}
               onChange={(e) => setDraft({ ...draft, action: e.target.value })}
               onBlur={() => commit(draft)}
@@ -134,14 +137,20 @@ export default function MessageEditor({ rule }: { rule: RuleItem }) {
                 {rule.severity === 'critical' ? '🔴' : '🟡'} <b>{tl(ml, rule.severity === 'critical' ? 'msg.word.critical' : 'msg.word.warning')}</b> · {desc.metadata.name}
               </div>
               <div className="mt-1.5">
-                {rule.severity === 'critical' ? '🔴' : '🟡'} <b>{rule.service}</b>: {title}
+                {rule.severity === 'critical' ? '🔴' : '🟡'}{' '}
+                {rule.service && (
+                  <>
+                    <b>{rule.service}</b>:{' '}
+                  </>
+                )}
+                {title}
               </div>
               <div className="text-muted-foreground">
                 {tl(ml, 'msg.word.now')} <b>…</b>
                 {thresholdText && `, ${tl(ml, 'msg.word.threshold')} ${thresholdText}`} · {tl(ml, 'msg.word.since')} {values.since}
               </div>
-              {draft.text?.trim() && <div>{fill(draft.text, values)}</div>}
-              {draft.action?.trim() && <div>👉 {fill(draft.action, values)}</div>}
+              {text && <div>{text}</div>}
+              {action && <div>👉 {action}</div>}
             </div>
             <p className="text-xs text-muted-foreground">
               {t('message.previewHint')}

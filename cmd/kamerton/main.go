@@ -202,6 +202,7 @@ func serve(args []string) error {
 			opts.FollowUp = &followup.Service{
 				Descriptions: opts.Descriptions,
 				Collector:    collector,
+				State:        &followup.ConfigMapStateStore{Client: uncached, Namespace: ns, Name: "kamerton-followup-state"},
 				Telegram:     tg,
 				Email:        opts.Email,
 				Logger:       log.With("component", "followup"),

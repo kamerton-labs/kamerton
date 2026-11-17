@@ -5,31 +5,45 @@ package rules
 
 import (
 	"fmt"
+	"slices"
 	"time"
 )
 
-// Symptom alerts fire on callers when a dependency is in trouble; an inhibit rule
-// mutes them while the dependency alerts. Resource, queue, SLO and custom alerts
-// are not symptoms: they must reach people even while a dependency is down.
-var symptomAlerts = []string{
-	AlertErrorRate,
-	AlertOperationErrorRate,
-	AlertLatency,
-	AlertOperationLatency,
-	AlertLatencyAboveNormal,
-	AlertRequestsStopped,
-}
-
-func SymptomAlerts() []string { return append([]string(nil), symptomAlerts...) }
-
-func IsSymptom(alertname string) bool {
-	for _, a := range symptomAlerts {
-		if a == alertname {
-			return true
-		}
+// Symptom sources are what a failing dependency fires; while one fires, an
+// inhibit rule mutes the symptom targets of its callers. "No ready pods" only
+// ever explains others, and SLO burn alerts are only ever explained: a caller's
+// budget burns because of the dependency, but a burning budget proves nothing
+// about the services it calls. Resource, queue, "no data" and custom alerts are
+// neither: they must reach people even while a dependency is down.
+var (
+	symptomSources = []string{
+		AlertErrorRate,
+		AlertOperationErrorRate,
+		AlertLatency,
+		AlertOperationLatency,
+		AlertLatencyAboveNormal,
+		AlertRequestsStopped,
+		AlertNoReadyPods,
 	}
-	return false
-}
+	symptomTargets = []string{
+		AlertErrorRate,
+		AlertOperationErrorRate,
+		AlertLatency,
+		AlertOperationLatency,
+		AlertLatencyAboveNormal,
+		AlertRequestsStopped,
+		AlertSLOBurnFast,
+		AlertSLOBurnSlow,
+	}
+)
+
+func SymptomSources() []string { return slices.Clone(symptomSources) }
+
+func SymptomTargets() []string { return slices.Clone(symptomTargets) }
+
+func IsSymptomSource(alertname string) bool { return slices.Contains(symptomSources, alertname) }
+
+func IsSymptomTarget(alertname string) bool { return slices.Contains(symptomTargets, alertname) }
 
 func FailingOperations(t SpanTarget, window time.Duration, k int) string {
 	failed := t.matchers().clone().Eq(t.StatusCodeLabel, t.ErrorStatusValue)

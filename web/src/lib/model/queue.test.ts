@@ -37,7 +37,7 @@ describe('rule "nobody reads the queue"', () => {
     expect(r.threshold).toBeNaN()
     expect(r.sentence).toBe('Nobody reads queue orders: no consumers in the group for 1 min or the offset stands still for 3 min with unread messages for 1 min')
     expect(deriveRules(d).filter((x) => x.kind === 'queueStopped').map((x) => x.service)).toEqual(['orders'])
-    expect(deriveRules(d)).toHaveLength(162)
+    expect(deriveRules(d)).toHaveLength(193)
   })
 
   it('takes the shorter pending period and the queue severity', () => {

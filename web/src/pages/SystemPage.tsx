@@ -17,10 +17,11 @@ import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Skeleton } from '@/components/ui/skeleton'
-import { ApiError, useDeleteSystem, useRuleStates, useSaveSystem, useStacks, useSystem, useSystems, useTelegram, useEmail, validateSystem, type Issue, type SystemResponse } from '@/lib/api'
+import { ApiError, useAlerts, useDeleteSystem, useRuleStates, useSaveSystem, useStacks, useSystem, useSystems, useTelegram, useEmail, validateSystem, type Issue, type SystemResponse } from '@/lib/api'
 import { t as tCurrent, useT } from '@/i18n'
 import { EditorContext, useDebounced, type EditorState } from '@/lib/editor'
 import { systemStateText } from '@/lib/format'
+import { systemIncidents } from '@/lib/incidents'
 import { edit as editDraft, initDraft, isDirty, markSaved, setText, type Draft } from '@/lib/model/draft'
 import { deriveDestinations } from '@/lib/model/routing'
 import { getStack } from '@/lib/model/stack'
@@ -85,6 +86,8 @@ function Editor({ data }: { data: SystemResponse }) {
   const em = useEmail()
   const systems = useSystems()
   const summary = systems.data?.systems.find((s) => s.id === id)
+  // The shell's alert counter keeps this query alive, so reading it here sends no extra request.
+  const incidents = systemIncidents(useAlerts().data, id)
   const stacks = useStacks()
 
   // Validate the draft with the core (debounced): the same check as on save.
@@ -168,7 +171,7 @@ function Editor({ data }: { data: SystemResponse }) {
         <div className="flex min-w-0 items-center gap-2">
           <h1 className="truncate text-base font-semibold md:text-lg">{data.name}</h1>
           {summary && (
-            <StatePill state={summary.state}>{systemStateText(summary)}</StatePill>
+            <StatePill state={summary.state}>{systemStateText(summary, incidents)}</StatePill>
           )}
         </div>
         <div className="order-last flex w-full gap-0.5 rounded-lg bg-muted p-0.5 sm:order-none sm:ml-2 sm:w-auto">

@@ -139,13 +139,16 @@ func TestInhibitRulesMuteCallersAlongTheChain(t *testing.T) {
 		alert("shop", "frontend-proxy", rules.AlertLatencyAboveNormal, "warning"), // 4 chain, warning: muted by critical
 		alert("shop", "checkout", rules.AlertMemoryNearLimit, "critical"),         // 5 resource alert: kept
 		alert("shop", "checkout", rules.AlertOOMKilled, "critical"),               // 6 resource alert: kept
-		alert("shop", "checkout", rules.AlertSLOBurnFast, "critical"),             // 7 SLO alert: kept
+		alert("shop", "checkout", rules.AlertSLOBurnFast, "critical"),             // 7 SLO burn of a caller: muted
 		alert("shop", "checkout", rules.AlertQueueConsumerStopped, "critical"),    // 8 queue alert: kept
 		alert("shop", "ad", rules.AlertErrorRate, "warning"),                      // 9 unrelated: kept
 		alert("other", "checkout", rules.AlertErrorRate, "critical"),              // 10 another system: kept
+		alert("shop", "checkout", rules.AlertServiceTelemetryMissing, "critical"), // 11 no data: kept
+		alert("shop", "checkout", rules.AlertNoReadyPods, "critical"),             // 12 own cause of a caller: kept
+		alert("shop", "frontend", rules.AlertSLOBurnSlow, "warning"),              // 13 SLO burn up the chain: muted
 	}
 	got := inhibited(rs, alerts)
-	want := map[int]bool{1: true, 2: true, 3: true, 4: true}
+	want := map[int]bool{1: true, 2: true, 3: true, 4: true, 7: true, 13: true}
 	for i := range alerts {
 		if got[i] != want[i] {
 			t.Errorf("alert %d (%s %s %s): muted=%v, want %v", i, alerts[i][LabelSystem], alerts[i][rules.LabelService], alerts[i]["alertname"], got[i], want[i])
@@ -175,6 +178,9 @@ func TestInhibitRulesNeverSelfInhibit(t *testing.T) {
 	}
 	for _, s := range []*v1alpha1.SystemDescription{sd, shop(nil)} {
 		for i, r := range inhibitRulesOf(t, s) {
+			if isNoDataRule(r) {
+				continue
+			}
 			var src string
 			var dst *regexp.Regexp
 			for _, m := range r.SourceMatch {
@@ -233,8 +239,11 @@ func TestInhibitRulesSwitchOff(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := b.AlertmanagerConfig["inhibitRules"]; ok {
-		t.Error("groupByCause: false still generates inhibit rules")
+	raw, _ := json.Marshal(b.AlertmanagerConfig["inhibitRules"])
+	var left []amInhibitRule
+	_ = json.Unmarshal(raw, &left)
+	if len(left) != 1 || !isNoDataRule(left[0]) {
+		t.Errorf("groupByCause: false must leave only the system no-data rule: %+v", left)
 	}
 	if rs := inhibitRulesOf(t, shop(nil)); len(rs) == 0 {
 		t.Error("no inhibit rules by default")
@@ -250,8 +259,8 @@ func TestInhibitRulesOtelDemo(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if b.RuleCount != 164 {
-		t.Errorf("rule count = %d, want 164", b.RuleCount)
+	if b.RuleCount != 195 {
+		t.Errorf("rule count = %d, want 195", b.RuleCount)
 	}
 	var callers []string
 	for _, r := range inhibitRulesOf(t, sd) {
@@ -268,6 +277,70 @@ func TestInhibitRulesOtelDemo(t *testing.T) {
 	sort.Strings(callers)
 	if strings.Join(callers, ",") != "checkout,checkout" {
 		t.Errorf("payment mutes %v, want checkout (two severity rules)", callers)
+	}
+}
+
+func isNoDataRule(r amInhibitRule) bool {
+	for _, m := range r.SourceMatch {
+		if m.Name == "alertname" && m.Value == rules.AlertTelemetryMissing {
+			return true
+		}
+	}
+	return false
+}
+
+func systemAlert(sys, name string) map[string]string {
+	a := alert(sys, "", name, "critical")
+	delete(a, rules.LabelService)
+	return a
+}
+
+func TestInhibitRulesNoData(t *testing.T) {
+	rs := inhibitRulesOf(t, shop(nil))
+	alerts := []map[string]string{
+		systemAlert("shop", rules.AlertTelemetryMissing),                         // 0 system: kept
+		alert("shop", "payment", rules.AlertServiceTelemetryMissing, "critical"), // 1 muted by the system alert
+		alert("shop", "cart", rules.AlertServiceTelemetryMissing, "warning"),     // 2 muted by the system alert
+		alert("shop", "checkout", rules.AlertErrorRate, "critical"),              // 3 not a no-data alert: kept
+		alert("other", "cart", rules.AlertServiceTelemetryMissing, "warning"),    // 4 another system: kept
+	}
+	got := inhibited(rs, alerts)
+	want := map[int]bool{1: true, 2: true}
+	for i := range alerts {
+		if got[i] != want[i] {
+			t.Errorf("alert %d (%v): muted=%v, want %v", i, alerts[i], got[i], want[i])
+		}
+	}
+	// Without the system alert, a per-service no-data alert is never muted, and it never mutes callers.
+	alerts = []map[string]string{
+		alert("shop", "payment", rules.AlertServiceTelemetryMissing, "critical"),
+		alert("shop", "checkout", rules.AlertErrorRate, "critical"),
+		alert("shop", "checkout", rules.AlertSLOBurnFast, "critical"),
+		alert("shop", "payment", rules.AlertNoReadyPods, "critical"),
+	}
+	if got := inhibited(rs, alerts); got[0] || got[3] || !got[1] || !got[2] {
+		t.Errorf("muted = %v, want the caller's error and SLO alerts only (by no ready pods)", got)
+	}
+	alerts = alerts[:3]
+	if got := inhibited(rs, alerts); len(got) != 0 {
+		t.Errorf("a no-data alert muted %v", got)
+	}
+	// The SLO burn alert of a caller is only a target: it mutes nothing.
+	alerts = []map[string]string{
+		alert("shop", "checkout", rules.AlertSLOBurnFast, "critical"),
+		alert("shop", "frontend", rules.AlertErrorRate, "critical"),
+	}
+	if got := inhibited(rs, alerts); len(got) != 0 {
+		t.Errorf("an SLO alert muted %v", got)
+	}
+
+	off := false
+	sd := shop(nil)
+	sd.Spec.NoData = &v1alpha1.SystemNoDataPolicy{Enabled: &off}
+	for _, r := range inhibitRulesOf(t, sd) {
+		if isNoDataRule(r) {
+			t.Error("system no-data alert off, its inhibit rule stays")
+		}
 	}
 }
 

@@ -72,6 +72,9 @@ func (m Meta) rule(alert string, signal Signal, expr string, extra map[string]st
 	for k, v := range extra {
 		lbls[k] = v
 	}
+	if m.Service == "" {
+		delete(lbls, LabelService)
+	}
 	return rulefmt.Rule{
 		Alert:  alert,
 		Expr:   expr,
@@ -297,6 +300,7 @@ type PodTarget struct {
 	RestartsMetric   string
 	LimitsMetric     string // kube-state-metrics container limits, "resource" label memory/cpu
 	TerminatedMetric string // kube-state-metrics last termination reason, "reason" label
+	ReadyMetric      string // kube-state-metrics pod readiness, "condition" label
 	NamespaceLabel   string
 	PodLabel         string
 	ContainerLabel   string

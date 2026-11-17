@@ -131,3 +131,72 @@ func TestFollowUpWorth(t *testing.T) {
 		}
 	}
 }
+
+func likelyFollowUp() *FollowUp {
+	at := func(h, m int) time.Time { return time.Date(2026, 11, 16, h, m, 0, 0, time.UTC) }
+	return &FollowUp{
+		System: "shop",
+		Window: 30 * time.Minute,
+		Roots:  []RootEvidence{{Service: "checkout", Title: "SLO error budget burns fast", Since: at(4, 16)}},
+		Likely: []LikelyCause{{
+			Service: "payment", Of: "checkout",
+			Observed: []Observation{{Alert: rules.AlertNoReadyPods}, {Alert: rules.AlertRequestsStopped, Pending: true}},
+			Evidence: RootEvidence{Service: "payment", Changes: WorkloadChanges{
+				Rollouts: []Rollout{{Workload: "payment", At: at(4, 14), OldImage: "v1.4.2", NewImage: "v1.4.3"}},
+			}},
+		}},
+	}
+}
+
+func TestRenderFollowUpLikelyCause(t *testing.T) {
+	f := likelyFollowUp()
+	if !f.Worth() {
+		t.Fatal("a likely cause is worth a message")
+	}
+	en := RenderFollowUp(f, rules.LanguageEnglish, "Asia/Almaty").TelegramHTML
+	for _, want := range []string{
+		"Alert: <b>checkout</b> (checkout: SLO error budget burns fast since 09:16 UTC+5).\n",
+		"Likely cause: <b>payment</b>, called by checkout (observed now: No ready pods; Requests stopped arriving (alert pending)). Its own alerts have not fired yet.\n",
+		"What changed in <b>payment</b> in the last 30 min: new version at 09:14 UTC+5 (v1.4.2 -> v1.4.3).\n",
+	} {
+		if !strings.Contains(en, want) {
+			t.Errorf("english lacks %q:\n%s", want, en)
+		}
+	}
+	ru := RenderFollowUp(f, rules.LanguageRussian, "Asia/Almaty").EmailText
+	for _, want := range []string{
+		"Оповещение: checkout (checkout: SLO error budget burns fast с 09:16 UTC+5).\n",
+		"Вероятно, причина в payment, его вызывает checkout (сейчас видно: Нет готовых подов; Запросы перестали поступать (оповещение ожидает срабатывания)). Его собственные оповещения ещё не сработали.\n",
+	} {
+		if !strings.Contains(ru, want) {
+			t.Errorf("russian lacks %q:\n%s", want, ru)
+		}
+	}
+
+	sum := Summarize(f, rules.LanguageEnglish, "Asia/Almaty", time.Date(2026, 11, 16, 4, 20, 30, 999, time.UTC))
+	if !sum.Likely || sum.Cause != "payment: No ready pods; Requests stopped arriving (alert pending)" ||
+		len(sum.Changes) != 1 || sum.Changes[0] != "new version at 09:14 UTC+5 (v1.4.2 -> v1.4.3)" ||
+		!sum.CollectedAt.Equal(time.Date(2026, 11, 16, 4, 20, 30, 0, time.UTC)) {
+		t.Errorf("summary = %+v", sum)
+	}
+}
+
+func TestRenderFollowUpExplainsEarlierAlert(t *testing.T) {
+	f := sampleFollowUp()
+	f.Alerting, f.Affected = nil, nil
+	f.Explains, f.ExplainsSince = []string{"checkout", "frontend"}, time.Date(2026, 11, 16, 4, 16, 0, 0, time.UTC)
+	en := RenderFollowUp(f, rules.LanguageEnglish, "Asia/Almaty").TelegramHTML
+	if !strings.Contains(en, "Probable cause: <b>payment</b>") || !strings.Contains(en, "This explains the earlier alert about <b>checkout</b> and <b>frontend</b> (since 09:16 UTC+5).\n") {
+		t.Errorf("english:\n%s", en)
+	}
+	ru := RenderFollowUp(f, rules.LanguageRussian, "Asia/Almaty").EmailText
+	if !strings.Contains(ru, "Это причина более раннего оповещения о checkout и frontend (с 09:16 UTC+5).\n") {
+		t.Errorf("russian:\n%s", ru)
+	}
+	sum := Summarize(f, rules.LanguageRussian, "Asia/Almaty", time.Now())
+	if sum.Likely || sum.Cause != "payment: Requests stopped arriving с 09:18 UTC+5" || sum.Operation != "oteldemo.PaymentService/Charge" ||
+		sum.OperationFailures != 42 || sum.LogLine != "card declined: <upstream> timeout" || sum.TracesURL == "" ||
+		len(sum.Changes) != 4 || sum.Changes[2] != "не готовы подов: 1 из 2" || len(sum.Explains) != 2 {
+		t.Errorf("summary = %+v", sum)
+	}
+}

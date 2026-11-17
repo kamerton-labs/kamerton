@@ -3,10 +3,12 @@
 
 // Active alerts of all systems, optionally filtered by ?alertname=&service=
 // (the "Open in Kamerton" link of notifications points here) and ?system=.
+// Incidents come first; alerts that belong to none keep their own cards.
 
 import { useMemo } from 'react'
 import { ChevronRight } from 'lucide-react'
 import { Link, useSearchParams } from 'react-router'
+import IncidentBlock from '@/components/alerts/IncidentBlock'
 import { Page, SeverityBadge } from '@/components/common'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
@@ -14,17 +16,13 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { useAlerts, type ActiveAlert } from '@/lib/api'
 import { useT } from '@/i18n'
 import { dateTime, sinceText } from '@/lib/format'
-
-function runbookLink(a: ActiveAlert) {
-  const tail = `runbooks/${encodeURIComponent(a.service)}/${encodeURIComponent(a.name)}`
-  return a.system ? `/systems/${encodeURIComponent(a.system)}/${tail}` : `/${tail}`
-}
+import { groupAlerts, runbookHref, serviceHref } from '@/lib/incidents'
 
 function AlertCard({ a }: { a: ActiveAlert }) {
   const sev = a.severity === 'critical' ? 'critical' : 'warning'
   const { t } = useT()
   return (
-    <div className={`space-y-3 rounded-xl border bg-card p-4 ${sev === 'critical' ? 'border-firing/40' : ''}`}>
+    <div data-testid="alert-card" className={`space-y-3 rounded-xl border bg-card p-4 ${sev === 'critical' ? 'border-firing/40' : ''}`}>
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div className="min-w-0 space-y-1">
           <div className="flex flex-wrap items-center gap-2">
@@ -33,8 +31,8 @@ function AlertCard({ a }: { a: ActiveAlert }) {
           </div>
           <div className="text-sm text-muted-foreground">
             {a.system && (
-              <Link className="underline-offset-2 hover:underline" to={`/systems/${encodeURIComponent(a.system)}?service=${encodeURIComponent(a.service)}`}>
-                {a.system} · {a.service}
+              <Link className="underline-offset-2 hover:underline" to={serviceHref(a.system, a.service)}>
+                {a.service ? `${a.system} · ${a.service}` : a.system}
               </Link>
             )}
             {!a.system && a.service}
@@ -43,7 +41,7 @@ function AlertCard({ a }: { a: ActiveAlert }) {
           </div>
         </div>
         <Button variant="outline" size="sm" asChild>
-          <Link to={runbookLink(a)}>{t('alerts.runbook')}</Link>
+          <Link to={runbookHref(a.system, a.service, a.name)}>{t('alerts.runbook')}</Link>
         </Button>
       </div>
       {(a.value || a.threshold) && (
@@ -96,13 +94,7 @@ export default function AlertsPage() {
   const system = params.get('system') ?? ''
   const alerts = useAlerts()
   const { t } = useT()
-  const list = useMemo(
-    () =>
-      (alerts.data?.alerts ?? [])
-        .filter((a) => (!alertname || a.name === alertname) && (!service || a.service === service) && (!system || a.system === system))
-        .sort((a, b) => (a.severity === b.severity ? Date.parse(b.startsAt) - Date.parse(a.startsAt) : a.severity === 'critical' ? -1 : 1)),
-    [alerts.data, alertname, service, system],
-  )
+  const { incidents, others } = useMemo(() => groupAlerts(alerts.data, { alertname, service, system }), [alerts.data, alertname, service, system])
   const filtered = Boolean(alertname || service || system)
   const runbook = service ? `/runbooks/${encodeURIComponent(service)}${alertname ? `/${encodeURIComponent(alertname)}` : ''}` : ''
 
@@ -146,16 +138,33 @@ export default function AlertsPage() {
             </Link>
           </AlertDescription>
         </Alert>
-      ) : list.length === 0 ? (
-        <div className="rounded-xl border border-dashed p-8 text-center">
+      ) : incidents.length + others.length === 0 ? (
+        <div className="rounded-xl border border-dashed p-8 text-center" data-testid="alerts-empty">
           <p className="text-base font-medium">{filtered ? t('alerts.emptyFiltered') : t('alerts.empty')}</p>
           <p className="mt-1 text-sm text-muted-foreground">{filtered ? t('alerts.emptyFilteredHint') : t('alerts.emptyHint')}</p>
         </div>
       ) : (
-        <div className="space-y-3">
-          {list.map((a, i) => (
-            <AlertCard key={`${a.name}-${a.system}-${a.service}-${i}`} a={a} />
-          ))}
+        <div className="space-y-6">
+          {incidents.length > 0 && (
+            <div className="space-y-3" data-testid="incidents">
+              {incidents.map((inc) => (
+                <IncidentBlock
+                  key={inc.id}
+                  inc={inc}
+                  openAffected={Boolean(service) && inc.affected.includes(service)}
+                  systemText={alerts.data?.alerts.find((a) => a.incident === inc.id && !a.service && a.text)?.text}
+                />
+              ))}
+            </div>
+          )}
+          {others.length > 0 && (
+            <div className="space-y-3" data-testid="alerts-other">
+              {incidents.length > 0 && <h2 className="text-sm font-medium text-muted-foreground">{t('incident.otherAlerts')}</h2>}
+              {others.map((a, i) => (
+                <AlertCard key={`${a.name}-${a.system}-${a.service}-${i}`} a={a} />
+              ))}
+            </div>
+          )}
         </div>
       )}
     </Page>

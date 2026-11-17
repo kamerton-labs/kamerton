@@ -220,3 +220,19 @@ func TestSafeBaseURL(t *testing.T) {
 var testNow = time.Date(2026, 11, 16, 4, 0, 0, 0, time.UTC)
 
 var utc = newZoneClock("", testNow)
+
+func TestTelegramMessageOfSystemAlert(t *testing.T) {
+	d := sampleData(1, "firing")
+	delete(d.CommonLabels, "service")
+	d.Alerts[0].Labels = kv{"alertname": rules.AlertTelemetryMissing, "severity": "critical"}
+	d.Alerts[0].Annotations = kv{rules.AnnotationTitle: "Kamerton cannot see the system: no data arrives", AnnotationMessageText: "Until data returns no other alert can fire."}
+	out := execHTML(t, buildMessages(rules.LanguageEnglish, "", newZoneClock("", testNow)).TelegramHTML, d)
+	checkTelegramHTML(t, out)
+	if !strings.Contains(out, "🔴 Kamerton cannot see the system: no data arrives\n") || strings.Contains(out, "<b></b>") || !strings.Contains(out, "Until data returns") {
+		t.Errorf("system alert message:\n%s", out)
+	}
+	d = sampleData(1, "firing")
+	if out := execHTML(t, buildMessages(rules.LanguageEnglish, "", newZoneClock("", testNow)).TelegramHTML, d); !strings.Contains(out, "🔴 <b>checkout</b>: Много ошибочных запросов") {
+		t.Errorf("service alert message:\n%s", out)
+	}
+}

@@ -516,18 +516,26 @@ func (s *Server) alertsFor(w http.ResponseWriter, r *http.Request, snap *descsto
 		bySystem[sys] = append(bySystem[sys], triageAlert(a))
 	}
 	sort.Strings(systems)
-	incidents := []triage.Incident{}
-	incidentOf := map[string]string{} // system + service -> incident ID
+	incidents := []incidentView{}
+	incidentOf := map[string]string{} // system + service -> incident ID; service "" is the system itself
 	for _, sys := range systems {
 		g := graphs[sys]
 		if g == nil {
 			g = triage.NewGraph(&v1alpha1.SystemDescriptionSpec{})
 		}
 		for _, inc := range g.Incidents(sys, bySystem[sys]) {
-			for _, svc := range append(append([]string{}, inc.Roots...), inc.Affected...) {
-				incidentOf[sys+"\x00"+svc] = inc.ID
+			if len(inc.Roots) == 0 {
+				incidentOf[sys+"\x00"] = inc.ID // its affected services keep their other alerts elsewhere
+			} else {
+				for _, svc := range append(append([]string{}, inc.Roots...), inc.Affected...) {
+					incidentOf[sys+"\x00"+svc] = inc.ID
+				}
 			}
-			incidents = append(incidents, inc)
+			v := incidentView{Incident: inc}
+			if s.opts.FollowUp != nil {
+				v.Evidence = s.opts.FollowUp.Evidence(inc.ID)
+			}
+			incidents = append(incidents, v)
 		}
 	}
 	out := make([]alertView, 0, len(raw))
@@ -550,6 +558,9 @@ func (s *Server) alertsFor(w http.ResponseWriter, r *http.Request, snap *descsto
 			v.Triage = &f
 		}
 		v.Incident = incidentOf[v.System+"\x00"+v.Service]
+		if id, ok := incidentOf[v.System+"\x00"]; ok && v.Name == rules.AlertServiceTelemetryMissing {
+			v.Incident = id
+		}
 		if v.Muted {
 			muted = append(muted, v)
 			continue
@@ -561,6 +572,13 @@ func (s *Server) alertsFor(w http.ResponseWriter, r *http.Request, snap *descsto
 		resp["unreachable"] = partial
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// incidentView adds the evidence the follow-up collected for the incident (in
+// this replica's memory) to the fields of triage.Incident.
+type incidentView struct {
+	triage.Incident
+	Evidence *generator.EvidenceSummary `json:"evidence,omitempty"`
 }
 
 func triageAlert(a alertmanager.Alert) triage.Alert {

@@ -144,3 +144,66 @@ func TestIncidentsUnknownService(t *testing.T) {
 		t.Errorf("no alerts: %v", incs)
 	}
 }
+
+func TestIncidentsSourcesAndTargets(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		alerts []Alert
+		want   string
+	}{
+		{"no ready pods of a dependency explains the caller's SLO burn", []Alert{
+			a("payment", rules.AlertNoReadyPods, 0, false),
+			a("checkout", rules.AlertSLOBurnFast, 1, true),
+			// checkout's SLO alert is no source, so frontend's is not muted (as in Alertmanager).
+			a("frontend", rules.AlertSLOBurnSlow, 2, false),
+		}, "[payment]<-[checkout] [frontend]<-[]"},
+		{"an SLO burn explains nothing: both stay roots", []Alert{
+			a("payment", rules.AlertSLOBurnFast, 0, false),
+			a("checkout", rules.AlertSLOBurnFast, 1, false),
+		}, "[payment]<-[] [checkout]<-[]"},
+		{"a caller without ready pods has a cause of its own", []Alert{
+			a("payment", rules.AlertRequestsStopped, 0, false),
+			a("checkout", rules.AlertNoReadyPods, 1, false),
+			a("checkout", rules.AlertErrorRate, 1, true),
+		}, "[payment]<-[] [checkout]<-[]"},
+		{"a service without data neither explains nor is explained", []Alert{
+			a("payment", rules.AlertServiceTelemetryMissing, 0, false),
+			a("checkout", rules.AlertErrorRate, 1, false),
+		}, "[payment]<-[] [checkout]<-[]"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := summary(graph().Incidents("shop", tc.alerts)); got != tc.want {
+				t.Errorf("incidents %s, want %s", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestIncidentsSystemWide(t *testing.T) {
+	sys := a("", rules.AlertTelemetryMissing, 2, false)
+	alerts := []Alert{
+		sys,
+		a("payment", rules.AlertServiceTelemetryMissing, 0, true),
+		a("cart", rules.AlertServiceTelemetryMissing, 1, true),
+		a("cart", rules.AlertMemoryNearLimit, 1, false),
+	}
+	incs := graph().Incidents("shop", alerts)
+	if got := summary(incs); got != "[cart]<-[] []<-[cart payment]" {
+		t.Fatalf("incidents %s", got)
+	}
+	wide := IncidentOf(incs, "")
+	if wide == nil || wide.ID != "shop:_system" || len(wide.RootAlerts) != 1 || wide.RootAlerts[0].Name != rules.AlertTelemetryMissing ||
+		!wide.StartsAt.Equal(sys.StartsAt) || len(wide.AffectedAlerts) != 2 || wide.Roots == nil {
+		t.Errorf("system incident = %+v", wide)
+	}
+	if inc := IncidentOf(incs, "cart"); inc == nil || inc.ID != "shop:cart" || len(inc.RootAlerts) != 1 {
+		t.Errorf("cart keeps its other alert in its own incident: %+v", inc)
+	}
+	// Without the system alert the per-service ones are roots.
+	if got := summary(graph().Incidents("shop", alerts[1:])); got != "[payment]<-[] [cart]<-[]" {
+		t.Errorf("incidents %s", got)
+	}
+	if IncidentOf(graph().Incidents("shop", alerts[1:]), "") != nil {
+		t.Error("a system incident without a system alert")
+	}
+}
