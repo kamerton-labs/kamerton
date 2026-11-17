@@ -241,6 +241,93 @@ person on call hears about missing data about 5 minutes after the last
 sample. If Prometheus loses its storage, "before" is lost with it and the
 rules arm again once data arrives.
 
+## Services without OpenTelemetry
+
+Almost every rule reads span metrics, which the Collector derives from
+traces. A service that sends no traces gets little from Kamerton. The chart
+can install [OpenTelemetry eBPF Instrumentation](https://opentelemetry.io/docs/zero-code/obi/)
+(OBI, Apache-2.0, formerly Grafana Beyla) for such services. It is off by
+default:
+
+```sh
+helm upgrade kamerton ./deploy/helm/kamerton -n kamerton --reuse-values \
+  --set autoInstrument.enabled=true
+```
+
+**What it is.** A DaemonSet (`kamerton-auto-instrument`, OBI v1.0.0) that
+attaches eBPF probes in the kernel and in the processes on its node, without
+code changes or restarts. It sends the calls it sees as OTLP traces to
+Kamerton's Collector. The Collector turns them into the same series as SDK
+traces (`traces_span_metrics_calls_total`, `..._duration_milliseconds_bucket`
+with `service_name`, `span_name`, `span_kind`, `status_code`), so the
+rules, the dashboards and "found in telemetry" work unchanged.
+
+**What it needs.** Linux 5.8+ with BTF (`ls /sys/kernel/btf/vmlinux`), amd64
+or arm64. On every node the pod runs with `hostPID: true`, as UID 0, with the
+capabilities `BPF`, `PERFMON`, `SYS_PTRACE`, `DAC_READ_SEARCH`,
+`CHECKPOINT_RESTORE` and `NET_RAW` (all others dropped), a read-only root
+filesystem, no host paths and not on the host network. Some kernels and
+security policies still block it (for example `kernel.perf_event_paranoid`
+above 2); then set `opentelemetry-ebpf-instrumentation.privileged=true`,
+which makes it a privileged container. Its namespace must allow such pods
+(Pod Security level `privileged`). It reads pods, services, nodes and
+ReplicaSets in all namespaces. Requests 100m CPU and 256Mi, memory limit 1Gi.
+
+**What it sees.** HTTP/1, HTTP/2, gRPC, also Kafka, NATS, MQTT, Redis,
+Memcached, PostgreSQL, MySQL and others, in Go, Java, .NET, Python, Ruby,
+Node.js, Rust and C/C++ programs. TLS is seen in Go programs and in programs
+that use OpenSSL, without decrypting traffic. By default it observes every
+namespace except `kube-system` and Kamerton's own
+(`autoInstrument.namespaces.include` / `exclude`); a pod annotated
+`kamerton.dev/auto-instrument: "false"` is left out.
+
+**What it cannot see.** Business operations inside a process, custom
+attributes, encrypted traffic of runtimes it has no hook for, and the method
+of a gRPC connection opened before the agent started (span name `grpc` until
+the client reconnects: restart those workloads once). A request that gets no
+response at all (timeout, reset) is not counted as an error.
+
+**Differences from SDK span metrics**, all handled without changing the rules:
+
+- Service name: `OTEL_SERVICE_NAME` / `OTEL_RESOURCE_ATTRIBUTES` of the
+  process if set, else the pod annotation
+  `resource.opentelemetry.io/service.name`, else the label
+  `app.kubernetes.io/name`, else the Deployment (StatefulSet, DaemonSet, ...)
+  name. "Found in telemetry" shows that name. If it differs from the name in
+  your description, set `telemetryName` on the service, or put the annotation
+  on the pod template.
+- Span names: gRPC is `package.Service/Method`, as with SDKs. HTTP is
+  `METHOD /path` where numbers and IDs become `*` (`GET /orders/*`), while
+  SDKs usually report the route template (`GET /orders/{id}`). Operation
+  names in a description (`operations`, `excludeOperations`) must
+  use the agent's form, or set `autoInstrument.httpRoutes.patterns` to the
+  templates. Requests to `/metrics`, `/healthz`, `/readyz` and `/livez` are
+  not recorded (`autoInstrument.httpRoutes.ignored`).
+- Status: server spans are errors on HTTP 5xx and on the gRPC codes the
+  OpenTelemetry conventions list (UNKNOWN, DEADLINE_EXCEEDED, UNIMPLEMENTED,
+  INTERNAL, UNAVAILABLE, DATA_LOSS), the same as SDKs.
+- Duration starts when the request reaches the socket, so it can be slightly
+  longer than the SDK's.
+
+**Counted twice?** Services that already send OpenTelemetry are left out by
+default (`autoInstrument.skipSDKInstrumented`): pods injected by the
+OpenTelemetry Operator, and processes that the agent has seen making a
+successful OTLP export. The second check reacts to traffic, so the first
+requests of such a service are counted twice, and it can miss a service whose
+SDK sends every signal over one gRPC connection that the agent cannot decode
+(seen with Python `grpcio`; [details](https://github.com/open-telemetry/opentelemetry-ebpf-instrumentation/blob/v1.0.0/devdocs/exclude-otel-instrumented-services.md)).
+Check after turning it on: the query lists services the agent reports
+(`job` is `<service.namespace>/<service.name>`). A service that appears there
+and also sends with its SDK is counted twice; annotate its pods
+`kamerton.dev/auto-instrument: "false"`.
+
+```promql
+count by (job) (target_info{telemetry_distro_name="opentelemetry-ebpf-instrumentation"})
+```
+
+Settings are read when the agent starts: after changing `autoInstrument`
+values run `kubectl -n kamerton rollout restart daemonset/kamerton-auto-instrument`.
+
 ## Configuration
 
 ### Sets of programs
@@ -552,6 +639,8 @@ Not done yet, or known limits:
   Alertmanager's webhook: after a restart, or from another replica, an
   incident shows none until its next follow-up.
 - No chart repository yet: the chart is installed from a clone.
+- eBPF auto-instrumentation (`autoInstrument`) is rendered and linted but not
+  yet tried on a live cluster.
 
 ## Contributing and security
 

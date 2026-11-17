@@ -30,6 +30,18 @@ All notable changes to Kamerton are listed here. The format follows
   from chats that receive the system's alerts. Verdicts also come from
   `POST /api/v1/systems/{id}/noise/feedback`. Counters only, in the
   ConfigMap `kamerton-noise-state` (memory without a cluster).
+- Services without OpenTelemetry: optional eBPF auto-instrumentation in the
+  Helm chart, off by default (`autoInstrument.enabled`). It installs
+  OpenTelemetry eBPF Instrumentation v1.0.0 (chart
+  `opentelemetry-ebpf-instrumentation` 0.16.1) as a DaemonSet that sends
+  traces of HTTP/gRPC calls to Kamerton's Collector, so uninstrumented
+  services get the same span metrics, rules and "found in telemetry" entry
+  as instrumented ones. Scope with `autoInstrument.namespaces.include` /
+  `exclude` (default: all but `kube-system` and Kamerton's own namespace) and
+  the pod annotation `kamerton.dev/auto-instrument: "false"`; services that
+  already send OpenTelemetry are left out by default
+  (`autoInstrument.skipSDKInstrumented`). Needs `hostPID` and the
+  capabilities listed in SECURITY.md.
 - One message per incident: generated AlertmanagerConfigs carry inhibit
   rules built from `dependsOn`. While a service has an error, latency or
   "requests stopped" alert, the same kinds of alerts of the services that

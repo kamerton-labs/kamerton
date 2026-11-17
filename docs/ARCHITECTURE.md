@@ -34,6 +34,47 @@ flowchart TD
 
 Installed alongside as pinned Helm dependencies: OpenTelemetry Collector,
 Prometheus Operator and Prometheus, Alertmanager, Grafana, Loki, Tempo.
+Optional and off by default: OpenTelemetry eBPF Instrumentation
+(`autoInstrument.enabled`), see below.
+
+## Services without an SDK (eBPF)
+
+```mermaid
+flowchart LR
+    S["uninstrumented pod"] -. "kernel / uprobes" .-> O["OBI DaemonSet<br/>kamerton-auto-instrument"]
+    O -- "OTLP/gRPC traces" --> C["Kamerton's Collector"]
+    K["pod with an SDK"] -- "OTLP traces" --> C
+    C -- "spanmetrics connector" --> P[("Prometheus<br/>traces_span_metrics_*")]
+    C --> T[("Tempo")]
+```
+
+The agent exports traces only, never metrics, into the same Collector
+pipeline as SDK traces. The spanmetrics connector produces identical metric
+names and labels (`service_name`, `span_name`, `span_kind`, `status_code`)
+for both sources, so neither the rules, discovery nor the Collector
+configuration change. OBI's own span metrics (`application_span_otel`) were
+not used: they are a second implementation whose name, unit, buckets and
+labels would all have to match the connector's, while traces match by
+construction and also land in Tempo.
+
+The agent's configuration file is rendered by the Kamerton chart
+(`templates/auto-instrument.yaml`) from the `autoInstrument` values; the
+upstream chart only runs the DaemonSet. Capture rules, in OBI's Config v2:
+exclude the agent and collector binaries, the release namespace and
+`namespaces.exclude`, pods annotated `kamerton.dev/auto-instrument: "false"`,
+pods injected by the OpenTelemetry Operator and processes seen exporting OTLP
+(`skipSDKInstrumented`); include `namespaces.include` (all by default).
+Exclusions win over inclusions in OBI regardless of order. Because the
+ConfigMap belongs to the parent chart, the upstream checksum annotation does
+not change with it: the DaemonSet must be restarted after a change.
+
+Where the series differ from SDK ones: the service name comes from
+`OTEL_SERVICE_NAME`, then pod annotation, then `app.kubernetes.io/name`, then
+the owner workload name; HTTP span names use a path heuristic (`GET
+/orders/*`) unless `httpRoutes.patterns` are set; a request with no response
+is not an error; server spans of Redis, PostgreSQL and MySQL servers appear
+as services of kind server. Details and the duplicate check are in the
+README ("Services without OpenTelemetry").
 
 ## Single source of truth
 
