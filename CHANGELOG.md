@@ -30,6 +30,12 @@ All notable changes to Kamerton are listed here. The format follows
   per system; Helm values `incidents.followUp.enabled`,
   `incidents.followUp.workloadRead`, `incidents.grafanaExternalURL`.
 
+### Fixed
+
+- The bundled Prometheus accepts samples up to 30 minutes late
+  (`tsdb.outOfOrderTimeWindow`). Before, one late sample made it reject the
+  Collector's whole write request and span metrics stopped arriving.
+
 ## [0.1.0] - 2026-11-17
 
 First public version.

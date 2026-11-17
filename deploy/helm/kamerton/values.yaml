@@ -219,6 +219,11 @@ kube-prometheus-stack:
       ruleNamespaceSelector: {}
       # The OpenTelemetry Collector writes span metrics via remote write.
       enableRemoteWriteReceiver: true
+      # Accept samples that arrive up to 30 minutes late. Without it one late
+      # sample makes Prometheus reject the Collector's whole write request, and
+      # span metrics stop arriving (seen after a clock jump on the node).
+      tsdb:
+        outOfOrderTimeWindow: 30m
       # Rules are evaluated often so that an alert fires soon after the condition holds.
       evaluationInterval: 15s
       retention: 15d
