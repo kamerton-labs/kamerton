@@ -28,6 +28,7 @@ export function noiseFor(rule: RuleItem, list: NoiseRule[] | undefined): NoiseRu
     ...mine[0],
     fired: sum((x) => x.fired),
     short: sum((x) => x.short),
+    consequences: sum((x) => x.consequences),
     longestSeconds: Math.max(...mine.map((x) => x.longestSeconds ?? 0)),
     feedback: { useful: sum((x) => x.feedback?.useful), noise: sum((x) => x.feedback?.noise) },
     noisy: mine.some((x) => x.noisy),

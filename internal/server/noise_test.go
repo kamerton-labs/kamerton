@@ -20,7 +20,8 @@ import (
 	"github.com/kamerton-labs/kamerton/internal/noise"
 )
 
-// alertHistory answers the ALERTS history query with one flapping rule.
+// alertHistory answers the ALERTS history query with one rule flapping
+// every two hours, and the rule's expression with a two-minute run at each.
 type alertHistory struct{ fail bool }
 
 func (alertHistory) Query(context.Context, string, time.Time) (model.Value, error) {
@@ -31,12 +32,19 @@ func (a alertHistory) QueryRange(_ context.Context, q string, _, end time.Time, 
 	if a.fail {
 		return nil, errors.New("connection refused")
 	}
-	if !strings.HasPrefix(q, "max_over_time(ALERTS{") {
+	history := strings.HasPrefix(q, "max_over_time(ALERTS{")
+	if !history && !strings.Contains(q, `service_name="api"`) {
 		return model.Matrix{}, nil
 	}
 	s := &model.SampleStream{Metric: model.Metric{"alertname": "KamertonErrorRateHigh", "service": "api", "alertstate": "firing", "kamerton_system": "shop"}}
-	for i := 0; i < 6; i++ {
-		t := end.Add(-time.Duration(60-10*i) * time.Hour)
+	if !history {
+		s.Metric = model.Metric{"service_name": "api"}
+	}
+	for i := 0; i < 25; i++ {
+		t := end.Add(-time.Duration(60-2*i) * time.Hour)
+		if !history {
+			s.Values = append(s.Values, model.SamplePair{Timestamp: model.TimeFromUnixNano(t.Add(-step).UnixNano()), Value: 1})
+		}
 		s.Values = append(s.Values, model.SamplePair{Timestamp: model.TimeFromUnixNano(t.UnixNano()), Value: 1})
 	}
 	return model.Matrix{s}, nil
@@ -65,10 +73,10 @@ func TestNoiseReport(t *testing.T) {
 		t.Fatalf("%d %s", code, body)
 	}
 	r := rep.Rules[0]
-	if r.Alert != "KamertonErrorRateHigh" || r.Service != "api" || r.Fired != 6 || r.Short != 6 || !r.Noisy || r.LastFiredAt == nil {
+	if r.Alert != "KamertonErrorRateHigh" || r.Service != "api" || r.Fired != 25 || r.Short != 25 || r.Consequences != 0 || !r.Noisy || r.LastFiredAt == nil {
 		t.Errorf("rule %+v", r)
 	}
-	for _, field := range []string{`"operation":""`, `"longestSeconds":60`, `"feedback":{"useful":0,"noise":0}`} {
+	for _, field := range []string{`"operation":""`, `"consequences":0`, `"longestSeconds":60`, `"field":"for"`, `"suggested":"2m"`, `"delaySeconds":60`, `"wouldFire":0`, `"feedback":{"useful":0,"noise":0}`} {
 		if !strings.Contains(body, field) {
 			t.Errorf("body lacks %s: %s", field, body)
 		}

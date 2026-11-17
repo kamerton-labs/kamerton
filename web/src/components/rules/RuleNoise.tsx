@@ -5,6 +5,7 @@
 // the core suggests. Advice only: Apply edits the card, saving stays manual.
 
 import { useState } from 'react'
+import { Loader2 } from 'lucide-react'
 import FeedbackButtons from '@/components/alerts/FeedbackButtons'
 import { Button } from '@/components/ui/button'
 import { useT } from '@/i18n'
@@ -19,10 +20,16 @@ export default function RuleNoise({ rule }: { rule: RuleItem }) {
   const { systemId } = useEditor()
   const [range, setRange] = useState<Range>(NOISY_RANGE)
   const q = useNoise(systemId, range)
-  const { t } = useT()
+  const { t, tn } = useT()
   if (!q.data) {
     // An older core has no such endpoint: the card stays as it was.
-    if (!q.isError || (q.error instanceof ApiError && q.error.status === 404)) return null
+    if (q.isError && q.error instanceof ApiError && q.error.status === 404) return null
+    if (!q.isError)
+      return (
+        <p className="flex items-center gap-1.5 text-xs text-muted-foreground" data-testid="rule-noise-loading">
+          <Loader2 className="size-3.5 animate-spin" /> {t('noise.loading')}
+        </p>
+      )
     return <p className="text-xs text-muted-foreground">{t('noise.failed', { error: q.error.message })}</p>
   }
   if (q.data.available === false)
@@ -44,9 +51,14 @@ export default function RuleNoise({ rule }: { rule: RuleItem }) {
       </div>
       {n?.fired ? (
         <Counters n={n} rangeLabel={rangeLabel} shortUnder={q.data.shortUnder} />
-      ) : (
+      ) : !n?.consequences ? (
         <p className="text-sm text-muted-foreground">{t('noise.quiet', { range: rangeLabel })}</p>
-      )}
+      ) : null}
+      {n?.consequences ? (
+        <p className="text-xs text-muted-foreground" data-testid="rule-noise-consequences">
+          {n.fired ? tn('noise.consequences', n.consequences) : tn('noise.consequencesOnly', n.consequences, { range: rangeLabel })}
+        </p>
+      ) : null}
       {n?.suggestion && <Suggestion rule={rule} s={n.suggestion} longFrom={q.data.longFrom} />}
       {n && (
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
@@ -82,6 +94,13 @@ function Marks({ n }: { n: NoiseRule }) {
   )
 }
 
+/** 90 -> "1m30s", the form formatDuration reads. */
+const durationOf = (sec: number) => {
+  const m = Math.floor(sec / 60)
+  const s = Math.round(sec % 60)
+  return (m ? `${m}m` : '') + (s || !m ? `${s}s` : '')
+}
+
 function Suggestion({ rule, s, longFrom }: { rule: RuleItem; s: NoiseSuggestion; longFrom?: string }) {
   const { edit, readOnly, draft } = useEditor()
   const { t, tn } = useT()
@@ -97,6 +116,7 @@ function Suggestion({ rule, s, longFrom }: { rule: RuleItem; s: NoiseSuggestion;
     <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
       <p className="min-w-0 flex-1 text-sm" data-testid="rule-noise-suggestion">
         {effect ? t('noise.suggest', { ...vars, effect }) : t('noise.suggestPlain', vars)}
+        {view.field === 'for' && s.delaySeconds ? <span data-testid="rule-noise-delay"> {t('noise.delay', { d: formatDuration(durationOf(s.delaySeconds)) })}</span> : null}
       </p>
       {patch && !applied && (
         <Button variant="outline" size="xs" disabled={readOnly} onClick={() => edit((d) => setRule(d, rule.id, patch))} data-testid="rule-noise-apply">

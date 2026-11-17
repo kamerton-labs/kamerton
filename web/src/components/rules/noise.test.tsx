@@ -36,14 +36,15 @@ const errorsNoisy: NoiseRule = {
   operation: '',
   fired: 6,
   short: 6,
+  consequences: 0,
   longestSeconds: 60,
   lastFiredAt: '2026-11-17T09:00:00Z',
   feedback: { useful: 1, noise: 5 },
   noisy: true,
-  suggestion: { field: 'threshold', current: '0.05', suggested: '0.063', unit: '', wouldFire: 1, wouldMiss: 0, wouldShort: 0, path: 'errorRate.threshold', format: 'share' },
+  suggestion: { field: 'threshold', current: '0.05', suggested: '0.063', unit: '', wouldFire: 1, wouldMiss: 0, wouldShort: 0, delaySeconds: 0, path: 'errorRate.threshold', format: 'share' },
 }
 
-const forSuggestion = { field: 'for', current: '1m', suggested: '2m', unit: '', wouldFire: 1, wouldMiss: 0, wouldShort: 0, path: 'errorRate.for', format: 'duration' }
+const forSuggestion = { field: 'for', current: '1m', suggested: '2m', unit: '', wouldFire: 1, wouldMiss: 0, wouldShort: 0, delaySeconds: 60, path: 'errorRate.for', format: 'duration' }
 
 const latencyCalm: NoiseRule = { alert: 'KamertonLatencyHigh', service: 'cart', operation: '', fired: 2, short: 0, longestSeconds: 600, feedback: { useful: 0, noise: 0 }, noisy: false }
 
@@ -124,10 +125,84 @@ describe('rules list', () => {
     expect(noisyRules(rules, [errorsNoisy]).map((r) => r.id)).toEqual(['cart/errors'])
   })
 
-  it('explains "noisy" on the marker', () => {
+  it('explains "noisy" in words, with only the bound the report carries', () => {
+    const tip = 'title="Fires several times a day and nearly always clears by itself within 5 min, or people marked it as noise more often than useful"'
+    expect(render(example(), <RulesView />, { data: noise([errorsNoisy]) })).toContain(tip)
+    setLang('ru', false)
     expect(render(example(), <RulesView />, { data: noise([errorsNoisy]) })).toContain(
-      'title="Fired at least 5 times with most cleared within 5 min, or people marked it as noise more often than useful"',
+      'title="Срабатывает по нескольку раз в день и почти всегда проходит само меньше чем за 5 мин, или его чаще отмечали как шум, чем «по делу»"',
     )
+  })
+})
+
+describe('while the report loads', () => {
+  it('keeps the filter without a count and shows a loading row instead of "no rules match"', () => {
+    const html = render(example(), <RulesView />, { url: '/?noisy=1' })
+    expect(html).toContain('data-testid="rules-filter-noisy-loading"')
+    expect(html).not.toMatch(/>Noisy <span[^>]*>0</)
+    expect(html).toContain('data-testid="rules-noisy-loading"')
+    expect(html).toContain('Counting firings…')
+    expect(html).not.toContain('No rules match')
+    const loaded = render(example(), <RulesView />, { url: '/?noisy=1', data: noise([latencyCalm]) })
+    expect(loaded).toContain('No rules match')
+    expect(loaded).not.toContain('rules-noisy-loading')
+  })
+
+  it('shows a quiet loading line in the card, in both languages', () => {
+    const d = example()
+    const html = render(d, <RuleEditor rule={card(d, 'cart/errors')} />)
+    expect(html).toContain('data-testid="rule-noise-loading"')
+    expect(html).toContain('Counting firings…')
+    expect(html).toContain('Holds for at least')
+    setLang('ru', false)
+    expect(render(d, <RuleEditor rule={card(d, 'cart/errors')} />)).toContain('Считаю срабатывания…')
+    expect(render(example(), <RulesView />, { url: '/?noisy=1' })).toContain('Считаю срабатывания…')
+  })
+})
+
+describe('consequences', () => {
+  it('adds a quiet line for firings muted by another service and never marks the rule', () => {
+    const d = example()
+    const html = render(d, <RuleEditor rule={card(d, 'cart/latency')} />, { data: noise([{ ...latencyCalm, fired: 1, consequences: 12 }]) })
+    expect(html).toContain('Fired 1 time in 7 days')
+    expect(html).toContain('12 more firings were muted as consequences of another service&#x27;s failure')
+    expect(render(d, <RulesView />, { data: noise([{ ...latencyCalm, consequences: 30 }]) })).not.toContain('rule-noisy')
+  })
+
+  it('shows only that line for a rule that has only consequences', () => {
+    const d = example()
+    const only = { ...latencyCalm, fired: 0, short: 0, consequences: 3, noisy: false }
+    const html = render(d, <RuleEditor rule={card(d, 'cart/latency')} />, { data: noise([only]) })
+    expect(html).toContain('In 7 days 3 firings were muted as consequences of another service&#x27;s failure')
+    expect(html).not.toContain('Did not fire')
+    expect(html).not.toContain('rule-noise-counts')
+    setLang('ru', false)
+    const ru = render(d, <RuleEditor rule={card(d, 'cart/latency')} />, { data: noise([only]) })
+    expect(ru).toContain('За 7 дней 3 срабатывания заглушены как следствие сбоя другого сервиса')
+    expect(render(d, <RuleEditor rule={card(d, 'cart/latency')} />, { data: noise([{ ...only, fired: 2, consequences: 1 }]) })).toContain(
+      'Ещё 1 срабатывание заглушено как следствие сбоя другого сервиса',
+    )
+  })
+})
+
+describe('delay of a "for" suggestion', () => {
+  const html = (sug: object) => {
+    const d = example()
+    return render(d, <RuleEditor rule={card(d, 'cart/errors')} />, { data: noise([{ ...errorsNoisy, suggestion: sug }]) })
+  }
+
+  it('states the delay next to the sentence', () => {
+    const out = html(forSuggestion)
+    expect(out).toMatch(/data-testid="rule-noise-suggestion">[^<]*or more\.<span data-testid="rule-noise-delay"> You would hear about a real failure 1 min later\.<\/span><\/p>/)
+    expect(html({ ...forSuggestion, suggested: '5m', delaySeconds: 240 })).toContain('You would hear about a real failure 4 min later.')
+    expect(html({ ...forSuggestion, delaySeconds: 90 })).toContain('You would hear about a real failure 1 min 30 s later.')
+    setLang('ru', false)
+    expect(html(forSuggestion)).toContain('О настоящем сбое вы узнали бы на 1 мин позже.')
+  })
+
+  it('says nothing about delay for a threshold', () => {
+    expect(html(errorsNoisy.suggestion!)).not.toContain('rule-noise-delay')
+    expect(html({ ...errorsNoisy.suggestion, delaySeconds: 60 })).not.toContain('later')
   })
 })
 

@@ -59,28 +59,32 @@ func (a *Analyzer) Analyze(ctx context.Context, sd *v1alpha1.SystemDescription, 
 	if err != nil {
 		return nil, err
 	}
+	inh := newInhibition(sd, eps)
 	byKey := map[Key][]Episode{}
+	consequences := map[Key]int{}
+	keys := map[Key]bool{}
 	for _, e := range eps {
 		k := KeyOf(sd, e.Labels["alertname"], e.Labels[rules.LabelService], e.Labels[rules.LabelOperation])
+		keys[k] = true
+		if inh.mutedEpisode(e) {
+			consequences[k]++
+			continue
+		}
 		byKey[k] = append(byKey[k], e)
 	}
 	rep := newReport(windowName)
 	rep.Available = true
-	keys := map[Key]bool{}
-	for k := range byKey {
-		keys[k] = true
-	}
 	for k := range feedback {
 		keys[k] = true
 	}
 	for k := range keys {
 		st := Summarize(byKey[k])
-		rr := RuleReport{Key: k, Fired: st.Fired, Short: st.Short, LongestSeconds: int64(st.Longest / time.Second), Feedback: feedback[k]}
+		rr := RuleReport{Key: k, Fired: st.Fired, Short: st.Short, Consequences: consequences[k], LongestSeconds: int64(st.Longest / time.Second), Feedback: feedback[k]}
 		if !st.LastFiredAt.IsZero() {
 			t := st.LastFiredAt.UTC()
 			rr.LastFiredAt = &t
 		}
-		rr.Noisy = Noisy(st, rr.Feedback)
+		rr.Noisy = Noisy(st, rr.Feedback, window)
 		rep.Rules = append(rep.Rules, rr)
 	}
 	sortRules(rep.Rules)
@@ -90,7 +94,7 @@ func (a *Analyzer) Analyze(ctx context.Context, sd *v1alpha1.SystemDescription, 
 		a.log().Warn("noise: no suggestions, the description does not generate", "system", sd.Name, "error", err)
 		return rep, nil
 	}
-	ev := &evaluator{q: a.Prom, sd: sd, opts: a.Generator, start: start, end: end, current: bundle}
+	ev := &evaluator{q: a.Prom, sd: sd, opts: a.Generator, start: start, end: end, current: bundle, inh: inh}
 	var idx []int
 	for i := range rep.Rules {
 		k := rep.Rules[i].Key
@@ -123,11 +127,15 @@ type evaluator struct {
 	opts       generator.Options
 	start, end time.Time
 	current    *generator.Bundle
+	inh        *inhibition
 }
 
 type Candidate struct {
 	Tunable generator.Tunable
 	Value   string
+	// Delay is how much later a real failure would be reported (longer "for").
+	Delay time.Duration
+	small bool
 }
 
 func findRule(b *generator.Bundle, k Key) *rulefmt.Rule {
@@ -141,30 +149,37 @@ func findRule(b *generator.Bundle, k Key) *rulefmt.Rule {
 	return nil
 }
 
-// Candidates orders the changes from the smallest step up; at equal steps a
-// longer pending period comes first, as it drops short firings without
-// changing what the rule counts as bad.
-func Candidates(ts []generator.Tunable) []Candidate {
-	var fors, thresholds []Candidate
+// Candidates: small thresholds first (no delay), then a longer "for" with a
+// known, capped delay, then larger thresholds, which change what the rule
+// counts as bad.
+func Candidates(ts []generator.Tunable, severity string) []Candidate {
+	maxFor := MaxSuggestedFor
+	if severity == string(v1alpha1.SeverityCritical) {
+		maxFor = MaxSuggestedForCritical
+	}
+	var small, fors, large []Candidate
 	for _, t := range ts {
-		for _, v := range values(t) {
-			if t.Field == generator.FieldFor {
-				fors = append(fors, Candidate{t, v})
+		if t.Field == generator.FieldFor {
+			cur, err := rules.ParseDuration(t.Current, 0)
+			if err != nil {
+				continue
+			}
+			for _, d := range forSteps {
+				if d > cur && d <= maxFor && len(fors) < maxForCandidates {
+					fors = append(fors, Candidate{Tunable: t, Value: rules.FormatDuration(d), Delay: d - cur})
+				}
+			}
+			continue
+		}
+		for _, c := range thresholdValues(t) {
+			if c.small {
+				small = append(small, c)
 			} else {
-				thresholds = append(thresholds, Candidate{t, v})
+				large = append(large, c)
 			}
 		}
 	}
-	var out []Candidate
-	for i := 0; i < max(len(fors), len(thresholds)); i++ {
-		if i < len(fors) {
-			out = append(out, fors[i])
-		}
-		if i < len(thresholds) {
-			out = append(out, thresholds[i])
-		}
-	}
-	return out
+	return append(append(small, fors...), large...)
 }
 
 var (
@@ -172,28 +187,19 @@ var (
 	forSteps         = []time.Duration{time.Minute, 2 * time.Minute, 3 * time.Minute, 5 * time.Minute, 10 * time.Minute}
 )
 
-// values returns the candidate values of one field in the form the field takes.
-func values(t generator.Tunable) []string {
-	var out []string
-	add := func(v string) {
+// thresholdValues returns the candidate values of one threshold in the form
+// the field takes.
+func thresholdValues(t generator.Tunable) []Candidate {
+	var out []Candidate
+	add := func(v string, factor float64) {
 		for _, x := range out {
-			if x == v {
+			if x.Value == v {
 				return
 			}
 		}
-		out = append(out, v)
+		out = append(out, Candidate{Tunable: t, Value: v, small: factor <= SmallThresholdFactor})
 	}
 	switch t.Format {
-	case generator.FormatDuration:
-		cur, err := rules.ParseDuration(t.Current, 0)
-		if err != nil {
-			return nil
-		}
-		for _, d := range forSteps {
-			if d > cur && d <= MaxSuggestedFor && len(out) < maxForCandidates {
-				add(rules.FormatDuration(d))
-			}
-		}
 	case generator.FormatInteger:
 		cur, err := strconv.Atoi(t.Current)
 		if err != nil || cur < 0 {
@@ -201,7 +207,11 @@ func values(t generator.Tunable) []string {
 		}
 		for _, v := range []int{cur + 1, cur + 2, cur * 2, cur * 3} {
 			if v > cur && len(out) < maxThresholdCandidates {
-				add(strconv.Itoa(v))
+				factor := math.Inf(1)
+				if cur > 0 {
+					factor = float64(v) / float64(cur)
+				}
+				add(strconv.Itoa(v), factor)
 			}
 		}
 	case generator.FormatQuantity:
@@ -211,12 +221,18 @@ func values(t generator.Tunable) []string {
 		}
 		cur := q.AsApproximateFloat64()
 		for _, f := range thresholdFactors {
-			add(strconv.FormatInt(int64(math.Ceil(cur*f/(1<<20))), 10) + "Mi")
+			add(strconv.FormatInt(int64(math.Ceil(cur*f/(1<<20))), 10)+"Mi", f)
 		}
 	case generator.FormatShare, generator.FormatNumber:
 		cur, err := strconv.ParseFloat(t.Current, 64)
 		if err != nil || cur <= 0 {
 			return nil
+		}
+		factorOf := func(v float64) float64 {
+			if t.Lower {
+				return cur / v
+			}
+			return v / cur
 		}
 		for _, f := range thresholdFactors {
 			v := cur * f
@@ -228,12 +244,12 @@ func values(t generator.Tunable) []string {
 				continue
 			}
 			if (t.Lower && v < cur) || (!t.Lower && v > cur) {
-				add(rules.FormatFloat(v))
+				add(rules.FormatFloat(v), factorOf(v))
 			}
 		}
 		if t.Format == generator.FormatShare && len(out) == 0 && cur < 1 {
 			if v := math.Round((1+cur)/2*1000) / 1000; v > cur && v < 1 {
-				add(rules.FormatFloat(v))
+				add(rules.FormatFloat(v), factorOf(v))
 			}
 		}
 	}
@@ -256,8 +272,9 @@ func roundNice(v float64) float64 {
 	return f
 }
 
-// suggest evaluates the candidates in order and returns the first that
-// misses no long firing and removes enough short ones; nil when none does.
+// suggest returns the first candidate that misses no long firing and
+// removes enough short ones. actual holds only firings people got; the
+// candidate's firings at muted times are dropped the same way.
 func (e *evaluator) suggest(ctx context.Context, k Key, actual []Episode) (*Suggestion, error) {
 	cur := findRule(e.current, k)
 	if cur == nil {
@@ -270,10 +287,12 @@ func (e *evaluator) suggest(ctx context.Context, k Key, actual []Episode) (*Sugg
 		return nil, err
 	}
 	matrices[cur.Expr] = m
-	if fire, _, _ := score(backtest.Evaluate(m, time.Duration(cur.For), Step, e.end), cur.Labels, time.Duration(cur.For), e.start, actual); float64(fire) < MinReproducedShare*float64(st.Fired) {
+	severity := cur.Labels[rules.LabelSeverity]
+	muted := func(from, to time.Time) bool { return e.inh.muted(k.Service, k.Alert, severity, from, to) }
+	if fire, _, _ := score(backtest.Evaluate(m, time.Duration(cur.For), Step, e.end), cur.Labels, time.Duration(cur.For), e.start, actual, muted); float64(fire) < MinReproducedShare*float64(st.Fired) {
 		return nil, nil
 	}
-	for _, c := range Candidates(generator.Tunables(e.sd, k.Service, k.Alert, k.Operation)) {
+	for _, c := range Candidates(generator.Tunables(e.sd, k.Service, k.Alert, k.Operation), severity) {
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
@@ -296,11 +315,15 @@ func (e *evaluator) suggest(ctx context.Context, k Key, actual []Episode) (*Sugg
 			}
 			matrices[r.Expr] = m
 		}
-		fire, short, miss := score(backtest.Evaluate(m, time.Duration(r.For), Step, e.end), r.Labels, time.Duration(r.For), e.start, actual)
+		fire, short, miss := score(backtest.Evaluate(m, time.Duration(r.For), Step, e.end), r.Labels, time.Duration(r.For), e.start, actual, muted)
+		if fire == 0 && st.Fired < MinFiredForSilence {
+			continue
+		}
 		if miss == 0 && fire < st.Fired && float64(short) <= (1-MinShortRemovedShare)*float64(st.Short) {
 			return &Suggestion{
 				Field: c.Tunable.Field, Current: c.Tunable.Current, Suggested: c.Value, Unit: c.Tunable.Unit,
 				WouldFire: fire, WouldMiss: miss, WouldShort: short, Path: c.Tunable.Path, Format: string(c.Tunable.Format),
+				DelaySeconds: int64(c.Delay / time.Second),
 			}, nil
 		}
 	}
@@ -310,9 +333,12 @@ func (e *evaluator) suggest(ctx context.Context, k Key, actual []Episode) (*Sugg
 // score compares the firings a candidate would have had with the firings
 // that happened: how many, how many short, and how many long real firings
 // no candidate firing of the same series overlaps.
-func score(res *backtest.Result, static map[string]string, forD time.Duration, start time.Time, actual []Episode) (fire, short, miss int) {
+func score(res *backtest.Result, static map[string]string, forD time.Duration, start time.Time, actual []Episode, muted func(from, to time.Time) bool) (fire, short, miss int) {
 	var eps []Episode
 	for _, b := range res.Episodes {
+		if muted(b.FiringAt, b.ResolvedAt) {
+			continue
+		}
 		e := Episode{Labels: b.Labels, Start: b.FiringAt, End: b.ResolvedAt, Ongoing: b.Ongoing}
 		// A run that began with the data may have begun earlier.
 		e.Clipped = !b.FiringAt.After(start.Add(forD))

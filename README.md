@@ -411,20 +411,32 @@ suggests a change; nothing is changed until someone applies it.
 - **How often and how long.** For each rule over the last 1, 3 or 7 days:
   how many times it fired, how many firings cleared within 5 minutes
   ("short"), the longest firing and when it last fired.
-- **Noisy.** At least 5 firings with more than half of them short, or at
-  least 2 people said "noise" and they outnumber "useful". The same number
-  of "useful" outnumbering "noise" makes a rule not noisy whatever its
-  history.
+- **Consequences are not noise.** When `payment` is down, the error alerts
+  of `checkout` and `frontend` fire too, and Alertmanager mutes them by the
+  dependency grouping. Kamerton replays that muting on the history: such
+  firings (and per-service "no data" during the system-wide one) are
+  counted as `consequences` and take no part in what follows.
+- **Noisy.** Without verdicts: at least 10 firings in the window and at
+  least 3 a day on average, with three quarters of them short. A few short
+  real outages on a bad day are not noise; a rule flapping tens of times a
+  week is. Or at least 2 people said "noise" and they outnumber "useful";
+  the same number of "useful" outnumbering "noise" makes a rule not noisy
+  whatever its history.
 - **A suggestion.** For a noisy rule with a threshold or a pending period
-  (`for`), Kamerton runs the backtest with a few changes, smallest first: a
-  longer `for` (1m, 2m, 3m, 5m, 10m) and a threshold 1.25, 1.5, 2 or 3 times
-  higher (lower for a custom "less than" rule). It suggests the first change
-  that would have removed at least 80% of the short firings and still caught
-  every firing that lasted 10 minutes or more; if none does, there is no
-  suggestion. It says how often the rule would have fired. The value is
-  written as the description field takes it (`errorRate.threshold: 0.063`,
-  `latency.for: 5m`, `saturation.memory: 768Mi`), so applying it is an
-  ordinary edit of the description.
+  (`for`), Kamerton runs the backtest with a few changes: first a threshold
+  at most 1.5 times higher (it adds no delay), then a longer `for` (1m, 2m,
+  3m, 5m, 10m; at most 3m for a critical rule, so it still pages within
+  about five minutes), then a threshold 2 or 3 times higher (lower for a
+  custom "less than" rule). It suggests the first change that would have
+  removed at least 80% of the short firings and still caught every firing
+  that lasted 10 minutes or more. A change that would never have fired is
+  offered only for a rule that fired at least 20 times; otherwise it just
+  switches the rule off. A longer `for` comes with its cost
+  (`delaySeconds`: how much later a real failure would be reported). The
+  value is written as the description field takes it
+  (`errorRate.threshold: 0.063`, `latency.for: 3m`,
+  `saturation.memory: 768Mi`), so applying it is an ordinary edit of the
+  description.
 - **Useful or noise.** The follow-up message in Telegram has two buttons,
   "Useful" and "Noise" ("По делу" and "Шум" in Russian). A press counts for
   the rules of the incident's root alerts; pressing the other button

@@ -5,6 +5,7 @@ package noise
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"sync"
@@ -56,15 +57,24 @@ func (f *fakeProm) QueryRange(_ context.Context, q string, _, _ time.Time, _ tim
 	return model.Matrix{}, nil
 }
 
+// frontend calls checkout, checkout calls payment; all critical.
 const shopYAML = `apiVersion: kamerton.dev/v1alpha1
 kind: SystemDescription
 metadata:
   name: shop
 spec:
   services:
+    - name: frontend
+      type: http
+      critical: true
+      dependsOn: [checkout]
+    - name: payment
+      type: grpc
+      critical: true
     - name: checkout
       type: grpc
       critical: true
+      dependsOn: [payment]
       errorRate:
         threshold: 0.05
         for: 1m
@@ -83,29 +93,38 @@ func shop(t *testing.T, yaml string) *v1alpha1.SystemDescription {
 	return res.Document
 }
 
+func warningShop(t *testing.T) *v1alpha1.SystemDescription {
+	return shop(t, strings.Replace(shopYAML, "      critical: true\n      dependsOn: [payment]", "      dependsOn: [payment]", 1))
+}
+
 // condition is what the error-rate expression returns: present at the given minutes.
 func condition(minutes ...int) model.Matrix {
 	return model.Matrix{firing(model.Metric{"service_name": "checkout"}, minutes...)}
 }
 
-// history: eight short firings of the error-rate rule and one long one.
-func history() model.Matrix {
+// flapping: n short firings of checkout's error-rate rule (two samples each,
+// every 30 minutes) and, when long, one firing of 21 minutes.
+func flapping(n int, long bool) model.Matrix {
 	var minutes []int
-	for i := 0; i < 8; i++ {
-		minutes = append(minutes, 60*(i+1), 60*(i+1)+1)
+	for i := 0; i < n; i++ {
+		minutes = append(minutes, 30*(i+1), 30*(i+1)+1)
 	}
-	minutes = append(minutes, span(700, 720)...)
+	if long {
+		minutes = append(minutes, span(1300, 1320)...)
+	}
 	return model.Matrix{firing(alertLabels("KamertonErrorRateHigh", "checkout"), minutes...)}
 }
 
-// shortRuns returns eight condition runs of n minutes each, at the minutes of history().
-func shortRuns(n int) []int {
+// runs returns condition runs of length minutes at the places of flapping(n).
+func runs(n, length int) []int {
 	var out []int
-	for i := 0; i < 8; i++ {
-		out = append(out, span(60*(i+1)-n+1, 60*(i+1))...)
+	for i := 0; i < n; i++ {
+		out = append(out, span(30*(i+1)+2-length, 30*(i+1)+1)...)
 	}
 	return out
 }
+
+var longRun = span(1295, 1320)
 
 func analyze(t *testing.T, q *fakeProm, sd *v1alpha1.SystemDescription, fb map[Key]Counts) *Report {
 	t.Helper()
@@ -117,73 +136,158 @@ func analyze(t *testing.T, q *fakeProm, sd *v1alpha1.SystemDescription, fb map[K
 	return rep
 }
 
-func ruleOf(rep *Report, alert string) *RuleReport {
+func ruleOf(rep *Report, alert, service string) *RuleReport {
 	for i := range rep.Rules {
-		if rep.Rules[i].Alert == alert {
+		if rep.Rules[i].Alert == alert && rep.Rules[i].Service == service {
 			return &rep.Rules[i]
 		}
 	}
 	return nil
 }
 
-func TestSuggestPrefersTheSmallestChange(t *testing.T) {
-	q := &fakeProm{firing: history(), exprs: []exprAnswer{
-		// Both a pending period of 2m and the first higher threshold would qualify.
-		{"> 0.063\n", condition(span(695, 720)...)},
-		{"> 0.05\n", condition(append(shortRuns(2), span(695, 720)...)...)},
+func errorRule(rep *Report) *RuleReport { return ruleOf(rep, "KamertonErrorRateHigh", "checkout") }
+
+func TestSuggestPrefersASmallThreshold(t *testing.T) {
+	q := &fakeProm{firing: flapping(30, true), exprs: []exprAnswer{
+		// A pending period of 2m would qualify too, but adds a minute of delay.
+		{"> 0.063\n", condition(longRun...)},
+		{"> 0.05\n", condition(append(runs(30, 2), longRun...)...)},
 	}}
 	rep := analyze(t, q, shop(t, shopYAML), nil)
-	r := ruleOf(rep, "KamertonErrorRateHigh")
-	if r == nil || r.Fired != 9 || r.Short != 8 || r.LongestSeconds != 21*60 || !r.Noisy || r.Service != "checkout" {
+	r := errorRule(rep)
+	if r == nil || r.Fired != 31 || r.Short != 30 || r.Consequences != 0 || r.LongestSeconds != 21*60 || !r.Noisy {
 		t.Fatalf("rule = %+v", r)
 	}
 	s := r.Suggestion
-	if s == nil {
-		t.Fatal("no suggestion")
+	if s == nil || s.Field != "threshold" || s.Current != "0.05" || s.Suggested != "0.063" || s.DelaySeconds != 0 || s.WouldFire != 1 || s.WouldMiss != 0 || s.Path != "errorRate.threshold" || s.Format != "share" {
+		t.Fatalf("suggestion = %+v", s)
 	}
-	if s.Field != "for" || s.Current != "1m" || s.Suggested != "2m" || s.Unit != "" || s.WouldFire != 1 || s.WouldMiss != 0 || s.Path != "errorRate.for" {
-		t.Errorf("suggestion = %+v", s)
-	}
-	if q.other != 1 {
-		t.Errorf("a longer pending period needs no new query; queries = %d", q.other)
+	raw, _ := json.Marshal(r)
+	for _, field := range []string{`"consequences":0`, `"delaySeconds":0`, `"wouldFire":1`} {
+		if !strings.Contains(string(raw), field) {
+			t.Errorf("JSON lacks %s: %s", field, raw)
+		}
 	}
 }
 
-func TestSuggestThresholdWhenForDoesNotHelp(t *testing.T) {
-	q := &fakeProm{firing: history(), exprs: []exprAnswer{
-		// Runs of 4 minutes survive a pending period of 2m and 3m.
-		{"> 0.063\n", condition(span(695, 720)...)},
-		{"> 0.05\n", condition(append(shortRuns(4), span(695, 720)...)...)},
+func TestSuggestForWithItsDelay(t *testing.T) {
+	q := &fakeProm{firing: flapping(30, true), exprs: []exprAnswer{
+		// Small threshold changes do not remove the short firings.
+		{"> 0.05\n", condition(append(runs(30, 2), longRun...)...)},
 	}}
-	s := ruleOf(analyze(t, q, shop(t, shopYAML), nil), "KamertonErrorRateHigh").Suggestion
-	if s == nil || s.Field != "threshold" || s.Current != "0.05" || s.Suggested != "0.063" || s.Format != "share" || s.Path != "errorRate.threshold" || s.WouldFire != 1 || s.WouldMiss != 0 {
+	s := errorRule(analyze(t, q, shop(t, shopYAML), nil)).Suggestion
+	if s == nil || s.Field != "for" || s.Current != "1m" || s.Suggested != "2m" || s.Unit != "" || s.DelaySeconds != 60 || s.Path != "errorRate.for" {
 		t.Fatalf("suggestion = %+v", s)
+	}
+	if q.other != 3 {
+		t.Errorf("the rule and two small thresholds need a query each, a longer for none; queries = %d", q.other)
+	}
+}
+
+func TestCriticalRulesKeepAShortFor(t *testing.T) {
+	// Runs of 3 minutes survive a pending period of 2m and 3m; only 5m removes them.
+	q := func() *fakeProm {
+		return &fakeProm{firing: flapping(30, true), exprs: []exprAnswer{{"> 0.05\n", condition(append(runs(30, 4), longRun...)...)}}}
+	}
+	if s := errorRule(analyze(t, q(), shop(t, shopYAML), nil)).Suggestion; s != nil {
+		t.Errorf("a critical rule got for %s", s.Suggested)
+	}
+	s := errorRule(analyze(t, q(), warningShop(t), nil)).Suggestion
+	if s == nil || s.Field != "for" || s.Suggested != "5m" || s.DelaySeconds != 240 {
+		t.Fatalf("warning rule suggestion = %+v", s)
 	}
 }
 
 func TestNoSuggestionThatMissesALongFiring(t *testing.T) {
-	q := &fakeProm{firing: history(), exprs: []exprAnswer{
+	q := &fakeProm{firing: flapping(30, true), exprs: []exprAnswer{
 		// The backtest never sees the long firing: every candidate would miss it.
-		{"> 0.05\n", condition(shortRuns(2)...)},
+		{"> 0.05\n", condition(runs(30, 2)...)},
 	}}
-	r := ruleOf(analyze(t, q, shop(t, shopYAML), nil), "KamertonErrorRateHigh")
-	if r.Suggestion != nil {
-		t.Fatalf("suggested %+v although it misses the long firing", r.Suggestion)
-	}
-	if !r.Noisy {
-		t.Error("still noisy")
+	r := errorRule(analyze(t, q, shop(t, shopYAML), nil))
+	if r.Suggestion != nil || !r.Noisy {
+		t.Fatalf("rule %+v, suggestion %+v", r, r.Suggestion)
 	}
 	if q.other > 1+maxThresholdCandidates {
 		t.Errorf("queries = %d, bound %d", q.other, 1+maxThresholdCandidates)
 	}
 }
 
-func TestNoSuggestionWhenNotNoisy(t *testing.T) {
-	m := alertLabels("KamertonErrorRateHigh", "checkout")
-	q := &fakeProm{firing: model.Matrix{firing(m, 10, 11, 300, 301)}}
-	r := ruleOf(analyze(t, q, shop(t, shopYAML), nil), "KamertonErrorRateHigh")
-	if r == nil || r.Noisy || r.Suggestion != nil || q.other != 0 {
-		t.Fatalf("rule %+v, queries %d", r, q.other)
+func TestNoSuggestionThatSwitchesTheRuleOff(t *testing.T) {
+	q := &fakeProm{firing: flapping(12, false), exprs: []exprAnswer{{"> 0.05\n", condition(runs(12, 2)...)}}}
+	r := errorRule(analyze(t, q, shop(t, shopYAML), nil))
+	if !r.Noisy || r.Suggestion != nil {
+		t.Fatalf("12 firings: rule %+v, suggestion %+v", r, r.Suggestion)
+	}
+	q = &fakeProm{firing: flapping(MinFiredForSilence+5, false), exprs: []exprAnswer{{"> 0.05\n", condition(runs(MinFiredForSilence+5, 2)...)}}}
+	s := errorRule(analyze(t, q, shop(t, shopYAML), nil)).Suggestion
+	if s == nil || s.WouldFire != 0 || s.Suggested != "2m" {
+		t.Fatalf("a rule that only flaps: %+v", s)
+	}
+}
+
+func TestNoSuggestionWhenTheBacktestDoesNotSeeTheHistory(t *testing.T) {
+	q := &fakeProm{firing: flapping(30, true)}
+	r := errorRule(analyze(t, q, shop(t, shopYAML), nil))
+	if r.Suggestion != nil || q.other != 1 {
+		t.Fatalf("suggestion %+v from an empty backtest, queries %d", r.Suggestion, q.other)
+	}
+}
+
+// outage: payment has no ready pods three times for 3 to 6 minutes; its
+// callers fail meanwhile, and frontend once on its own.
+func outage(paymentSeverity string) model.Matrix {
+	pay := alertLabels("KamertonNoReadyPods", "payment")
+	pay["severity"] = model.LabelValue(paymentSeverity)
+	co := alertLabels("KamertonErrorRateHigh", "checkout")
+	fe := alertLabels("KamertonOperationErrorRateHigh", "frontend")
+	fe["operation"] = "GET /cart"
+	return model.Matrix{
+		firing(pay, append(append(span(100, 104), span(300, 305)...), span(500, 502)...)...),
+		firing(co, append(append(span(101, 104), span(301, 306)...), span(501, 502)...)...),
+		firing(fe, append(append(span(102, 105), span(302, 307)...), 900)...),
+	}
+}
+
+func TestConsequencesOfADependencyOutage(t *testing.T) {
+	rep := analyze(t, &fakeProm{firing: outage("critical")}, shop(t, shopYAML), nil)
+	co := errorRule(rep)
+	if co == nil || co.Fired != 0 || co.Short != 0 || co.Consequences != 3 || co.Noisy || co.Suggestion != nil {
+		t.Errorf("checkout = %+v", co)
+	}
+	// Muted through the chain: checkout's alert, muted itself, still mutes frontend.
+	fe := ruleOf(rep, "KamertonOperationErrorRateHigh", "frontend")
+	if fe == nil || fe.Fired != 1 || fe.Consequences != 2 || fe.Operation != "" {
+		t.Errorf("frontend = %+v", fe)
+	}
+	// A short real outage of a critical service is not noise.
+	pay := ruleOf(rep, "KamertonNoReadyPods", "payment")
+	if pay == nil || pay.Fired != 3 || pay.Short != 1 || pay.Consequences != 0 || pay.Noisy {
+		t.Errorf("payment = %+v", pay)
+	}
+
+	if co := errorRule(analyze(t, &fakeProm{firing: outage("warning")}, shop(t, shopYAML), nil)); co.Fired != 3 || co.Consequences != 0 {
+		t.Errorf("a warning does not mute a critical alert: %+v", co)
+	}
+	off := shop(t, shopYAML+"  notifications:\n    groupByCause: false\n")
+	if co := errorRule(analyze(t, &fakeProm{firing: outage("critical")}, off, nil)); co.Fired != 3 || co.Consequences != 0 {
+		t.Errorf("without grouping by cause every firing reached people: %+v", co)
+	}
+	cycle := shop(t, strings.Replace(shopYAML, "      critical: true\n    - name: checkout", "      critical: true\n      dependsOn: [checkout]\n    - name: checkout", 1))
+	if co := errorRule(analyze(t, &fakeProm{firing: outage("critical")}, cycle, nil)); co.Fired != 3 || co.Consequences != 0 {
+		t.Errorf("services in a cycle do not mute each other: %+v", co)
+	}
+}
+
+func TestConsequencesOfSystemNoData(t *testing.T) {
+	sys := model.Metric{"alertname": "KamertonTelemetryMissing", "alertstate": "firing", "kamerton_system": "shop", "severity": "critical"}
+	svc := alertLabels("KamertonServiceTelemetryMissing", "checkout")
+	rep := analyze(t, &fakeProm{firing: model.Matrix{firing(sys, span(700, 710)...), firing(svc, append(span(702, 708), span(900, 903)...)...)}}, shop(t, shopYAML), nil)
+	r := ruleOf(rep, "KamertonServiceTelemetryMissing", "checkout")
+	if r == nil || r.Fired != 1 || r.Consequences != 1 {
+		t.Errorf("per-service no data = %+v", r)
+	}
+	if r := ruleOf(rep, "KamertonTelemetryMissing", ""); r == nil || r.Fired != 1 {
+		t.Errorf("system no data = %+v", r)
 	}
 }
 
@@ -199,38 +303,64 @@ func TestReportKeysAndFeedbackOnlyRules(t *testing.T) {
 	if len(rep.Rules) != 3 || !rep.Available || rep.ShortUnder != "5m" || rep.Window != "1d" {
 		t.Fatalf("report = %+v", rep)
 	}
-	if r := ruleOf(rep, "KamertonOperationErrorRateHigh"); r.Operation != "" {
+	if r := ruleOf(rep, "KamertonOperationErrorRateHigh", "checkout"); r.Operation != "" {
 		t.Errorf("the aggregated per-operation rule has no operation: %+v", r)
 	}
-	if r := ruleOf(rep, "KamertonOperationLatencyHigh"); r.Operation != "PlaceOrder" {
+	if r := ruleOf(rep, "KamertonOperationLatencyHigh", "checkout"); r.Operation != "PlaceOrder" {
 		t.Errorf("a rule of one operation keeps it: %+v", r)
 	}
-	r := ruleOf(rep, "KamertonLatencyHigh")
+	r := ruleOf(rep, "KamertonLatencyHigh", "checkout")
 	if r.Fired != 0 || r.LastFiredAt != nil || r.Feedback.Noise != 3 || !r.Noisy {
 		t.Errorf("feedback-only rule = %+v", r)
 	}
 }
 
 func TestNoisyDefinition(t *testing.T) {
+	day, week := 24*time.Hour, 7*24*time.Hour
 	cases := []struct {
-		name string
-		st   Stats
-		fb   Counts
-		want bool
+		name   string
+		st     Stats
+		fb     Counts
+		window time.Duration
+		want   bool
 	}{
-		{"flapping", Stats{Fired: 40, Short: 37}, Counts{}, true},
-		{"few firings", Stats{Fired: 4, Short: 4}, Counts{}, false},
-		{"half short is not most", Stats{Fired: 10, Short: 5}, Counts{}, false},
-		{"long firings", Stats{Fired: 10, Short: 2}, Counts{}, false},
-		{"people say noise", Stats{Fired: 1}, Counts{Noise: 2}, true},
-		{"one vote is not enough", Stats{Fired: 1}, Counts{Noise: 1}, false},
-		{"people say useful", Stats{Fired: 40, Short: 37}, Counts{Useful: 3, Noise: 1}, false},
-		{"tie", Stats{Fired: 40, Short: 37}, Counts{Useful: 2, Noise: 2}, true},
+		{"flapping all week", Stats{Fired: 40, Short: 37}, Counts{}, week, true},
+		{"flapping all day", Stats{Fired: 12, Short: 10}, Counts{}, day, true},
+		{"a bad day of short outages", Stats{Fired: 7, Short: 5}, Counts{}, day, false},
+		{"six short in a day", Stats{Fired: 6, Short: 6}, Counts{}, day, false},
+		{"a dozen in a week", Stats{Fired: 12, Short: 12}, Counts{}, week, false},
+		{"many long firings", Stats{Fired: 30, Short: 20}, Counts{}, week, false},
+		{"people say noise", Stats{Fired: 1}, Counts{Noise: 2}, day, true},
+		{"one vote is not enough", Stats{Fired: 1}, Counts{Noise: 1}, day, false},
+		{"people say useful", Stats{Fired: 40, Short: 37}, Counts{Useful: 3, Noise: 1}, week, false},
+		{"tie", Stats{Fired: 40, Short: 37}, Counts{Useful: 2, Noise: 2}, week, true},
 	}
 	for _, c := range cases {
-		if got := Noisy(c.st, c.fb); got != c.want {
+		if got := Noisy(c.st, c.fb, c.window); got != c.want {
 			t.Errorf("%s: Noisy = %v", c.name, got)
 		}
+	}
+}
+
+func TestCandidateOrder(t *testing.T) {
+	sd := shop(t, shopYAML)
+	ts := generator.Tunables(sd, "checkout", "KamertonErrorRateHigh", "")
+	var got []string
+	for _, c := range Candidates(ts, "critical") {
+		got = append(got, c.Value)
+	}
+	if strings.Join(got, " ") != "0.063 0.075 2m 3m 0.1 0.15" {
+		t.Errorf("critical order %v", got)
+	}
+	got = nil
+	for _, c := range Candidates(ts, "warning") {
+		got = append(got, c.Value)
+		if c.Value == "10m" && c.Delay != 9*time.Minute {
+			t.Errorf("delay of 10m = %s", c.Delay)
+		}
+	}
+	if strings.Join(got, " ") != "0.063 0.075 2m 3m 5m 10m 0.1 0.15" {
+		t.Errorf("warning order %v", got)
 	}
 }
 
@@ -254,7 +384,7 @@ spec:
 `)
 	vals := func(alert string) map[string][]string {
 		out := map[string][]string{}
-		for _, c := range Candidates(generator.Tunables(sd, "checkout", alert, "")) {
+		for _, c := range Candidates(generator.Tunables(sd, "checkout", alert, ""), "warning") {
 			out[c.Tunable.Path] = append(out[c.Tunable.Path], c.Value)
 		}
 		return out
@@ -273,7 +403,7 @@ spec:
 	if got := vals("KamertonOOMKilled"); len(got) != 0 {
 		t.Errorf("no candidates for a rule without a threshold: %v", got)
 	}
-	share := Candidates([]generator.Tunable{{Field: "threshold", Format: generator.FormatShare, Current: "0.9"}})
+	share := Candidates([]generator.Tunable{{Field: "threshold", Format: generator.FormatShare, Current: "0.9"}}, "warning")
 	if len(share) != 1 || share[0].Value != "0.95" {
 		t.Errorf("share near 1: %+v", share)
 	}
@@ -286,7 +416,7 @@ func TestCandidatesApplyInDescriptionForm(t *testing.T) {
 		if alert == "KamertonOperationLatencyHigh" {
 			op = "PlaceOrder"
 		}
-		for _, c := range Candidates(generator.Tunables(sd, "checkout", alert, op)) {
+		for _, c := range Candidates(generator.Tunables(sd, "checkout", alert, op), "warning") {
 			cp := sd.DeepCopy()
 			if err := c.Tunable.Apply(cp, "checkout", c.Value); err != nil {
 				t.Fatalf("%s %s=%s: %v", alert, c.Tunable.Path, c.Value, err)
@@ -302,18 +432,10 @@ func TestCandidatesApplyInDescriptionForm(t *testing.T) {
 		t.Fatalf("tunables %+v", ts)
 	}
 	_ = ts[0].Apply(cp, "checkout", "450")
-	if got := *cp.Spec.Services[0].Operations[0].Latency.ThresholdMs; got != 450 {
+	if got := *cp.Spec.Services[2].Operations[0].Latency.ThresholdMs; got != 450 {
 		t.Errorf("applied %v", got)
 	}
-	if *sd.Spec.Services[0].Operations[0].Latency.ThresholdMs != 300 {
+	if *sd.Spec.Services[2].Operations[0].Latency.ThresholdMs != 300 {
 		t.Error("the original description changed")
-	}
-}
-
-func TestNoSuggestionWhenTheBacktestDoesNotSeeTheHistory(t *testing.T) {
-	q := &fakeProm{firing: history()}
-	r := ruleOf(analyze(t, q, shop(t, shopYAML), nil), "KamertonErrorRateHigh")
-	if r.Suggestion != nil || q.other != 1 {
-		t.Fatalf("suggestion %+v from an empty backtest, queries %d", r.Suggestion, q.other)
 	}
 }

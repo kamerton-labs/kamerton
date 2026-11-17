@@ -62,7 +62,7 @@ Prometheus Operator and Prometheus, Alertmanager, Grafana, Loki, Tempo.
 | `internal/triage` | Probable source on the dependency graph; incidents (roots, affected services) from active alerts, using the same links as the generated inhibit rules | real |
 | `internal/evidence` | Evidence about a root service: workload changes in the last 30 minutes (pods, ReplicaSets, StatefulSets, Warning events), operations with most failed calls (span metrics, query built by the rule library), an error log line (Loki), a Grafana Explore link to failing traces (Tempo); short timeout per collector, bounded total | real (tested with fake Kubernetes, Prometheus and Loki) |
 | `internal/followup` | Alertmanager webhook notifications → incident → evidence (and the likely cause among the dependencies of a root whose own alert came first) → one follow-up message per incident to the chats and addresses that got the alert, after a short delay; sent incidents in the ConfigMap `kamerton-followup-state` (memory when it cannot be written); last evidence per incident in memory for the alerts API | real (tested with fakes) |
-| `internal/noise` | Noise statistics per rule from `ALERTS`/`ALERTS_FOR_STATE` (two range queries per system), the "noisy" definition, suggestions through the backtest (`generator.Tunables` names the description field of each rule kind), "useful / noise" counters in the ConfigMap `kamerton-noise-state` (memory without a cluster), the Telegram buttons and their presses | real (tested with fake Prometheus, a fake Bot API and a fake Kubernetes client) |
+| `internal/noise` | Noise statistics per rule from `ALERTS`/`ALERTS_FOR_STATE` (two range queries per system), muted consequences replayed with `triage.MutingEdges`, the "noisy" definition, suggestions through the backtest (`generator.Tunables` names the description field of each rule kind), "useful / noise" counters in the ConfigMap `kamerton-noise-state` (memory without a cluster), the Telegram buttons and their presses | real (tested with fake Prometheus, a fake Bot API and a fake Kubernetes client) |
 | `internal/clients/*` | Prometheus (official client), Alertmanager v2 | real |
 | `internal/stack` | Sets of programs: the built-in set from the flags (addresses can be overridden and reset), sets added in the UI with extra labels for PrometheusRule / AlertmanagerConfig; stored in the ConfigMap `kamerton-stacks` (cluster), `.kamerton-stacks.json` next to the descriptions (local) or memory. Identity checks of an address per program (health path + build info / status). Discovery through the Kubernetes API: Services in all namespaces recognised by labels, operator service names and typical ports, confirmed over HTTP (bounded concurrency, short timeouts); Prometheus Operator `Prometheus`/`Alertmanager` resources → selector labels and warnings when instances cannot be told apart | real (unit-tested with a fake Kubernetes client and fake HTTP servers; used on a k3s cluster with a second Prometheus) |
 | `internal/descstore` | Systems: SystemDescription resources (cluster) or files (local); list, create, save, update, delete | real (tested through the API in both modes) |
@@ -511,10 +511,10 @@ normal description edit.
   "window": "7d", "available": true, "reason": "", "shortUnder": "5m", "longFrom": "10m",
   "rules": [{
     "alert": "KamertonErrorRateHigh", "service": "checkout", "operation": "",
-    "fired": 40, "short": 37, "longestSeconds": 720, "lastFiredAt": "2026-11-16T04:18:00Z",
+    "fired": 40, "short": 37, "consequences": 4, "longestSeconds": 720, "lastFiredAt": "2026-11-16T04:18:00Z",
     "feedback": {"useful": 1, "noise": 5}, "noisy": true,
     "suggestion": {"field": "threshold", "current": "0.05", "suggested": "0.075", "unit": "",
-                   "wouldFire": 3, "wouldMiss": 0, "wouldShort": 1,
+                   "wouldFire": 3, "wouldMiss": 0, "wouldShort": 1, "delaySeconds": 0,
                    "path": "errorRate.threshold", "format": "share"}
   }]
 }
@@ -533,6 +533,20 @@ t means the alert fired within (t-1m, t], so durations are measured to the
 minute. A firing already on when the window began, or still on at its end,
 counts as fired but never as short.
 
+**Consequences.** The history does not know about inhibition, so the
+report replays it (`internal/noise/consequence.go`) with the links of
+`triage.MutingEdges` (the same as the generated inhibit rules, cycle rule
+included; none with `groupByCause: false`) and `rules.IsSymptomSource`/
+`IsSymptomTarget`: a firing of a symptom target of service S that overlaps a
+firing of a symptom source of a service S depends on directly is a
+consequence; a warning source mutes only warnings. Direct links are enough:
+a muted source still mutes its own callers in Alertmanager, and its firing
+is in the history too. A per-service "no data" firing overlapping the
+system-wide one is a consequence as well. Consequences are counted in
+`consequences` and left out of `fired`, `short`, the noisy decision and the
+suggestion, whose backtest firings at muted times are dropped the same way.
+No extra queries: the sources come from the same two history queries.
+
 **Rule identity** is the one the UI uses for rule cards and rule states:
 `alert`, `service` and `operation`. The aggregated per-operation rules put
 each series' operation into the label; their firings are counted under
@@ -542,26 +556,41 @@ when the set has no Prometheus or it does not answer.
 
 **Definitions** (constants in `internal/noise/noise.go`): short is under
 5 minutes (a notification arrives within about a minute, so someone who
-opens it finds the problem gone); long is 10 minutes or more. Noisy: at least
-5 firings in the window with more than half short, or at least 2 "noise"
-verdicts outnumbering "useful"; at least 2 "useful" outnumbering "noise"
-makes a rule not noisy whatever its history.
+opens it finds the problem gone); long is 10 minutes or more. Short alone
+proves nothing: a real outage of 4 minutes is short. So without verdicts a
+rule is noisy only with at least 10 firings in the window, at least 3 a day
+on average (once a shift) and at least three quarters of them short; a bad
+day of a few short outages stays below, a rule flapping tens of times a
+week does not. At least 2 "noise" verdicts outnumbering "useful" make a
+rule noisy; at least 2 "useful" outnumbering "noise" make it not noisy
+whatever its history.
 
 **Suggestions** are computed for at most 5 noisy rules (most firings
 first) that have short firings and a field to change
 (`generator.Tunables`). The backtest of the rule as it is must find at
 least half of the real firings (else its metrics are gone or renamed and
-any change would look perfect). Candidates, smallest step first, a longer
-`for` before a threshold at the same step: `for` of 1m, 2m, 3m, 5m, 10m
-above the current one (at most four); a threshold 1.25, 1.5, 2 and 3 times
-the current one, rounded to two significant digits (divided for custom
-"<" and "<=" conditions; a share stays below 1). Each candidate is applied
-to a copy of the description and generated, so the backtest runs exactly
-the rule it would produce; a longer `for` reuses the query of the rule as
-it is. The first candidate that fires less, leaves at most 20% of the short
-firings and overlaps every real firing of 10 minutes or more (same series,
-by the labels of the expression's result) is the suggestion. At most 1 + 4
-range queries per rule, three rules at a time, within the request's 60 s.
+any change would look perfect). Candidates in this order:
+
+1. thresholds at most 1.5 times the current one (1.25×, 1.5×; divided for
+   custom "<" and "<=" conditions), because they add no delay and still
+   mean the same kind of trouble;
+2. a longer `for`: 1m, 2m, 3m, 5m, 10m above the current one, at most 3m
+   for a critical rule (with evaluation and group wait it still pages
+   within about five minutes, the bound the library keeps for its own
+   pending periods) and 10m for a warning; each carries `delaySeconds`,
+   suggested minus current `for`;
+3. larger thresholds (2×, 3×), which change what the rule counts as bad.
+
+Thresholds are rounded to two significant digits; a share stays below 1.
+Each candidate is applied to a copy of the description and generated, so
+the backtest runs exactly the rule it would produce; a longer `for` reuses
+the query of the rule as it is. The first candidate that fires less, leaves
+at most 20% of the short firings and overlaps every real firing of 10
+minutes or more (same series, by the labels of the expression's result) is
+the suggestion. A candidate that would never have fired is skipped unless
+the rule fired at least 20 times: below that it mostly switches the rule
+off. At most 1 + 4 range queries per rule, three rules at a time, within
+the request's 60 s.
 
 | Rule kind (alert) | `threshold` field | unit, form | `for` field |
 |---|---|---|---|

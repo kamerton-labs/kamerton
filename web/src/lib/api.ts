@@ -138,6 +138,8 @@ export interface NoiseSuggestion {
   wouldFire?: number
   wouldMiss?: number
   wouldShort?: number
+  /** How much later a real failure would be reported; 0 for a threshold. */
+  delaySeconds?: number
   /** Relative to the service, e.g. "operations[PlaceOrder].latency.thresholdMs" (internal/generator/tunable.go). */
   path?: string
   /** share | number | integer | quantity | duration. */
@@ -151,6 +153,8 @@ export interface NoiseRule {
   operation?: string
   fired?: number
   short?: number
+  /** Firings muted while a dependency failed: nobody received them, and they are not in fired or short. */
+  consequences?: number
   longestSeconds?: number
   lastFiredAt?: string
   feedback?: { useful?: number; noise?: number }

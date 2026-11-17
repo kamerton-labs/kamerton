@@ -29,11 +29,12 @@ const (
 	// a margin between what is dropped and what must be kept.
 	LongFrom = 10 * time.Minute
 
-	// A rule is noisy by history when it fired at least NoisyMinFirings
-	// times in the window and more than NoisyShortShare of the firings were
-	// short.
-	NoisyMinFirings = 5
-	NoisyShortShare = 0.5
+	// Without verdicts: at least NoisyMinFirings, NoisyMinFiringsPerDay a day
+	// (once a shift) and NoisyShortShare short. A bad day of short real
+	// outages stays below; a rule flapping tens of times a week does not.
+	NoisyMinFirings       = 10
+	NoisyMinFiringsPerDay = 3
+	NoisyShortShare       = 0.75
 	// A rule is noisy by people when at least NoisyMinVotes said "noise" and
 	// they outnumber "useful"; the same number of "useful" votes outnumbering
 	// "noise" overrules the history.
@@ -53,6 +54,18 @@ const (
 	maxForCandidates       = 4
 	// MaxSuggestedFor: a longer pending period delays every page by as much.
 	MaxSuggestedFor = 10 * time.Minute
+	// MaxSuggestedForCritical: with evaluation and group wait (about a minute
+	// together) a critical rule still pages within five minutes, the bound
+	// the rule library keeps for its own pending periods.
+	MaxSuggestedForCritical = 3 * time.Minute
+	// SmallThresholdFactor: a threshold at most 1.5 times the current one (a
+	// third lower for "<" rules) still means the same kind of trouble, and
+	// unlike a longer "for" it adds no delay, so it is tried first.
+	SmallThresholdFactor = 1.5
+	// MinFiredForSilence: a candidate that would never have fired is offered
+	// only for a rule that fired at least this often; for fewer firings it
+	// mostly switches the rule off.
+	MinFiredForSilence = 20
 )
 
 // Windows are the windows the API accepts, as in the backtest.
@@ -146,14 +159,15 @@ func Summarize(eps []Episode) Stats {
 }
 
 // Noisy is the one definition of a noisy rule; see the constants above.
-func Noisy(s Stats, fb Counts) bool {
+func Noisy(s Stats, fb Counts, window time.Duration) bool {
 	if fb.Useful >= NoisyMinVotes && fb.Useful > fb.Noise {
 		return false
 	}
 	if fb.Noise >= NoisyMinVotes && fb.Noise > fb.Useful {
 		return true
 	}
-	return s.Fired >= NoisyMinFirings && float64(s.Short) > NoisyShortShare*float64(s.Fired)
+	days := window.Hours() / 24
+	return s.Fired >= NoisyMinFirings && float64(s.Fired) >= NoisyMinFiringsPerDay*days && float64(s.Short) >= NoisyShortShare*float64(s.Fired)
 }
 
 type Report struct {
@@ -167,8 +181,11 @@ type Report struct {
 
 type RuleReport struct {
 	Key
-	Fired          int         `json:"fired"`
-	Short          int         `json:"short"`
+	Fired int `json:"fired"`
+	Short int `json:"short"`
+	// Consequences are firings Alertmanager muted while a dependency's (or
+	// the whole system's) alert fired; they are not in Fired or Short.
+	Consequences   int         `json:"consequences"`
 	LongestSeconds int64       `json:"longestSeconds"`
 	LastFiredAt    *time.Time  `json:"lastFiredAt,omitempty"`
 	Feedback       Counts      `json:"feedback"`
@@ -186,9 +203,11 @@ type Suggestion struct {
 	WouldFire int    `json:"wouldFire"`
 	WouldMiss int    `json:"wouldMiss"`
 	// WouldShort counts the short firings that would remain.
-	WouldShort int    `json:"wouldShort"`
-	Path       string `json:"path"`
-	Format     string `json:"format"`
+	WouldShort int `json:"wouldShort"`
+	// DelaySeconds: how much later a real failure would be reported.
+	DelaySeconds int64  `json:"delaySeconds"`
+	Path         string `json:"path"`
+	Format       string `json:"format"`
 }
 
 // ParseWindow accepts the names in Windows; empty means DefaultWindow.
@@ -212,7 +231,7 @@ func Unavailable(window, reason string, feedback map[Key]Counts) *Report {
 	r := newReport(window)
 	r.Reason = reason
 	for k, c := range feedback {
-		r.Rules = append(r.Rules, RuleReport{Key: k, Feedback: c, Noisy: Noisy(Stats{}, c)})
+		r.Rules = append(r.Rules, RuleReport{Key: k, Feedback: c, Noisy: Noisy(Stats{}, c, 0)})
 	}
 	sortRules(r.Rules)
 	return r

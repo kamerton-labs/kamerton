@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 import { Fragment, useMemo, useState } from 'react'
-import { ChevronDown, Plus } from 'lucide-react'
+import { ChevronDown, Loader2, Plus } from 'lucide-react'
 import { Link, useSearchParams } from 'react-router'
 import { cn } from 'cn'
 import { SeverityBadge, StateDot } from '@/components/common'
@@ -30,6 +30,7 @@ export default function RulesView() {
   const [params, setParams] = useSearchParams()
   const noisyOnly = params.get('noisy') === '1'
   const noise = useNoise(systemId, NOISY_RANGE)
+  const noiseLoading = noise.isPending
   const { t, tn, lang } = useT()
   // eslint-disable-next-line react-hooks/exhaustive-deps -- sentences use the interface language, so recompute on a switch
   const all = useMemo(() => deriveRules(desc), [desc, lang])
@@ -110,7 +111,12 @@ export default function RulesView() {
         </Select>
         {(noisyIds.size > 0 || noisyOnly) && (
           <Button variant="outline" size="sm" aria-pressed={noisyOnly} className="aria-pressed:bg-muted" onClick={() => setNoisy(!noisyOnly)} data-testid="rules-filter-noisy">
-            {t('rules.filter.noisy')} <span className="text-muted-foreground tabular-nums">{noisyIds.size}</span>
+            {t('rules.filter.noisy')}{' '}
+            {noiseLoading ? (
+              <Loader2 className="size-3 animate-spin text-muted-foreground" aria-label={t('noise.loading')} data-testid="rules-filter-noisy-loading" />
+            ) : (
+              <span className="text-muted-foreground tabular-nums">{noisyIds.size}</span>
+            )}
           </Button>
         )}
         {(service !== 'all' || kind !== 'all' || state !== 'all' || noisyOnly) && (
@@ -130,7 +136,14 @@ export default function RulesView() {
           <span>{t('rules.col.to')}</span>
           <span />
         </div>
-        {rows.length === 0 && <p className="px-3 py-6 text-center text-sm text-muted-foreground">{t('rules.noneMatch')}</p>}
+        {rows.length === 0 &&
+          (noisyOnly && noiseLoading ? (
+            <p className="flex items-center justify-center gap-2 px-3 py-6 text-sm text-muted-foreground" data-testid="rules-noisy-loading">
+              <Loader2 className="size-4 animate-spin" /> {t('noise.loading')}
+            </p>
+          ) : (
+            <p className="px-3 py-6 text-center text-sm text-muted-foreground">{t('rules.noneMatch')}</p>
+          ))}
         {rows.map((r) => {
           const st = ruleState(r, states)
           const to = receiversFor(destinations, r.service, r.severity).map((d) => destinationName(d, telegram, email))

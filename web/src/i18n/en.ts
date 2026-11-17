@@ -797,7 +797,7 @@ export const en = {
   'backtest.times': { one: '{n} time', other: '{n} times' },
   'backtest.ongoing': ', and the condition holds right now',
   'rules.noisy': 'noisy',
-  'rules.noisyHint': 'Fired at least 5 times with most cleared within {d}, or people marked it as noise more often than useful',
+  'rules.noisyHint': 'Fires several times a day and nearly always clears by itself within {d}, or people marked it as noise more often than useful',
   'rules.filter.noisy': 'Noisy',
   'rules.noisySummary': { one: '{n} rule is noisy this week', other: '{n} rules are noisy this week' },
   'noise.title': 'How often it fires',
@@ -819,6 +819,16 @@ export const en = {
   'noise.noise': 'Noise',
   'noise.markedNoise': { one: 'marked as noise {n} time', other: 'marked as noise {n} times' },
   'noise.markedUseful': { one: 'marked as useful {n} time', other: 'marked as useful {n} times' },
+  'noise.loading': 'Counting firings…',
+  'noise.consequences': {
+    one: '{n} more firing was muted as a consequence of another service\'s failure',
+    other: '{n} more firings were muted as consequences of another service\'s failure',
+  },
+  'noise.consequencesOnly': {
+    one: 'In {range} {n} firing was muted as a consequence of another service\'s failure',
+    other: 'In {range} {n} firings were muted as consequences of another service\'s failure',
+  },
+  'noise.delay': 'You would hear about a real failure {d} later.',
   'noise.failed': 'Could not count firings: {error}',
 
   'ruleCard.perMinute.one': '{n} request per minute',
