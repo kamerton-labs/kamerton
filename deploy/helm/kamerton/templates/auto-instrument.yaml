@@ -1,0 +1,63 @@
+{{/* Copyright 2026 The Kamerton Authors. SPDX-License-Identifier: AGPL-3.0-only */}}
+{{- if .Values.autoInstrument.enabled }}
+{{- $ai := .Values.autoInstrument }}
+{{- $agent := index .Values "opentelemetry-ebpf-instrumentation" }}
+{{- if or $agent.config.create (not $agent.config.name) }}
+{{- fail "opentelemetry-ebpf-instrumentation.config must keep create: false and a name: Kamerton generates the agent configuration" }}
+{{- end }}
+{{- if not $ai.otlpEndpoint }}
+{{- fail "autoInstrument.otlpEndpoint is required when autoInstrument.enabled=true" }}
+{{- end }}
+{{- $exclude := concat (list .Release.Namespace) ($ai.namespaces.exclude | default list) | uniq }}
+{{- $include := $ai.namespaces.include | default (list "*") }}
+{{- $executables := concat (list "*/obi" "obi" "*ebpf-instrument*" "*otelcol*") ($ai.excludeExecutables | default list) | uniq }}
+{{- $rules := list
+  (dict "action" "exclude" "name" "excluded-executables"
+    "match" (dict "process" (dict "exe_path_glob" $executables)))
+  (dict "action" "exclude" "name" "excluded-namespaces"
+    "match" (dict "kubernetes" (dict "namespace_glob" $exclude)))
+  (dict "action" "exclude" "name" "opted-out"
+    "match" (dict "kubernetes" (dict "pod_annotations" (dict "kamerton.dev/auto-instrument" (list "false"))))) }}
+{{- if $ai.skipSDKInstrumented }}
+{{- range list "java" "nodejs" "python" "dotnet" "go" "sdk" "apache-httpd" "nginx" }}
+{{- $rules = append $rules (dict "action" "exclude" "name" (printf "otel-operator-%s" .)
+    "match" (dict "kubernetes" (dict "pod_annotations" (dict (printf "instrumentation.opentelemetry.io/inject-%s" .) (list "*"))))) }}
+{{- end }}
+{{- /* Not a selector: OBI turns this exact shape into its "drop services seen exporting OTLP" switch. */}}
+{{- $rules = append $rules (dict "action" "exclude" "name" "exports-otlp"
+    "match" (dict "process" (dict "exports_otlp" (dict "port" 4317 "protocol" "protobuf")))) }}
+{{- end }}
+{{- $rules = append $rules (dict "action" "include" "name" "included-namespaces"
+    "match" (dict "kubernetes" (dict "namespace_glob" $include))) }}
+{{- $routes := dict "unmatched" "low-cardinality" "patterns" ($ai.httpRoutes.patterns | default list) "ignored_patterns" ($ai.httpRoutes.ignored | default list) "ignore_mode" "all" }}
+{{- $config := dict
+  "file_format" "1.0"
+  "log_level" $ai.logLevel
+  "tracer_provider" (dict "processors" (list (dict "batch" (dict
+    "max_queue_size" 16384
+    "max_export_batch_size" 1024
+    "schedule_delay" 5000
+    "exporter" (dict "otlp_grpc" (dict "endpoint" $ai.otlpEndpoint "tls" (dict "insecure" true)))))))
+  "extensions" (dict "obi" (dict
+    "version" "2.0"
+    "capture" (dict
+      "policy" (dict "default_action" "exclude" "match_order" "first_match_wins")
+      "rules" $rules
+      "instrumentation" (dict "http" (dict "routes" (dict "incoming" $routes "outgoing" $routes)))
+      "runtimes" (dict "java" (dict "enabled" $ai.runtimeInjection) "nodejs" (dict "enabled" $ai.runtimeInjection))
+      "metrics" (dict "features" list))
+    "enrich" (dict "enrichers" (dict "kubernetes" (dict "mode" "enabled"))))) }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $agent.config.name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kamerton.labels" . | nindent 4 }}
+    app.kubernetes.io/component: auto-instrument
+data:
+  # Traces only, no meter_provider: the Collector derives span metrics, and
+  # sampling here would make those metrics undercount.
+  ebpf-instrument-config.yml: |
+    {{- toYaml $config | nindent 4 }}
+{{- end }}

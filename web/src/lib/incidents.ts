@@ -1,8 +1,9 @@
 // Copyright 2026 The Kamerton Authors
 // SPDX-License-Identifier: AGPL-3.0-only
 
-import type { ActiveAlert, AlertsResponse, Incident, IncidentAlert, IncidentEvidence } from '@/lib/api'
+import type { ActiveAlert, AlertsResponse, HistoryAlert, HistoryIncident, Incident, IncidentAlert, IncidentEvidence, IncidentNote } from '@/lib/api'
 import { httpUrl } from '@/lib/format'
+import { formatDuration } from '@/lib/model/rules'
 
 export interface AlertsFilter {
   alertname: string
@@ -65,3 +66,48 @@ export function hasEvidenceDetails(e: IncidentEvidence | undefined): boolean {
 }
 
 export const alertTitle = (a: IncidentAlert) => a.title || a.name
+
+/** A record of the incident history on the Alerts page. system is the name records carry (internal/server/history.go maps an ID to it); it narrows the list so the record is among the newest shown. */
+export function historyHref(id: string | undefined, system?: string): string {
+  const q = new URLSearchParams({ view: 'history' })
+  if (system) q.set('system', system)
+  if (id) q.set('incident', id)
+  return `/alerts?${q}`
+}
+
+/** 312 -> "5 min", 5400 -> "1 h 30 min"; seconds only under a minute. */
+export function incidentDuration(sec: number | undefined): string {
+  if (sec === undefined || !Number.isFinite(sec) || sec < 0) return ''
+  if (sec < 60) return formatDuration(`${Math.max(1, Math.round(sec))}s`)
+  const m = Math.round(sec / 60)
+  if (m < 60) return formatDuration(`${m}m`)
+  const h = Math.floor(m / 60)
+  if (h < 24) return formatDuration(`${h}h${m % 60}m`)
+  return formatDuration(`${Math.floor(h / 24)}d${h % 24}h`)
+}
+
+// Caps of internal/history/history.go (MaxCause, MaxFix), counted in
+// characters (runes) after trimming; longer text gets 400 too_long.
+export const NOTE_CAUSE_MAX = 200
+export const NOTE_FIX_MAX = 500
+
+/** Characters as the core counts them: code points, not UTF-16 units. */
+export const noteLength = (s: string) => [...s].length
+
+const cap = (s: string, max: number) => [...s.trim()].slice(0, max).join('')
+
+/** What is sent on save: trimmed and capped. Both fields are sent, so "" clears one. */
+export function notePayload(cause: string, fix: string): { cause: string; fix: string } {
+  return { cause: cap(cause, NOTE_CAUSE_MAX), fix: cap(fix, NOTE_FIX_MAX) }
+}
+
+/** "180 / 200" once a field reaches 80% of its cap, else null. */
+export const noteCounter = (len: number, max: number): string | null => (len >= max * 0.8 ? `${len} / ${max}` : null)
+
+export const hasNote = (n: IncidentNote | undefined): boolean => Boolean(n?.cause?.trim() || n?.fix?.trim())
+
+export const historyAlertTitle = (a: HistoryAlert | undefined) => a?.title || a?.name || ''
+
+/** Newest first; records without a start go last. */
+export const byNewest = (list: HistoryIncident[]) =>
+  [...list].sort((a, b) => (Date.parse(b.startedAt ?? '') || 0) - (Date.parse(a.startedAt ?? '') || 0))

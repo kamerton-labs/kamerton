@@ -48,6 +48,16 @@ func (f *fakeTelegram) SendFollowUp(_ context.Context, ref v1alpha1.SecretKeyRef
 	return nil
 }
 
+func (f *fakeTelegram) SendTracked(_ context.Context, ref v1alpha1.SecretKeyRef, chatID int64, html string) (int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.err != nil {
+		return 0, f.err
+	}
+	f.sent = append(f.sent, sentTelegram{ref: ref, chatID: chatID, html: html})
+	return int64(100 + len(f.sent)), nil
+}
+
 type fakeEmail struct {
 	mu      sync.Mutex
 	to      [][]string

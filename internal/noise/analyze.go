@@ -288,7 +288,9 @@ func (e *evaluator) suggest(ctx context.Context, k Key, actual []Episode) (*Sugg
 	}
 	matrices[cur.Expr] = m
 	severity := cur.Labels[rules.LabelSeverity]
-	muted := func(from, to time.Time) bool { return e.inh.muted(k.Service, k.Alert, severity, from, to) }
+	// A backtest does not know the starved label of a firing; a feeder alert at
+	// that time is taken to mean it (the label also needs no symptom of its own).
+	muted := func(from, to time.Time) bool { return e.inh.muted(k.Service, k.Alert, severity, true, from, to) }
 	if fire, _, _ := score(backtest.Evaluate(m, time.Duration(cur.For), Step, e.end), cur.Labels, time.Duration(cur.For), e.start, actual, muted); float64(fire) < MinReproducedShare*float64(st.Fired) {
 		return nil, nil
 	}

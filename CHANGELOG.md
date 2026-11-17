@@ -8,6 +8,24 @@ All notable changes to Kamerton are listed here. The format follows
 
 ### Added
 
+- Incident history and what helped. Every incident (root services and
+  alerts, affected services, start, end, duration, the follow-up's
+  evidence) is kept in the ConfigMap `kamerton-incident-history` (at most
+  300 incidents, 180 days; memory without a cluster); open incidents are
+  listed too. People add a cause and what helped
+  (`PUT /api/v1/incidents/history/{id}/note`, or a reply in Telegram to
+  the new "incident is over" message, sent after an incident with a
+  Telegram follow-up that lasted at least 2 minutes; off with
+  `spec.notifications.askWhatHelped: false`). The follow-up of the next
+  incident of the same root service reminds of the last one (when, how
+  long, cause, what helped, how many times in 30 days), and a note alone
+  is worth a follow-up. `GET /api/v1/incidents/history`, `previous` and
+  `historyId` on live incidents in the alerts API, and `experience` in a
+  service's runbook data. Callers' alerts in the 35 minutes after the
+  cause resolved (unmuted errors, a lingering SLO burn) are the incident's
+  aftermath, not a new incident with a second follow-up; still firing
+  after that, they become an incident of their own. A record opened for a
+  caller before the cause's alert fired is merged into the cause's.
 - Quieter rules. `GET /api/v1/systems/{id}/noise?window=7d` (1d, 3d, 7d)
   returns, per rule, how often it fired in the window, how many firings
   cleared within 5 minutes, the longest firing, when it last fired, the
@@ -30,6 +48,21 @@ All notable changes to Kamerton are listed here. The format follows
   from chats that receive the system's alerts. Verdicts also come from
   `POST /api/v1/systems/{id}/noise/feedback`. Counters only, in the
   ConfigMap `kamerton-noise-state` (memory without a cluster).
+- Services without OpenTelemetry: optional eBPF auto-instrumentation in the
+  Helm chart, off by default (`autoInstrument.enabled`). It installs
+  OpenTelemetry eBPF Instrumentation v1.0.0 (chart
+  `opentelemetry-ebpf-instrumentation` 0.16.1) as a DaemonSet that sends
+  traces of HTTP/gRPC calls to Kamerton's Collector, so uninstrumented
+  services get the same span metrics, rules and "found in telemetry" entry
+  as instrumented ones. Scope with `autoInstrument.namespaces.include` /
+  `exclude` (default: all but `kube-system` and Kamerton's own namespace) and
+  the pod annotation `kamerton.dev/auto-instrument: "false"`; services that
+  already send OpenTelemetry are left out by default
+  (`autoInstrument.skipSDKInstrumented`), though the agent's detection
+  misses some SDKs (nginx OTel module, C++, Python grpcio in the test).
+  Monitoring programs and browsers are excluded by executable
+  (`autoInstrument.excludeExecutables`). Runs as a privileged container
+  with `hostPID` by default (see SECURITY.md); memory limit 2Gi.
 - One message per incident: generated AlertmanagerConfigs carry inhibit
   rules built from `dependsOn`. While a service has an error, latency or
   "requests stopped" alert, the same kinds of alerts of the services that
@@ -112,6 +145,39 @@ All notable changes to Kamerton are listed here. The format follows
 - The bundled Prometheus accepts samples up to 30 minutes late
   (`tsdb.outOfOrderTimeWindow`). Before, one late sample made it reject the
   Collector's whole write request and span metrics stopped arriving.
+- The per-service "no data" alert (`KamertonServiceTelemetryMissing`) could
+  never fire with the bundled Collector: its spanmetrics connector kept
+  exporting a silent service's series as flat counters forever. It now sets
+  `metrics_expiration: 2m`, so a silent service is reported about 6 minutes
+  after its last span. A Collector of your own needs the same setting. Side
+  effects: a critical service that stops completely gets "requests stopped",
+  which resolves when its series expire and is followed by "no data"; a
+  service or system with no calls at all for that long is reported as
+  sending no data.
+- "No data" means "this normally has traffic now, and nothing arrives".
+  Both "no data" alerts fire only at hours when the service (the system,
+  for `KamertonTelemetryMissing`) had calls in every 10 minutes of the two
+  hours around the same time a week ago, averaging above
+  `trafficDrop.minRequestsPerSecond` (a day ago while it has no data from
+  a week ago). An idle test cluster at night, a batch service or a tool
+  idle on weekends no longer reports missing data, and nothing fires in the
+  first day after a service starts sending. "Requests stopped arriving"
+  counts no calls at all (a flat counter or a vanished series) under the
+  same condition and keeps firing when the series vanish, and the
+  per-service "no data" alert stays silent while that rule covers the stop:
+  a critical service that stops completely gets one notification. The
+  first-day exception: a drop to a few percent of normal still fires after
+  an hour of history; a complete stop needs a day.
+- Starved services no longer page. When a service fails, the services it
+  calls and the consumers of a queue it produces to lose their traffic, and
+  their "no data" and "requests stopped" alerts fired on their own (with
+  `payment` down: `email`, `accounting`, `fraud-detection`). Such an alert
+  now carries `kamerton_starved="true"` while a feeder's alert that the
+  service did not cause fires and the service has no error, latency or "no
+  ready pods" alert of its own; inhibit rules mute it, the incident lists
+  the service as affected, and the noise statistics count it as a
+  consequence. Queue consumers are the services named in
+  `queue.consumerGroups`. Off with `spec.notifications.groupByCause: false`.
 
 ## [0.1.0] - 2026-11-17
 

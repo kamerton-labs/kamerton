@@ -14,6 +14,7 @@ const state: { data?: AlertsResponse } = {}
 vi.mock('@/lib/api', () => ({
   useAlerts: () => ({ isLoading: false, isError: false, data: state.data }),
   useNoiseFeedback: () => ({ mutate: () => {}, isPending: false, isError: false, error: null }),
+  useSaveIncidentNote: () => ({ mutate: () => {}, isPending: false, isError: false, isSuccess: false, error: null }),
 }))
 
 const { default: AlertsPage } = await import('./AlertsPage')
@@ -190,6 +191,86 @@ describe('Alerts page with incidents', () => {
     expect(html).toContain('Что изменилось')
     expect(html).toContain('42 ошибки')
     expect(html).toContain('Открыть трейсы с ошибками')
+  })
+})
+
+describe('Alerts page: the last occurrence', () => {
+  const previous = { id: 'h-41', startedAt: ago(21 * 24 * 60), durationSeconds: 312, cause: 'Pool of DB connections exhausted', fix: 'Restarted payment and raised maxConns to 50', count30d: 4, noted: true }
+
+  it('shows nothing about earlier occurrences without previous', () => {
+    state.data = response([incident()])
+    const html = render()
+    expect(html).not.toContain('data-testid="incident-previous')
+    expect(html).not.toContain('Last time')
+    expect(html).not.toContain('data-testid="incident-add-note"')
+  })
+
+  it('puts "What helped" right after the headline and the rest after the cause', () => {
+    state.data = response([incident({ evidence, previous })])
+    const html = render()
+    const fix = html.indexOf('data-testid="incident-previous-fix"')
+    expect(fix).toBeGreaterThan(html.lastIndexOf('data-testid="incident-root-alert"'))
+    expect(fix).toBeLessThan(html.indexOf('data-testid="incident-cause"'))
+    expect(between(html, 'incident-previous-fix')).toContain('What helped: </span>Restarted payment and raised maxConns to 50')
+    const prev = between(html, 'incident-previous')
+    expect(html.indexOf('data-testid="incident-previous"')).toBeGreaterThan(html.indexOf('data-testid="incident-cause"'))
+    expect(prev).toContain('Last time:')
+    expect(prev).toContain('21 days ago, lasted 5 min.')
+    expect(prev).toContain('Cause: <span class="text-foreground">Pool of DB connections exhausted</span>')
+    expect(prev).toContain('4 times before this in the last 30 days')
+    expect(prev).toContain('href="/alerts?view=history&amp;system=shop&amp;incident=h-41"')
+  })
+
+  it('keeps it quiet without a fix and hides the count of a single occurrence', () => {
+    state.data = response([incident({ previous: { id: 'h-41', startedAt: ago(90), cause: 'payment: Requests stopped arriving', count30d: 1, noted: false } })])
+    const html = render()
+    expect(between(html, 'incident-previous')).toContain('Collected cause: <span class="text-foreground">payment: Requests stopped arriving</span>')
+    expect(html).not.toContain('data-testid="incident-previous-fix"')
+    const prev = between(html, 'incident-previous')
+    expect(prev).toContain('Last time:<span')
+    expect(prev).toContain('2 hours ago.')
+    expect(prev).not.toContain('lasted')
+    expect(html).not.toContain('data-testid="incident-previous-count"')
+    expect(html).not.toContain('undefined')
+  })
+
+  it('offers a note on a live incident that has a history record', () => {
+    state.data = response([incident({ historyId: 'h-42' })])
+    const html = render()
+    const add = between(html, 'incident-add-note')
+    expect(add).toContain('Add a note')
+    expect(add).toContain('data-testid="note-cause"')
+    expect(add).toContain('data-testid="note-fix"')
+    expect(add).toMatch(/<button[^>]*disabled=""[^>]*data-testid="note-save"/)
+    expect(html).not.toMatch(/<details[^>]*open=""[^>]*data-testid="incident-add-note"/)
+  })
+
+  it('offers no note on a system-wide incident, which is never recorded', () => {
+    const wide: Incident = {
+      ...incident(),
+      id: 'shop:_system',
+      roots: [],
+      rootAlerts: [ia({ fingerprint: 'sys', service: '', name: 'KamertonTelemetryMissing' })],
+      affected: [],
+      affectedAlerts: [],
+      historyId: '0123456789abcdef',
+    }
+    state.data = response([wide])
+    const html = render()
+    expect(html).toContain('data-incident="shop:_system"')
+    expect(html).not.toContain('data-testid="incident-add-note"')
+  })
+
+  it('renders the last occurrence in Russian', () => {
+    setLang('ru', false)
+    state.data = response([incident({ previous })])
+    const html = render()
+    expect(html).toContain('Что помогло: </span>Restarted payment')
+    expect(html).toContain('Прошлый раз:')
+    expect(html).toContain('21 день назад, длилось 5 мин.')
+    expect(html).toContain('Причина: <span')
+    expect(html).toContain('4 раза до этого за последние 30 дней')
+    expect(html).toContain('Открыть в истории')
   })
 })
 

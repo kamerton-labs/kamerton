@@ -465,7 +465,7 @@ export function deriveRules(desc: Description): RuleItem[] {
           severity: tsev ?? sev,
           severityInherited: !tsev,
           sentence: (thr === 0 ? tr('rule.s.trafficNone') : tr('rule.s.traffic', { thr: trim(thr * 100) })) + during(tfor),
-          note: noDataOn ? tr('rule.note.trafficNoData', { after: formatDuration(noDataAfter) }) : undefined,
+          note: noDataOn ? tr('rule.note.trafficNoData') : undefined,
           alert: 'KamertonRequestsStopped',
           alertOperation: '',
           alerts: ['KamertonRequestsStopped'],

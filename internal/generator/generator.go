@@ -17,6 +17,7 @@ import (
 	"github.com/kamerton-labs/kamerton/api/v1alpha1"
 	"github.com/kamerton-labs/kamerton/internal/description"
 	"github.com/kamerton-labs/kamerton/internal/rules"
+	"github.com/kamerton-labs/kamerton/internal/triage"
 )
 
 // Built-in policy values used when neither defaults nor the service set them.
@@ -131,6 +132,8 @@ type gen struct {
 	window time.Duration
 	opts   Options
 	byName map[string]*v1alpha1.Service
+	// feeders is triage.Graph.Feeders, computed on first use.
+	feeders map[string][]rules.Feeder
 }
 
 func newGen(sd *v1alpha1.SystemDescription, opts Options) *gen {
@@ -340,25 +343,31 @@ func (g *gen) serviceRules(svc *v1alpha1.Service) ([]rulefmt.Rule, error) {
 	nd := mergeNoData(svc, d.NoData, svc.NoData)
 	others := g.otherTelemetryNames(svc)
 	noDataOn := nd.enabled && spansOn && len(others) > 0
+	starved := g.starvation(svc)
+	tparams := rules.TrafficParams{
+		Meta: g.metaSev(svc, tp.forD, tp.severity), Target: g.spanTarget(svc),
+		Threshold: tp.threshold, MinRequestsPerSecond: tp.minRPS, SystemServices: g.telemetryNames(), Starvation: starved,
+	}
 	if trafficOn {
-		p := rules.TrafficParams{
-			Meta: g.metaSev(svc, tp.forD, tp.severity), Target: g.spanTarget(svc),
-			Threshold: tp.threshold, MinRequestsPerSecond: tp.minRPS, SystemServices: g.telemetryNames(),
-		}
-		if noDataOn {
-			p.PresentWithin = nd.after
-		}
-		out = append(out, g.withMessage(rules.TrafficStopped(p), svc, tp.message, ""))
+		out = append(out, g.withMessage(rules.TrafficStopped(tparams), svc, tp.message, ""))
 	}
 	if noDataOn {
 		sev := nd.severity
 		if sev == "" && trafficOn {
-			sev = v1alpha1.Severity(g.metaSev(svc, 0, tp.severity).Severity)
+			sev = v1alpha1.Severity(tparams.Severity)
 		}
 		if sev == "" {
 			sev = v1alpha1.SeverityWarning
 		}
-		r := rules.ServiceNoData(rules.ServiceNoDataParams{Meta: g.metaSev(svc, 0, sev), Target: g.spanTarget(svc), After: nd.after, Others: others})
+		// The floor is trafficDrop's even where that rule is off.
+		np := rules.ServiceNoDataParams{
+			Meta: g.metaSev(svc, 0, sev), Target: g.spanTarget(svc), After: nd.after, Others: others, MinRequestsPerSecond: tp.minRPS,
+			Starvation: starved,
+		}
+		if trafficOn {
+			np.Traffic = &tparams
+		}
+		r := rules.ServiceNoData(np)
 		out = append(out, g.withMessage(g.withDefaultMessage(r, serviceNoDataMessage, nd.after), svc, nd.message, ""))
 	}
 
@@ -439,6 +448,21 @@ func (g *gen) serviceRules(svc *v1alpha1.Service) ([]rulefmt.Rule, error) {
 	return out, nil
 }
 
+// starvation is nil without grouping by cause, which also turns off the
+// inhibit rules that mute starved alerts.
+func (g *gen) starvation(svc *v1alpha1.Service) *rules.Starvation {
+	if !g.spec.Notifications.GroupsByCause() {
+		return nil
+	}
+	if g.feeders == nil {
+		g.feeders = triage.NewGraph(g.spec).Feeders()
+	}
+	if len(g.feeders[svc.Name]) == 0 {
+		return nil
+	}
+	return &rules.Starvation{SystemLabel: LabelSystem, System: g.sd.Name, Service: svc.Name, Feeders: g.feeders[svc.Name]}
+}
+
 func withoutOperations(t rules.SpanTarget, svc *v1alpha1.Service, own func(v1alpha1.Operation) bool) rules.SpanTarget {
 	t.ExcludeOperations = append([]string{}, t.ExcludeOperations...)
 	for _, op := range svc.Operations {
@@ -482,7 +506,10 @@ func (g *gen) systemRules() []rulefmt.Rule {
 	if m.RunbookPerAlert {
 		m.RunbookURL = fmt.Sprintf("%s/systems/%s/runbooks/%s", strings.TrimRight(g.opts.RunbookBaseURL, "/"), g.sd.Name, SystemRunbook)
 	}
-	r := rules.SystemNoData(rules.SystemNoDataParams{Meta: m, Target: g.spanTarget(&v1alpha1.Service{}), After: after, Services: g.telemetryNames()})
+	r := rules.SystemNoData(rules.SystemNoDataParams{
+		Meta: m, Target: g.spanTarget(&v1alpha1.Service{}), After: after, Services: g.telemetryNames(),
+		MinRequestsPerSecond: mergeTraffic(&v1alpha1.Service{}, g.defaults().TrafficDrop).minRPS,
+	})
 	return []rulefmt.Rule{g.withMessage(g.withDefaultMessage(r, systemNoDataMessage, after), &v1alpha1.Service{}, msg, "")}
 }
 

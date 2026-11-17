@@ -66,4 +66,38 @@ describe('runbook page', () => {
     expect(html).toContain('Ни один под сервиса не готов')
     expect(html).toContain('остановилась его собственная телеметрия')
   })
+
+  it('puts what helped before above the generic advice, and nothing when there is no experience', () => {
+    const base: Runbook = { system: 'shop', systemID: 'shop-prod', service: { name: 'payment', type: 'grpc', critical: true }, alerts: [alert({})], markdown: '' }
+    state.data = {
+      ...base,
+      experience: [
+        { id: 'h-7', startedAt: '2026-10-27T09:14:00Z', durationSeconds: 312, cause: 'Memory limit too low', fix: 'Raised the limit to 512Mi' },
+        { id: 'h-3', startedAt: '2026-10-01T10:00:00Z', durationSeconds: 5400, fix: 'Rolled back to v1.4.2' },
+        { id: 'h-1', startedAt: '2026-09-01T10:00:00Z' },
+      ],
+    }
+    let html = render('/systems/shop/runbooks/payment')
+    const exp = html.indexOf('data-testid="runbook-experience"')
+    expect(exp).toBeGreaterThan(0)
+    expect(exp).toBeLessThan(html.indexOf('No pod of the service is ready'))
+    expect(html).toContain('What helped before')
+    expect(html.match(/data-testid="runbook-experience-item"/g)).toHaveLength(2)
+    expect(html).toContain('What helped: </span>Raised the limit to 512Mi')
+    expect(html).toContain('Cause: </span>Memory limit too low')
+    expect(html).toContain('lasted 5 min')
+    expect(html).toContain('lasted 1 h 30 min')
+    expect(html).toContain('href="/alerts?view=history&amp;system=shop&amp;incident=h-7"')
+    setLang('ru', false)
+    html = render('/systems/shop/runbooks/payment')
+    expect(html).toContain('Что помогало раньше')
+    expect(html).toContain('Что помогло: </span>Raised the limit')
+    setLang('en', false)
+    for (const experience of [undefined, []]) {
+      state.data = { ...base, experience }
+      html = render('/systems/shop/runbooks/payment')
+      expect(html).not.toContain('runbook-experience')
+      expect(html).not.toContain('What helped')
+    }
+  })
 })

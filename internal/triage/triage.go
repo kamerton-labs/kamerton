@@ -5,6 +5,7 @@
 package triage
 
 import (
+	"slices"
 	"sort"
 
 	"github.com/kamerton-labs/kamerton/api/v1alpha1"
@@ -12,12 +13,25 @@ import (
 
 type Graph struct {
 	deps map[string][]string
+	// consumers of a queue service: the services that depend on it and are
+	// named in its consumerGroups. The other services that depend on it produce.
+	consumers map[string][]string
 }
 
 func NewGraph(spec *v1alpha1.SystemDescriptionSpec) *Graph {
-	g := &Graph{deps: make(map[string][]string, len(spec.Services))}
+	g := &Graph{deps: make(map[string][]string, len(spec.Services)), consumers: map[string][]string{}}
 	for _, s := range spec.Services {
 		g.deps[s.Name] = append([]string(nil), s.DependsOn...)
+	}
+	for _, q := range spec.Services {
+		if q.Queue == nil {
+			continue
+		}
+		for _, s := range spec.Services {
+			if slices.Contains(s.DependsOn, q.Name) && slices.Contains(q.Queue.ConsumerGroups, s.Name) {
+				g.consumers[q.Name] = append(g.consumers[q.Name], s.Name)
+			}
+		}
 	}
 	return g
 }

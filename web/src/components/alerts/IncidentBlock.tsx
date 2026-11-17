@@ -8,10 +8,11 @@ import { cn } from 'cn'
 import { SeverityBadge } from '@/components/common'
 import { Button } from '@/components/ui/button'
 import FeedbackButtons from './FeedbackButtons'
+import NoteEditor from './NoteEditor'
 import { useT } from '@/i18n'
-import type { Incident, IncidentAlert, IncidentEvidence } from '@/lib/api'
+import type { Incident, IncidentAlert, IncidentEvidence, PreviousIncident } from '@/lib/api'
 import { dateTime, httpUrl, sinceText, timeAgo } from '@/lib/format'
-import { alertTitle, capText, hasEvidenceDetails, isCritical, isSystemIncident, LOG_LINE_MAX, runbookHref, serviceHref } from '@/lib/incidents'
+import { alertTitle, capText, hasEvidenceDetails, historyHref, incidentDuration, isCritical, isSystemIncident, LOG_LINE_MAX, runbookHref, serviceHref } from '@/lib/incidents'
 
 const sev = (s: string) => (s === 'critical' ? 'critical' : 'warning')
 const linkCls = 'underline-offset-2 hover:underline'
@@ -66,7 +67,7 @@ function RootAlert({ a, system }: { a: IncidentAlert; system: string }) {
   )
 }
 
-function Evidence({ e }: { e: IncidentEvidence }) {
+export function Evidence({ e }: { e: IncidentEvidence }) {
   const { t, tn } = useT()
   const traces = httpUrl(e.tracesURL)
   const row = 'grid gap-0.5 sm:grid-cols-[9rem_1fr] sm:gap-3'
@@ -118,6 +119,44 @@ function Evidence({ e }: { e: IncidentEvidence }) {
   )
 }
 
+/** "What helped" of the last occurrence, as one line the person reads right after the headline. */
+function PreviousFix({ fix }: { fix: string }) {
+  const { t } = useT()
+  return (
+    <p className="text-base font-medium [overflow-wrap:anywhere] whitespace-pre-line" data-testid="incident-previous-fix">
+      <span className="text-muted-foreground">{t('note.fix')}: </span>
+      {fix}
+    </p>
+  )
+}
+
+function Previous({ p, system }: { p: PreviousIncident; system: string }) {
+  const { t, tn } = useT()
+  const when = [p.startedAt && timeAgo(p.startedAt), p.durationSeconds !== undefined && t('history.lasted', { d: incidentDuration(p.durationSeconds) })].filter(Boolean).join(', ')
+  return (
+    <div className="space-y-0.5 text-sm text-muted-foreground" data-testid="incident-previous">
+      <p>
+        {t('previous.title')}
+        {when && <span title={p.startedAt ? dateTime(p.startedAt) : undefined}> {when}.</span>}
+        {p.cause && (
+          <span className="[overflow-wrap:anywhere] whitespace-pre-line">
+            {' '}
+            {p.noted ? t('note.cause') : t('previous.collectedCause')}: <span className="text-foreground">{p.cause}</span>
+          </span>
+        )}
+      </p>
+      <p className="text-xs">
+        {p.count30d !== undefined && p.count30d > 1 && <span data-testid="incident-previous-count">{tn('previous.count', p.count30d)} · </span>}
+        {p.id && (
+          <Link className={linkCls} to={historyHref(p.id, system)} data-testid="incident-previous-link">
+            {t('history.open')}
+          </Link>
+        )}
+      </p>
+    </div>
+  )
+}
+
 /** One incident: what broke (root alerts), why, and who else is affected. systemText is the core's message text of a system-wide alert. */
 export default function IncidentBlock({ inc, openAffected = false, systemText }: { inc: Incident; openAffected?: boolean; systemText?: string }) {
   const { t, tn } = useT()
@@ -130,6 +169,8 @@ export default function IncidentBlock({ inc, openAffected = false, systemText }:
       ? systemText || t('incident.systemCause')
       : tn(ev?.likely ? 'incident.causeRootsLikely' : 'incident.causeRoots', inc.roots.length, { roots })
   const muted = inc.affectedAlerts.filter((a) => a.muted).length
+  const prev = inc.previous
+  const fix = prev?.fix?.trim()
   return (
     <section data-testid="incident" data-incident={inc.id} className={cn('space-y-3 rounded-xl border bg-card p-4', isCritical(inc) && 'border-firing/40')}>
       <ul className="space-y-3">
@@ -137,6 +178,7 @@ export default function IncidentBlock({ inc, openAffected = false, systemText }:
           <RootAlert key={a.fingerprint || `${a.service}-${a.name}-${i}`} a={a} system={inc.system} />
         ))}
       </ul>
+      {fix && <PreviousFix fix={fix} />}
       <div className="space-y-0.5">
         <p className="text-sm" data-testid="incident-cause">
           {cause}
@@ -147,6 +189,7 @@ export default function IncidentBlock({ inc, openAffected = false, systemText }:
           </p>
         )}
       </div>
+      {prev && <Previous p={prev} system={inc.system} />}
       {ev && hasEvidenceDetails(ev) && <Evidence e={ev} />}
       {inc.affected.length > 0 && (
         <div className="space-y-1.5 border-t pt-3 text-sm" data-testid="incident-affected">
@@ -191,6 +234,17 @@ export default function IncidentBlock({ inc, openAffected = false, systemText }:
             </details>
           )}
         </div>
+      )}
+      {inc.historyId && !wide && (
+        <details className="group border-t pt-3 text-sm" data-testid="incident-add-note">
+          <summary className="inline-flex cursor-pointer list-none items-center gap-1 rounded text-muted-foreground outline-none hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50 [&::-webkit-details-marker]:hidden">
+            <ChevronDown className="size-3.5 transition-transform group-open:rotate-180" />
+            {t('note.add')}
+          </summary>
+          <div className="mt-2 pl-4.5">
+            <NoteEditor id={inc.historyId} />
+          </div>
+        </details>
       )}
     </section>
   )

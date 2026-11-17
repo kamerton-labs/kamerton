@@ -99,11 +99,18 @@ func trafficExpr(t *testing.T) string {
 	return strings.Join(strings.Fields(r.Expr), " ")
 }
 
-// others is the rest of the system: two services with steady traffic for 6 hours.
-const others = `
+// others is the rest of the system: two services with steady traffic for 6
+// hours, othersDay the same for 30 hours.
+const (
+	others = `
   calls{service_name="web", span_kind="SPAN_KIND_SERVER"} 0+60x360
   calls{service_name="cart", span_kind="SPAN_KIND_SERVER"} 0+30x360
 `
+	othersDay = `
+  calls{service_name="web", span_kind="SPAN_KIND_SERVER"} 0+60x1800
+  calls{service_name="cart", span_kind="SPAN_KIND_SERVER"} 0+30x1800
+`
+)
 
 // The scenarios run the expression in Prometheus' PromQL engine (promqltest).
 // "pay" normally gets 6 calls a minute; unless said otherwise its calls stop at
@@ -116,22 +123,35 @@ load 1m
   calls{service_name="pay", span_kind="SPAN_KIND_SERVER"} 0+6x360` + others + `
 eval range from 1h to 6h step 1m ` + expr + `
 `},
+		// No calls at all count only where the same hours yesterday were busy: these have a day of history.
 		{"counter stops growing: fires with value 0", `
 load 1m
-  calls{service_name="pay", span_kind="SPAN_KIND_SERVER"} 0+6x180 1080x180` + others + `
-eval instant at 180m ` + expr + `
+  calls{service_name="pay", span_kind="SPAN_KIND_SERVER"} 0+6x1620 9720x180` + othersDay + `
+eval instant at 1620m ` + expr + `
 
-eval instant at 185m ` + expr + `
+eval instant at 1625m ` + expr + `
   {service_name="pay"} 0
 
-eval instant at 300m ` + expr + `
+eval instant at 1740m ` + expr + `
   {service_name="pay"} 0
 `},
 		{"series disappears: counts as zero", `
 load 1m
-  calls{service_name="pay", span_kind="SPAN_KIND_SERVER"} 0+6x180` + others + `
-eval instant at 185m ` + expr + `
+  calls{service_name="pay", span_kind="SPAN_KIND_SERVER"} 0+6x1620` + othersDay + `
+eval instant at 1625m ` + expr + `
   {service_name="pay"} 0
+
+eval instant at 1790m ` + expr + `
+  {service_name="pay"} 0
+`},
+		// The anchors let the storage take a series that starts late (see episodes).
+		{"no calls at an hour without calls yesterday: no alert", `
+load 1m
+  anchor 0
+
+load 1m
+  calls{service_name="pay", span_kind="SPAN_KIND_SERVER"} _x1500 0+6x120` + othersDay + `
+eval range from 1625m to 1790m step 1m ` + expr + `
 `},
 		{"drops to 5% of normal: fires; to 50%: does not", `
 load 1m
@@ -188,15 +208,18 @@ eval range from 121m to 6h step 15s ` + expr + `
 `},
 		{"after a gap the service stays silent while the others return: fires", `
 load 1m
-  calls{service_name="pay", span_kind="SPAN_KIND_SERVER", collector="a"} 0+6x120
-  calls{service_name="web", span_kind="SPAN_KIND_SERVER", collector="a"} 0+60x120
-  calls{service_name="cart", span_kind="SPAN_KIND_SERVER", collector="a"} 0+30x120
-  calls{service_name="web", span_kind="SPAN_KIND_SERVER", collector="b"} _x300 0+60x60
-  calls{service_name="cart", span_kind="SPAN_KIND_SERVER", collector="b"} _x300 0+30x60
+  anchor 0
 
-eval instant at 301m ` + expr + `
+load 1m
+  calls{service_name="pay", span_kind="SPAN_KIND_SERVER", collector="a"} 0+6x1560
+  calls{service_name="web", span_kind="SPAN_KIND_SERVER", collector="a"} 0+60x1560
+  calls{service_name="cart", span_kind="SPAN_KIND_SERVER", collector="a"} 0+30x1560
+  calls{service_name="web", span_kind="SPAN_KIND_SERVER", collector="b"} _x1740 0+60x60
+  calls{service_name="cart", span_kind="SPAN_KIND_SERVER", collector="b"} _x1740 0+30x60
 
-eval instant at 306m ` + expr + `
+eval instant at 1741m ` + expr + `
+
+eval instant at 1746m ` + expr + `
   {service_name="pay"} 0
 `},
 	} {

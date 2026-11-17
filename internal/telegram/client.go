@@ -123,6 +123,10 @@ type Message struct {
 	MigrateFromChatID int64  `json:"migrate_from_chat_id,omitempty"`
 	NewChatMembers    []User `json:"new_chat_members,omitempty"`
 	LeftChatMember    *User  `json:"left_chat_member,omitempty"`
+	// Text and ReplyToMessage carry replies to Kamerton's "incident is over"
+	// messages; the sender (from) is not decoded.
+	Text           string   `json:"text,omitempty"`
+	ReplyToMessage *Message `json:"reply_to_message,omitempty"`
 }
 
 type Update struct {
@@ -157,7 +161,8 @@ type Keyboard [][]InlineButton
 
 // AllowedUpdates are requested explicitly because getUpdates remembers the
 // last allowed_updates of the bot. message and channel_post carry migrations,
-// title changes and chats; callback_query the presses of follow-up buttons.
+// title changes and chats, message also replies to the bot's messages (in
+// privacy mode too); callback_query the presses of follow-up buttons.
 var AllowedUpdates = []string{"my_chat_member", "message", "channel_post", "callback_query"}
 
 type Client struct {
@@ -277,6 +282,33 @@ func (c *Client) SendMessageWithKeyboard(ctx context.Context, token string, chat
 		params["reply_markup"] = map[string]any{"inline_keyboard": kb}
 	}
 	return c.call(ctx, token, "sendMessage", params, nil)
+}
+
+// SendMessageID sends HTML text, as a reply when replyTo is not 0, and
+// returns the ID of the sent message.
+func (c *Client) SendMessageID(ctx context.Context, token string, chatID int64, html string, replyTo int64) (int64, error) {
+	params := map[string]any{
+		"chat_id": chatID, "text": html, "parse_mode": "HTML",
+		"link_preview_options": map[string]any{"is_disabled": true},
+	}
+	if replyTo != 0 {
+		// allow_sending_without_reply: the reply still goes out if the person
+		// deleted their message meanwhile.
+		params["reply_parameters"] = map[string]any{"message_id": replyTo, "allow_sending_without_reply": true}
+	}
+	var m Message
+	if err := c.call(ctx, token, "sendMessage", params, &m); err != nil {
+		return 0, err
+	}
+	return m.MessageID, nil
+}
+
+// SetReaction puts one emoji reaction on a message. Bots may set one
+// reaction per message, and a chat may limit the allowed emoji.
+func (c *Client) SetReaction(ctx context.Context, token string, chatID, messageID int64, emoji string) error {
+	return c.call(ctx, token, "setMessageReaction", map[string]any{
+		"chat_id": chatID, "message_id": messageID, "reaction": []map[string]any{{"type": "emoji", "emoji": emoji}},
+	}, nil)
 }
 
 // AnswerCallbackQuery stops the spinner on the pressed button; text, when

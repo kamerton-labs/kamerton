@@ -95,7 +95,9 @@ helm-deps: $(CHART)/charts ## Download the pinned chart dependencies (adds their
 .PHONY: helm-lint
 helm-lint: helm-deps ## Lint and render the Helm chart (never installs)
 	helm lint --strict $(CHART)
+	helm lint --strict $(CHART) --set autoInstrument.enabled=true
 	helm template kamerton $(CHART) --namespace kamerton >/dev/null
+	helm template kamerton $(CHART) --namespace kamerton --set autoInstrument.enabled=true >/dev/null
 
 .PHONY: check
 check: lint test helm-lint ## Everything CI should run

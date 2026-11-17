@@ -21,6 +21,7 @@ import (
 	"github.com/kamerton-labs/kamerton/internal/descstore"
 	"github.com/kamerton-labs/kamerton/internal/evidence"
 	"github.com/kamerton-labs/kamerton/internal/generator"
+	"github.com/kamerton-labs/kamerton/internal/history"
 	"github.com/kamerton-labs/kamerton/internal/rules"
 	"github.com/kamerton-labs/kamerton/internal/telegram"
 	"github.com/kamerton-labs/kamerton/internal/triage"
@@ -51,6 +52,7 @@ const (
 
 type TelegramSender interface {
 	SendFollowUp(ctx context.Context, ref v1alpha1.SecretKeyRef, chatID int64, html string, kb telegram.Keyboard) error
+	SendTracked(ctx context.Context, ref v1alpha1.SecretKeyRef, chatID int64, html string) (int64, error)
 }
 
 // Feedback gives the "useful / noise" buttons of a follow-up about the given
@@ -77,7 +79,9 @@ type Service struct {
 	Feedback Feedback
 	// State remembers incidents across restarts and replicas; nil: memory.
 	State StateStore
-	Delay time.Duration
+	// History keeps incident records; nil: none, and no recall.
+	History *history.Service
+	Delay   time.Duration
 	// Rechecks are the waits between attempts while nothing is worth sending;
 	// nil: DefaultRechecks. The last attempt gives the incident up.
 	Rechecks []time.Duration
@@ -140,6 +144,7 @@ func (s *Service) Handle(hook *alertmanager.Webhook) {
 		defer s.wg.Done()
 		ctx, cancel := context.WithTimeout(context.Background(), processTimeout)
 		defer cancel()
+		s.observeHook(ctx, hook)
 		s.Process(ctx, hook, received)
 	}()
 }
@@ -347,8 +352,9 @@ func (s *Service) Process(ctx context.Context, hook *alertmanager.Webhook, recei
 // sends a follow-up for each one that has none yet and something to say.
 func (s *Service) attempt(ctx context.Context, sd *v1alpha1.SystemDescription, firing []alertmanager.WebhookAlert, last bool) []Result {
 	recipients := Recipients(sd.Spec.Notifications, firing)
-	alerts := s.systemAlerts(ctx, sd, firing)
+	alerts, complete := s.systemAlerts(ctx, sd, firing, nil)
 	incidents := triage.NewGraph(&sd.Spec).Incidents(sd.Name, alerts)
+	hist := s.observe(ctx, history.Observation{System: sd.Name, Incidents: incidents, Complete: complete})
 
 	byIncident := map[string][]string{}
 	var order []string
@@ -375,6 +381,14 @@ func (s *Service) attempt(ctx context.Context, sd *v1alpha1.SystemDescription, f
 			}
 		}
 		res := Result{Incident: id}
+		if p := s.History.AftermathOf(hist, sd.Name, *inc); p != nil {
+			// Not claimed: should it outlive the grace period, the sweep
+			// starts its follow-up under the same key.
+			res.Skipped = "aftermath of an earlier incident"
+			s.log().Debug("follow-up skipped", "system", sd.Name, "incident", id, "reason", res.Skipped, "of", p.Incident)
+			results = append(results, res)
+			continue
+		}
 		key := id + "@" + strconv.FormatInt(inc.StartsAt.Unix(), 10)
 		rec := Record{At: s.now(), System: sd.Name, Roots: inc.Roots}
 		if len(inc.Roots) > 0 {
@@ -425,7 +439,14 @@ func (s *Service) send(ctx context.Context, sd *v1alpha1.SystemDescription, inc 
 		}
 		tz = n.TimeZone
 	}
-	s.remember(inc.ID, generator.Summarize(f, lang, tz, s.now()))
+	sum := generator.Summarize(f, lang, tz, s.now())
+	s.remember(inc.ID, sum)
+	if s.History != nil {
+		if err := s.History.AttachEvidence(ctx, sd.Name, inc.ID, sum); err != nil {
+			s.log().Warn("incident history: cannot keep the evidence", "system", sd.Name, "error", err)
+		}
+		f.Previous = s.History.Recall(ctx, sd.Name, *inc).Recall()
+	}
 	switch {
 	case len(recipients) == 0:
 		res.Skipped = "no recipients"
@@ -440,6 +461,7 @@ func (s *Service) send(ctx context.Context, sd *v1alpha1.SystemDescription, inc 
 		kb = s.Feedback.Buttons(ctx, sd, inc.RootAlerts)
 	}
 	seenChat := map[int64]bool{}
+	var asked []string
 	for i := range recipients {
 		r := &recipients[i]
 		switch {
@@ -450,6 +472,7 @@ func (s *Service) send(ctx context.Context, sd *v1alpha1.SystemDescription, inc 
 				continue
 			}
 			res.Telegram++
+			asked = append(asked, r.Name)
 		case r.Email != nil && s.Email != nil:
 			if err := s.Email.SendFollowUp(ctx, r.Email, msg.EmailSubject, msg.EmailText, msg.EmailHTML); err != nil {
 				s.log().Warn("follow-up email failed", "system", sd.Name, "receiver", r.Name, "error", err)
@@ -464,6 +487,11 @@ func (s *Service) send(ctx context.Context, sd *v1alpha1.SystemDescription, inc 
 	}
 	for _, l := range f.Likely {
 		res.likely = append(res.likely, l.Service)
+	}
+	if s.History != nil {
+		if err := s.History.FollowUpSent(ctx, sd.Name, inc.ID, asked); err != nil {
+			s.log().Warn("incident history: cannot record the follow-up", "system", sd.Name, "error", err)
+		}
 	}
 	s.log().Info("follow-up sent", "system", sd.Name, "incident", inc.ID, "telegram", res.Telegram, "email", res.Email)
 	return res
@@ -748,17 +776,18 @@ func (s *Service) description(ctx context.Context, system string) *v1alpha1.Syst
 }
 
 // systemAlerts returns the system's alerts, muted ones included, adding those of
-// the notification when Alertmanager fails or does not have them yet.
-func (s *Service) systemAlerts(ctx context.Context, sd *v1alpha1.SystemDescription, firing []alertmanager.WebhookAlert) []triage.Alert {
-	var out []triage.Alert
+// the notification when Alertmanager fails or does not have them yet and
+// leaving out the fingerprints in resolved. complete: Alertmanager answered.
+func (s *Service) systemAlerts(ctx context.Context, sd *v1alpha1.SystemDescription, firing []alertmanager.WebhookAlert, resolved map[string]bool) (out []triage.Alert, complete bool) {
 	seen := map[string]bool{}
 	if s.Alerts != nil {
 		list, err := s.Alerts(ctx, sd)
 		if err != nil {
 			s.log().Warn("follow-up: alerts of the system unavailable; using the notification only", "system", sd.Name, "error", err)
 		}
+		complete = err == nil
 		for _, a := range list {
-			if a.Labels[generator.LabelSystem] != sd.Name {
+			if a.Labels[generator.LabelSystem] != sd.Name || resolved[a.Fingerprint] {
 				continue
 			}
 			out = append(out, toTriage(a.Fingerprint, a.Labels, a.Annotations, a.StartsAt, a.Inhibited()))
@@ -770,7 +799,7 @@ func (s *Service) systemAlerts(ctx context.Context, sd *v1alpha1.SystemDescripti
 			out = append(out, toTriage(a.Fingerprint, a.Labels, a.Annotations, a.StartsAt, false))
 		}
 	}
-	return out
+	return out, complete
 }
 
 func key(fp string, labels map[string]string) string {

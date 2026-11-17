@@ -43,6 +43,8 @@ type Service struct {
 	Now         func() time.Time
 	// Callbacks handles presses of inline buttons; nil answers them with no text.
 	Callbacks CallbackHandler
+	// Replies handles replies to the bot's messages; nil ignores them.
+	Replies ReplyHandler
 
 	once sync.Once
 	wake chan struct{}
@@ -976,8 +978,44 @@ func (s *Service) process(ctx context.Context, token string, ups []Update, botID
 		if u.CallbackQuery != nil {
 			s.handleCallback(ctx, token, u.CallbackQuery)
 		}
+		if m := u.Message; m != nil && m.ReplyToMessage != nil && m.Text != "" && s.Replies != nil {
+			s.handleReply(ctx, token, m)
+		}
 	}
 	return nil
+}
+
+type ReplyHandler interface {
+	HandleReply(ctx context.Context, chatID, replyTo int64, text string) ReplyResult
+}
+
+// ReplyResult: React confirms with a reaction, and Text is sent as a reply
+// when React is false or the chat does not allow the reaction. Both empty:
+// the message is not answered.
+type ReplyResult struct {
+	React bool
+	Text  string
+}
+
+const confirmEmoji = "👍"
+
+func (s *Service) handleReply(ctx context.Context, token string, m *Message) {
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	res := s.Replies.HandleReply(ctx, m.Chat.ID, m.ReplyToMessage.MessageID, m.Text)
+	if res.React {
+		err := s.API.SetReaction(ctx, token, m.Chat.ID, m.MessageID, confirmEmoji)
+		if err == nil {
+			return
+		}
+		s.Logger.Debug("telegram: cannot react to a reply; answering with text", "error", describeErr(err))
+	}
+	if res.Text == "" {
+		return
+	}
+	if _, err := s.API.SendMessageID(ctx, token, m.Chat.ID, html.EscapeString(res.Text), m.MessageID); err != nil {
+		s.Logger.Warn("telegram: cannot answer a reply", "error", describeErr(err))
+	}
 }
 
 type CallbackHandler interface {
@@ -1276,4 +1314,19 @@ func (s *Service) SendFollowUp(ctx context.Context, ref v1alpha1.SecretKeyRef, c
 		return err
 	}
 	return s.API.SendMessageWithKeyboard(ctx, token, chatID, htmlText, kb)
+}
+
+// SendTracked sends through Kamerton's own token only, like SendFollowUp, and
+// returns the message ID, so replies to the message can be matched.
+func (s *Service) SendTracked(ctx context.Context, ref v1alpha1.SecretKeyRef, chatID int64, htmlText string) (int64, error) {
+	s.init()
+	name, key := s.Tokens.Ref()
+	if ref.Name != name || ref.Key != key {
+		return 0, ErrNotKamertonBot
+	}
+	token, _, err := s.token(ctx)
+	if err != nil {
+		return 0, err
+	}
+	return s.API.SendMessageID(ctx, token, chatID, htmlText, 0)
 }

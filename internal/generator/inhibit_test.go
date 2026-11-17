@@ -278,6 +278,10 @@ func TestInhibitRulesOtelDemo(t *testing.T) {
 	if strings.Join(callers, ",") != "checkout,checkout" {
 		t.Errorf("payment mutes %v, want checkout (two severity rules)", callers)
 	}
+	// 1 system no-data rule, 2 per service with callers (13), 2 per fed service (15).
+	if n := len(inhibitRulesOf(t, sd)); n != 57 {
+		t.Errorf("%d inhibit rules, want 57", n)
+	}
 }
 
 func isNoDataRule(r amInhibitRule) bool {
@@ -401,5 +405,103 @@ func TestWebhookRoute(t *testing.T) {
 		if strings.Contains(string(raw), webhookReceiver) {
 			t.Errorf("%s: webhook wired: %s", s.Namespace, raw)
 		}
+	}
+}
+
+func starvedAlert(sys, svc, name, sev string) map[string]string {
+	a := alert(sys, svc, name, sev)
+	a[rules.LabelStarved] = "true"
+	return a
+}
+
+func demo(t *testing.T) *v1alpha1.SystemDescription {
+	t.Helper()
+	sd, _, err := description.LoadFile("../../testdata/otel-demo/system.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return sd
+}
+
+// Payment scaled to zero in the demo: checkout fails, email gets no calls and
+// accounting and fraud-detection no orders.
+func TestInhibitRulesMuteStarvedServices(t *testing.T) {
+	rs := inhibitRulesOf(t, demo(t))
+	alerts := []map[string]string{
+		alert("otel-demo", "payment", rules.AlertNoReadyPods, "critical"),                            // 0 root
+		alert("otel-demo", "payment", rules.AlertRequestsStopped, "critical"),                        // 1 its own (no label): kept
+		alert("otel-demo", "checkout", rules.AlertErrorRate, "critical"),                             // 2 caller: muted by payment
+		starvedAlert("otel-demo", "email", rules.AlertServiceTelemetryMissing, "warning"),            // 3 starved callee: muted
+		starvedAlert("otel-demo", "accounting", rules.AlertServiceTelemetryMissing, "warning"),       // 4 starved consumer: muted
+		starvedAlert("otel-demo", "fraud-detection", rules.AlertServiceTelemetryMissing, "warning"),  // 5 starved consumer: muted
+		alert("otel-demo", "email", rules.AlertErrorRate, "warning"),                                 // 6 own errors of a starved service: kept
+		alert("otel-demo", "email", rules.AlertRestarts, "warning"),                                  // 7 own restarts: kept
+		alert("otel-demo", "quote", rules.AlertServiceTelemetryMissing, "warning"),                   // 8 no label: kept
+		starvedAlert("otel-demo", "quote", rules.AlertRequestsStopped, "critical"),                   // 9 feeder shipping quiet: kept
+		starvedAlert("otel-demo", "valkey-cart", rules.AlertServiceTelemetryMissing, "critical"),     // 10 feeder cart quiet: kept
+		starvedAlert("otel-demo", "product-catalog", rules.AlertServiceTelemetryMissing, "critical"), // 11 feeder checkout fires: muted
+		starvedAlert("other", "email", rules.AlertServiceTelemetryMissing, "warning"),                // 12 another system: kept
+	}
+	got := inhibited(rs, alerts)
+	want := map[int]bool{2: true, 3: true, 4: true, 5: true, 11: true}
+	for i := range alerts {
+		if got[i] != want[i] {
+			t.Errorf("alert %d (%s %s): muted=%v, want %v", i, alerts[i][rules.LabelService], alerts[i]["alertname"], got[i], want[i])
+		}
+	}
+}
+
+func TestInhibitRulesStarvationChainAndLoop(t *testing.T) {
+	rs := inhibitRulesOf(t, demo(t))
+	// A chain: frontend-proxy fails, frontend is starved (muted), and its
+	// muted alert still mutes the services frontend starves.
+	chain := []map[string]string{
+		alert("otel-demo", "frontend-proxy", rules.AlertNoReadyPods, "critical"),
+		starvedAlert("otel-demo", "frontend", rules.AlertRequestsStopped, "critical"),
+		starvedAlert("otel-demo", "ad", rules.AlertRequestsStopped, "critical"),
+	}
+	if got := inhibited(rs, chain); got[0] || !got[1] || !got[2] {
+		t.Errorf("chain: muted = %v, want frontend and ad", got)
+	}
+	// A starved "requests stopped" mutes no caller, so the two never mute each other.
+	loop := []map[string]string{
+		starvedAlert("otel-demo", "payment", rules.AlertRequestsStopped, "critical"),
+		alert("otel-demo", "checkout", rules.AlertErrorRate, "critical"),
+	}
+	if got := inhibited(rs, loop); got[1] || !got[0] {
+		t.Errorf("loop: muted = %v, want only payment's starved alert", got)
+	}
+	// A warning of the feeder does not hide a critical starved alert.
+	sev := []map[string]string{
+		alert("otel-demo", "checkout", rules.AlertLatency, "warning"),
+		starvedAlert("otel-demo", "email", rules.AlertServiceTelemetryMissing, "critical"),
+		starvedAlert("otel-demo", "accounting", rules.AlertServiceTelemetryMissing, "warning"),
+	}
+	if got := inhibited(rs, sev); got[1] || !got[2] {
+		t.Errorf("severity: muted = %v, want the warning only", got)
+	}
+}
+
+func TestStarvationOffWithoutGroupingByCause(t *testing.T) {
+	sd := demo(t)
+	off := false
+	sd.Spec.Notifications.GroupByCause = &off
+	b, err := Generate(sd, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, g := range b.RuleGroups.Groups {
+		for _, r := range g.Rules {
+			if strings.Contains(r.Expr, "ALERTS") {
+				t.Errorf("%s %s reads ALERTS without grouping by cause", r.Alert, r.Labels[rules.LabelService])
+			}
+		}
+	}
+	on := byService(loadExample(t), rules.AlertServiceTelemetryMissing)
+	if !strings.Contains(on["email"].Expr, `group_left (kamerton_starved)`) || !strings.Contains(on["accounting"].Expr, `ALERTS{service="checkout", alertname=~`) {
+		t.Errorf("email and accounting are starved by checkout:\n%s\n%s", on["email"].Expr, on["accounting"].Expr)
+	}
+	if !strings.Contains(trafficRules(loadExample(t))["payment"].Expr, `group_left (kamerton_starved)`) {
+		t.Error("payment's traffic rule can be starved by checkout")
 	}
 }

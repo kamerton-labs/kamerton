@@ -34,6 +34,56 @@ flowchart TD
 
 Installed alongside as pinned Helm dependencies: OpenTelemetry Collector,
 Prometheus Operator and Prometheus, Alertmanager, Grafana, Loki, Tempo.
+Optional and off by default: OpenTelemetry eBPF Instrumentation
+(`autoInstrument.enabled`), see below.
+
+## Services without an SDK (eBPF)
+
+```mermaid
+flowchart LR
+    S["uninstrumented pod"] -. "kernel / uprobes" .-> O["OBI DaemonSet<br/>kamerton-auto-instrument"]
+    O -- "OTLP/gRPC traces" --> C["Kamerton's Collector"]
+    K["pod with an SDK"] -- "OTLP traces" --> C
+    C -- "spanmetrics connector" --> P[("Prometheus<br/>traces_span_metrics_*")]
+    C --> T[("Tempo")]
+```
+
+The agent exports traces only, never metrics, into the same Collector
+pipeline as SDK traces. The spanmetrics connector produces identical metric
+names and labels (`service_name`, `span_name`, `span_kind`, `status_code`)
+for both sources, so neither the rules, discovery nor the Collector
+configuration change. OBI's own span metrics (`application_span_otel`) were
+not used: they are a second implementation whose name, unit, buckets and
+labels would all have to match the connector's, while traces match by
+construction and also land in Tempo.
+
+The agent's configuration file is rendered by the Kamerton chart
+(`templates/auto-instrument.yaml`) from the `autoInstrument` values; the
+upstream chart only runs the DaemonSet. Capture rules, in OBI's Config v2:
+exclude the agent and collector binaries and `excludeExecutables`
+(monitoring programs, browsers), the release namespace and
+`namespaces.exclude`, pods annotated `kamerton.dev/auto-instrument: "false"`,
+pods injected by the OpenTelemetry Operator and processes seen exporting OTLP
+(`skipSDKInstrumented`); include `namespaces.include` (all by default).
+Exclusions win over inclusions in OBI regardless of order. Because the
+ConfigMap belongs to the parent chart, the upstream checksum annotation does
+not change with it: the DaemonSet must be restarted after a change.
+
+Where the series differ from SDK ones: the service name comes from
+`OTEL_SERVICE_NAME`, then pod annotation, then `app.kubernetes.io/name`, then
+the owner workload name; HTTP span names use a path heuristic (`GET
+/orders/*`) unless `httpRoutes.patterns` are set; a request with no response
+is not an error; server spans of Redis, PostgreSQL and MySQL servers appear
+as services of kind server. Details and the duplicate check are in the
+README ("Services without OpenTelemetry").
+
+Verified on single-node k3s with the OpenTelemetry Demo: privileged, the
+agent's series for a Go gRPC service with its SDK export off had the same
+names, labels and span names as the SDK's. With only the documented
+capabilities it recorded nothing (no `CAP_SYS_ADMIN` for `setns` into pod
+network namespaces), hence the privileged default. The OTLP-export
+detection missed nginx with the OTel module, a C++ and a Python grpcio
+service, which were counted twice.
 
 ## Single source of truth
 
@@ -62,6 +112,7 @@ Prometheus Operator and Prometheus, Alertmanager, Grafana, Loki, Tempo.
 | `internal/triage` | Probable source on the dependency graph; incidents (roots, affected services) from active alerts, using the same links as the generated inhibit rules | real |
 | `internal/evidence` | Evidence about a root service: workload changes in the last 30 minutes (pods, ReplicaSets, StatefulSets, Warning events), operations with most failed calls (span metrics, query built by the rule library), an error log line (Loki), a Grafana Explore link to failing traces (Tempo); short timeout per collector, bounded total | real (tested with fake Kubernetes, Prometheus and Loki) |
 | `internal/followup` | Alertmanager webhook notifications → incident → evidence (and the likely cause among the dependencies of a root whose own alert came first) → one follow-up message per incident to the chats and addresses that got the alert, after a short delay; sent incidents in the ConfigMap `kamerton-followup-state` (memory when it cannot be written); last evidence per incident in memory for the alerts API | real (tested with fakes) |
+| `internal/history` | Incident records (open and closed) with the follow-up's evidence and people's notes, in the ConfigMap `kamerton-incident-history` (memory without a cluster); recall of the earlier incident of the same root; "what helped" replies from Telegram | real (tested with a fake Bot API and a fake Kubernetes client) |
 | `internal/noise` | Noise statistics per rule from `ALERTS`/`ALERTS_FOR_STATE` (two range queries per system), muted consequences replayed with `triage.MutingEdges`, the "noisy" definition, suggestions through the backtest (`generator.Tunables` names the description field of each rule kind), "useful / noise" counters in the ConfigMap `kamerton-noise-state` (memory without a cluster), the Telegram buttons and their presses | real (tested with fake Prometheus, a fake Bot API and a fake Kubernetes client) |
 | `internal/clients/*` | Prometheus (official client), Alertmanager v2 | real |
 | `internal/stack` | Sets of programs: the built-in set from the flags (addresses can be overridden and reset), sets added in the UI with extra labels for PrometheusRule / AlertmanagerConfig; stored in the ConfigMap `kamerton-stacks` (cluster), `.kamerton-stacks.json` next to the descriptions (local) or memory. Identity checks of an address per program (health path + build info / status). Discovery through the Kubernetes API: Services in all namespaces recognised by labels, operator service names and typical ports, confirmed over HTTP (bounded concurrency, short timeouts); Prometheus Operator `Prometheus`/`Alertmanager` resources → selector labels and warnings when instances cannot be told apart | real (unit-tested with a fake Kubernetes client and fake HTTP servers; used on a k3s cluster with a second Prometheus) |
@@ -95,10 +146,14 @@ Prometheus Operator and Prometheus, Alertmanager, Grafana, Loki, Tempo.
   machine neither lower nor remove it), summed over all series of the service
   (a collector restart re-creates every series under a new
   `collector_instance_id`), and existing only with at least an hour of
-  history. An absent series counts as zero. It fires at or below `threshold`
+  history. It fires at or below `threshold`
   (default 10%) of normal when normal is above `minRequestsPerSecond` (default
   0.02/s, about one call a minute: quieter services go minutes without a call),
-  for `for` (default 2m). It stays silent while fewer than half of the
+  for `for` (default 2m). No calls at all (rate exactly 0, or no series: the
+  Collector drops a silent service's series 2m after its last span) count
+  only while traffic is expected now (below), so an idle hour is not an
+  outage; a fall to a few percent of normal does not need that. It stays
+  silent while fewer than half of the
   system's services seen in the last day have data now or one window ago:
   then the telemetry pipeline has stopped or is restarting, not the service.
   On by default for critical http/grpc services only; queues and databases
@@ -106,11 +161,25 @@ Prometheus Operator and Prometheus, Alertmanager, Grafana, Loki, Tempo.
   The value is calls per minute, the notification adds the normal rate.
   Expression semantics are tested with Prometheus' engine (`promqltest`) on
   synthetic series for each failure mode (`internal/rules/traffic_test.go`).
-  Next to the per-service "no data" rule it also requires some span-metric
-  series of the service (any kind) to have a sample within that rule's
-  window, so the two never fire together: calls far below normal while series
-  exist here, no series at all there. With "no data" off for the service, an
-  absent series counts as zero again.
+- **Expected traffic** (`expectedNow` in `internal/rules/traffic.go`): the
+  same 10-minute rates as the normal, summed over the series, averaged over
+  the two hours centred on this time a week ago, present only when every one
+  of the 12 steps has data, and above the floor (`minRequestsPerSecond` of
+  the service's merged `trafficDrop`, even where that rule is off; for the
+  system, the total with `defaults.trafficDrop`). When the selection has no
+  data at all in the day before that week (a service younger than a week,
+  or Prometheus retention under 8 days), the same window a day ago decides.
+  Why not the day average the normal uses: it ignores empty steps by design,
+  so it stays high all night and cannot tell idle from broken. Why every
+  step: a usual start or stop that moves by up to an hour is not an outage;
+  the cost is no report in the hour after the usual start and before the
+  usual end, and an alert about a day-time service that stays down resolves
+  an hour before its usual end and fires again next morning. Why a week:
+  weekends; yesterday alone would page every Saturday for a weekday tool and
+  miss Mondays. Holidays a week ago blind the same weekday once. With less
+  than a day of history nothing is expected; with retention under a day,
+  never. Offsets are in UTC, so a daylight-saving change moves the window by
+  an hour for one week.
 - **No data** (`KamertonTelemetryMissing`, `KamertonServiceTelemetryMissing`,
   `internal/rules/nodata.go`): every other rule is an expression over span
   metrics and returns nothing without samples, so a broken pipeline would
@@ -129,9 +198,32 @@ Prometheus Operator and Prometheus, Alertmanager, Grafana, Loki, Tempo.
   per-service one (http/grpc, or `noData` set on the service) when the
   service has none while another service of the system has some. Severity
   of the per-service one: its "requests stopped" rule's severity where that
-  rule is on (the vanished-series case moved here), else warning. Both carry
+  rule is on, else warning. Both fire only while traffic is expected now
+  (per service with span metrics of any kind, for the system its total). The
+  per-service rule is also silent while the service's "requests stopped"
+  rule covers the stop: normal above its floor, expected traffic on its
+  incoming spans, and enough services visible (the rule's own terms, in
+  PromQL, so there is no race in Alertmanager). Then that rule, a symptom
+  source for the grouping, fires about 2 minutes after the last call (rate
+  window 2m) plus its 2m pending period, and stays firing when the series
+  vanish: one notification, no resolve in the middle. "No data" speaks for
+  services without that rule and when the visibility guard fails while some
+  services still send (part of the pipeline down). Both carry
   Kamerton's own message text and first steps (`kamerton_message_text`,
   `kamerton_message_action`), which a team message replaces.
+  Series vanish only if the Collector stops exporting them: the spanmetrics
+  connector keeps a resource (one pod of one service) as flat counters
+  forever unless `metrics_expiration` is set (bundled Collector: 2m, removed
+  on the first flush at least 2m after its last span). A resource that
+  comes back starts its counters from zero; rate() reads the drop as a
+  reset, and only a series whose old total was not above the new one loses
+  those calls (a pod idle longer than 2m that gets about one call per
+  active spell). `series_expiration` is not set: it would do the same per
+  operation and status, where quiet series are common. A service whose pods
+  all go down gets "no ready pods" about a minute in, then "requests
+  stopped" (critical) or "no data" (others) a few minutes later: two facts,
+  two notifications, as before. Scenarios with expiring series are tested
+  with Prometheus' engine in `internal/rules/nodata_scenarios_test.go`.
 - **No ready pods** (`KamertonNoReadyPods`, `internal/rules/pods.go`): from
   kube-state-metrics `kube_pod_status_ready{condition="true"}` with the
   workload locator of the saturation rules. Fires while pods exist and none
@@ -201,7 +293,7 @@ description without them is arranged automatically). Saving from the UI keeps
 | GET | `/api/v1/systems/{id}/rules/state` | current rule states from Prometheus `ALERTS` |
 | GET | `/api/v1/systems/{id}/discovery` | services in telemetry; `described` for this system, `inSystems` for others |
 | POST | `/api/v1/systems/{id}/backtest` | `{yaml, service, alert, operation, range}` (a rule of a draft) or `{expr, for, range}` |
-| GET | `/api/v1/systems/{id}/runbooks/{service}` | runbook of a service; `_system`: the alerts about the whole system (`service: {name: "_system", system: true}`) |
+| GET | `/api/v1/systems/{id}/runbooks/{service}` | runbook of a service; `_system`: the alerts about the whole system (`service: {name: "_system", system: true}`); `experience`: notes of the last incidents with the service as a root |
 | GET | `/api/v1/systems/{id}/alerts` | active alerts of the system (same shape as `/api/v1/alerts`) |
 | GET | `/api/v1/systems/{id}/noise` | `?window=1d\|3d\|7d` (default 7d): per rule fired, short, longest, last firing, verdicts, `noisy`, optional `suggestion` (see Noise) |
 | POST | `/api/v1/systems/{id}/noise/feedback` | `{alert, service, operation?, verdict: useful\|noise}` → `{recorded, alert, service, operation, feedback}` |
@@ -214,6 +306,8 @@ description without them is arranged automatically). Saving from the UI keeps
 | POST | `/api/v1/stacks/check` | `{kind, url}` → `{state: ok, not_ready, no_answer, wrong_program, no_access, bad_url; version, message}`; only GETs go to the address |
 | GET | `/api/v1/stacks/discover` | programs found in the cluster (`kind, namespace, service, url, version, healthy, state, operator, usedBy`), operator resources, warnings; `{available: false, reason}` outside a cluster |
 | GET | `/api/v1/alerts` | active alerts of all systems from every Alertmanager in use (merged by fingerprint), with plain-words title, value, threshold and probable source; `muted` (alerts muted by grouping by cause) and `incidents` with optional `evidence` (see Incidents) |
+| GET | `/api/v1/incidents/history` | `?system=&service=&limit=50` (all optional; limit at most 300): records, most recent first (see Incident history) |
+| PUT | `/api/v1/incidents/history/{id}/note` | `{cause, fix}` (a field left out is kept, `""` clears it; trimmed; at most 200 / 500 characters, else 400 `too_long`) → the record |
 | POST | `/api/v1/hooks/alertmanager` | Alertmanager webhook (payload version 4); `Authorization: Bearer <token>` from the Secret `kamerton-webhook`; no session, no `X-Requested-With`; 404 `not_available` when follow-up messages are off |
 | GET | `/api/v1/settings` | external URL (links on/off), storage mode, namespace, Telegram and email availability, `followUp: {available, reason}` |
 | GET | `/api/v1/runbooks/{service}` | runbook found by service name (`?system=` to choose); behind `runbook_url` of rules |
@@ -290,7 +384,12 @@ Noise):
   supergroup → the stored chat and every description receiver using the old
   ID move to the new ID; getChat/sendMessage errors carrying
   `parameters.migrate_to_chat_id` are handled the same way;
-- any other message or channel post reveals the chat (and title changes).
+- any other message or channel post reveals the chat (and title changes);
+- a text message replying to one of the bot's "incident is over" messages
+  (`reply_to_message`) is also a "what helped" note (see Incident history).
+  The Bot API delivers replies to messages meant for the bot in groups even
+  in privacy mode ("Privacy mode" in core.telegram.org/bots/features), so
+  `message` in `allowed_updates` is enough; the sender is not decoded.
 
 Only the leader polls (the polling loop is a controller-runtime runnable that
 needs leader election; the chart requires leader election for more than one
@@ -362,10 +461,48 @@ of the Alertmanager). Source and target name different services, so no
 alert inhibits itself; links inside a dependency cycle are dropped
 (`triage.MutingEdges`), so two services that call each other never mute each
 other. Resource (memory, CPU, restarts, OOMKilled), queue, "no data" and
-custom alerts neither mute nor are muted. One more rule, generated whenever
+custom alerts neither mute nor are muted, except starved ones (below). One more rule, generated whenever
 the system "no data" rule is on, whatever `groupByCause` says:
 `KamertonTelemetryMissing` mutes `KamertonServiceTelemetryMissing` of the
 same system.
+
+Starvation is the other direction: a failing service takes traffic away
+from the services it calls, and from the consumers of a queue it produces
+to. `triage.Feeders` lists, per service, its direct callers and the
+producers of the queues it consumes (a consumer depends on the queue and is
+named in `queue.consumerGroups`; every other service depending on the queue
+is a producer), without links inside a cycle of feeding. With
+`groupByCause` on, the "no data" and "requests stopped" rules of a fed
+service multiply their result by a one-series vector that carries
+`kamerton_starved="true"` while (in `ALERTS`, firing, same system) a
+feeder has an alert that the service did not cause and the service has no
+error, latency or "no ready pods" alert of its own. A queue producer's
+alert always counts (a consumer cannot make its producer fail). A direct
+caller's alert counts when it is "no ready pods", "no data" or "requests
+stopped" (the caller stopped calling for its own reason), or when another
+dependency of the caller has an unstarved symptom source (the caller's
+errors come from there). Without that last condition an unreachable
+service would be taken for starved by the callers failing because of it.
+The value of the rule is unchanged; the label changes the alert's identity,
+so an alert that becomes starved starts a new pending period (the feeder
+fires within 1 to 2 minutes, a starved "no data" needs about 6 and a
+"requests stopped" about 4, so in practice it is born starved). Two inhibit
+rules per fed service (critical feeder alert mutes any, warning mutes
+warnings) mute `KamertonServiceTelemetryMissing|KamertonRequestsStopped`
+with `kamerton_starved="true"` of the service while any symptom, "no data"
+or "requests stopped" alert of a feeder fires; a muted one counts, so a
+chain of starved services closes. The dependency rules add
+`kamerton_starved!="true"` to their sources: a starved "requests stopped"
+explains nothing upstream, which also keeps the two kinds of rules from
+muting each other in a loop. Why PromQL decides and Alertmanager only
+mutes: an inhibit rule cannot ask whether the service has an alert of its
+own or whether the caller's alert is explained elsewhere, and without those
+checks the dependency rules and the starvation rules would mute each other
+(nobody told). The demo gets 57 inhibit rules (1 system, 26 dependency, 30
+starvation). `triage.Incidents` makes the same decision on the active alerts
+(repeated until it settles) and lists starved services as affected;
+`internal/noise` counts muted starved firings as consequences from the
+label.
 
 The Prometheus Operator adds `namespace="<namespace of the
 AlertmanagerConfig>"` to both sides of an inhibit rule (and to routes)
@@ -498,6 +635,142 @@ Workload reads need the ClusterRole rules pods/events and
 replicasets/statefulsets get/list (`incidents.followUp.workloadRead`).
 Without a cluster the follow-up is unavailable and `/api/v1/settings` says
 why.
+
+### Incident history
+
+`internal/history` keeps a record per incident in the ConfigMap
+`kamerton-incident-history` (key `history.json`, optimistic concurrency
+like the other state; memory without a cluster). A record:
+
+```json
+{
+  "id": "3f9a0c1d2e4b5a69",
+  "system": "shop",
+  "roots": ["payment"],
+  "rootAlerts": [{"name": "KamertonNoReadyPods", "service": "payment", "title": "No ready pods", "severity": "critical"}],
+  "affected": ["checkout", "frontend"],
+  "startedAt": "2026-11-16T04:18:00Z",
+  "endedAt": "2026-11-16T04:23:12Z",
+  "durationSeconds": 312,
+  "endEstimated": false,
+  "open": false,
+  "evidence": {"…": "same object as the live incident's evidence"},
+  "note": {"cause": "…", "fix": "…", "updatedAt": "…", "source": "ui"},
+  "aftermath": [{"service": "checkout", "alerts": ["KamertonSLOBurnRateSlow"], "since": "…", "lastSeen": "…"}]
+}
+```
+
+`endedAt` and `durationSeconds` are absent while open. The ID is the first
+16 hex digits of SHA-256 over system, incident ID and start, so the same
+incident (same roots, same first alert) seen again after a gap reopens its
+record instead of adding one.
+
+**Opening and updating.** Records follow `triage.Incidents` (system-wide
+incidents without roots are not recorded). The webhook (firing and
+resolved, at once, before the follow-up's wait), each follow-up attempt, the
+sweep and `GET /api/v1/alerts` observe a system's incidents. An open record
+with the same incident ID follows the current view: its roots are replaced,
+its root alerts are the alerts of the current roots only (earlier alerts of
+the same roots kept, at most 5, the most explaining first), affected
+services accumulate (up to 20, former roots included), the earliest start
+stays; `incident` keeps the last incident ID, also after the record
+closes. Otherwise a record with the same ID reopens, or the incident is
+aftermath (below), or an open record without a note whose roots are now
+among the incident's roots or affected services is taken over (the
+caller's alert came first, then the dependency's), or a record is opened.
+Other open records whose roots a live incident now explains are merged into
+its record (earliest start, follow-up receivers and note kept, their IDs in
+`merged`): one incident, even when a caller's record was opened before
+triage knew the cause. The follow-up layer needs nothing new for this: an
+attempt re-triages, so a caller's follow-up not yet sent becomes the
+cause's, and one already sent is named by the cause's follow-up ("This
+explains the earlier alert about checkout"). The follow-up adds its
+evidence and the names of the Telegram receivers that got it.
+
+**Aftermath.** After an outage, callers' alerts are unmuted for a moment
+and SLO burn alerts keep firing until their window no longer holds the
+errors (the slow burn's short window is 30 minutes). An incident whose root
+alerts are all symptom targets (errors, latency, stopped requests, SLO
+burn), whose roots were all roots or affected services of a record that is
+open or ended within `AftermathGrace` (35 minutes: that 30 minute window
+plus 5 for rule evaluation and Alertmanager), is that record's aftermath:
+no record, no follow-up (`aftermathOf` and the record's `historyId` in the
+alerts API), and its alerts are listed on the record (`aftermath`: at most
+10 services, 5 alert names each, first and last seen). The root's own SLO
+burn left after its real alerts resolved ends the record the same way. An
+alert of a service's own (no ready pods, restarts, memory, custom rules) is
+never aftermath and opens its own incident with a follow-up. Aftermath
+still firing when the grace period ends becomes an incident of its own
+from that moment (`promoted`, start = end + 35 minutes); since Alertmanager
+notified while it was a tail, the sweep starts its follow-up (the usual
+attempt bounds apply). The sweep watches systems with open records and,
+for 50 minutes after the end, systems whose record has aftermath.
+
+**Closing.** A resolved notification gives the end: when every root alert
+of the record's last view is in it, the latest `endsAt` is the end; the end
+is the moment the roots resolved, whatever aftermath follows. An observation
+in which the system's Alertmanager answered closes the other open records
+of that system: at the time of the observation when the record was seen
+within 10 minutes, else at the time it was last seen with `endEstimated`.
+So a missed resolve is caught by the next notification of the system, by
+`GET /api/v1/alerts`, or by the leader's sweep every 5 minutes (only
+systems with open records or recent aftermath are asked). Merged records
+are gone, so only the record they went into is closed; promoted aftermath
+closes like any record. A record nobody could confirm for 24
+hours (Alertmanager not answering) closes at its last-seen time, estimated;
+a record of a deleted system closes at the next sweep.
+
+**Bounds.** At most 300 records and 180 days: a few incidents a week over
+half a year, enough for "it happens every quarter" and for a count over 30
+days. Strings are capped (titles 120 characters, evidence cause 200, each
+of at most 3 changes 160, log line 200, a traces link longer than 1000
+bytes dropped; notes 200 and 500). A typical record is 1 to 2 KB, so the
+state stays near half of the 1 MiB a ConfigMap holds; when the JSON would
+exceed 900 KiB anyway, the oldest closed records go first (those without a
+note before those with one), open records last.
+
+**"Incident is over".** When an observation closes a record (exactly one
+replica gets it, through the ConfigMap's optimistic concurrency) that had a
+follow-up in Telegram, whose end was seen (not estimated), that lasted at
+least 2 minutes, and `spec.notifications.askWhatHelped` is not false (it
+needs the follow-up too), the follow-up service claims the record and sends
+one message, through Kamerton's bot only, to the Telegram receivers that
+got the follow-up, in the language of the description. When aftermath was
+seen at the end, one line names it ("Still firing after it: checkout (SLO
+error budget is burning). This is expected for a while after an outage.").
+The chat and message IDs are kept with the record. Email receivers get nothing: a reply
+to an email does not come back to Kamerton.
+
+**Replies.** The polling loop (after storing the offset) passes a text
+message with `reply_to_message` to the history: a reply to a kept chat and
+message ID, from a chat that is still a receiver of the system through
+Kamerton's bot, becomes the note's `fix` (trimmed, at most 500 characters,
+`source: telegram`), replacing an earlier one. Kamerton confirms with a 👍
+reaction (`setMessageReaction`; bots may set one reaction per message and
+a chat may limit the allowed emoji) and falls back to a short reply
+(`reply_parameters`) when the reaction is refused. A reply that is too long
+is answered and not stored; replies to other messages and from other chats
+are ignored without an answer.
+
+**Recall.** A follow-up looks up closed records of the same system with
+its first root among their roots, preferring those that have the same root
+alert as the root's main alert (a symptom source before a target, then the
+earliest), falling back to any. The most recent one is shown: when it
+started, how long it lasted, the cause (the person's note, else the
+collected cause) and what helped, and how many such records started in the
+last 30 days. A record with a note makes the follow-up worth sending by
+itself. The alerts API adds, per live incident, `historyId` (its open
+record) and the same `previous`:
+
+```json
+"previous": {"id": "3f9a0c1d2e4b5a69", "startedAt": "…", "durationSeconds": 312, "cause": "…", "fix": "…", "count30d": 4, "noted": true}
+```
+
+The runbook data of a service (`GET /api/v1/systems/{id}/runbooks/{service}`
+and `/api/v1/runbooks/{service}`) adds `experience`: `[{id, startedAt,
+durationSeconds, cause, fix}]`, the last 5 records with a note that have the
+service as a root, most recent first. Generated Markdown runbooks are
+unchanged.
 
 ## Noise
 

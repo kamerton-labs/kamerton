@@ -59,15 +59,19 @@ type SystemNoDataParams struct {
 	// After is how long no service may send data before the alert.
 	After    time.Duration
 	Services []string
+	// MinRequestsPerSecond is the floor of the system's total expected traffic.
+	MinRequestsPerSecond float64
 }
 
 // SystemNoData fires when none of the services has sent span metrics for
-// After although some did within NoDataSeenRange. The value is the number of
-// services that did. It has no service label.
+// After although some did within NoDataSeenRange, and the system normally has
+// traffic at this time. The value is the number of services that did. It has
+// no service label.
 func SystemNoData(p SystemNoDataParams) rulefmt.Rule {
 	t := p.Target
 	sel := t.serviceSpans(p.Services...)
-	expr := fmt.Sprintf("count(\n  %s\n)\nunless on ()\ngroup(\n  %s\n)", t.seen(sel), t.present(sel, p.After))
+	expr := fmt.Sprintf("count(\n  %s\n)\nunless on ()\ngroup(\n  %s\n)\nand on ()\n%s",
+		t.seen(sel), t.present(sel, p.After), expectedNow(sel, nil, p.MinRequestsPerSecond))
 	m := p.Meta
 	m.Service = ""
 	m.For = NoDataPending
@@ -75,7 +79,7 @@ func SystemNoData(p SystemNoDataParams) rulefmt.Rule {
 	ph := p.phrases()
 	m.annotate(&r,
 		"No telemetry from the system",
-		fmt.Sprintf(`None of the {{ $value | printf "%%.0f" }} services that sent span metrics in the last %s has sent any for %s. Kamerton cannot see the system: other alerts of this system will not fire until data returns. Check the OpenTelemetry Collector, its remote write to Prometheus and Prometheus itself.`,
+		fmt.Sprintf(`None of the {{ $value | printf "%%.0f" }} services that sent span metrics in the last %s has sent any for %s, at a time when the system normally has traffic. Kamerton cannot see the system: other alerts of this system will not fire until data returns. Check the OpenTelemetry Collector, its remote write to Prometheus and Prometheus itself.`,
 			dur(NoDataSeenRange), dur(p.After)))
 	m.explain(&r, "", fmt.Sprintf(ph.systemNoData, `{{ $value | printf "%.0f" }}`, dur(p.After)), "")
 	return r
@@ -88,24 +92,35 @@ type ServiceNoDataParams struct {
 	// Others are the telemetry names of the other services of the system; at
 	// least one of them must still send data.
 	Others []string
+	// MinRequestsPerSecond is the floor of the service's expected traffic.
+	MinRequestsPerSecond float64
+	// Traffic is the service's TrafficStopped rule when it is on: a stop it
+	// reports is left to it.
+	Traffic    *TrafficParams
+	Starvation *Starvation
 }
 
 // ServiceNoData fires when the service sent span metrics within
-// NoDataSeenRange, has sent none for After, and another service of the system
-// still sends: otherwise the pipeline is down and SystemNoData speaks for all.
-// It is the complement of TrafficStopped with PresentWithin set to After.
+// NoDataSeenRange, has sent none for After although it normally has traffic
+// at this time, and another service of the system still sends: otherwise the
+// pipeline is down and SystemNoData speaks for all.
 func ServiceNoData(p ServiceNoDataParams) rulefmt.Rule {
 	t := p.Target
 	svc := t.ServiceLabel
 	self := t.serviceSpans(t.ServiceValue)
-	expr := fmt.Sprintf("group by (%s) (\n  %s\n)\nunless on (%s)\n  group by (%s) (%s)\nand on ()\n  group(%s)",
-		svc, t.seen(self), svc, svc, t.present(self, p.After), t.present(t.serviceSpans(p.Others...), p.After))
+	expr := fmt.Sprintf("group by (%s) (\n  %s\n)\nunless on (%s)\n  group by (%s) (%s)\nand on ()\n  group(%s)\nand on (%s)\n%s",
+		svc, t.seen(self), svc, svc, t.present(self, p.After), t.present(t.serviceSpans(p.Others...), p.After),
+		svc, expectedNow(self, []string{svc}, p.MinRequestsPerSecond))
+	if p.Traffic != nil {
+		expr += fmt.Sprintf("\nunless on (%s)\n%s", svc, p.Traffic.stopsCovered())
+	}
+	expr = p.Starvation.wrap(expr)
 	m := p.Meta
 	m.For = NoDataPending
 	r := m.rule(AlertServiceTelemetryMissing, SignalNoData, expr, nil)
 	m.annotate(&r,
 		fmt.Sprintf("No telemetry from %s", p.Service),
-		fmt.Sprintf("%s sent span metrics in the last %s but has sent none for %s, while other services of the system still do. Kamerton cannot see this service: its other alerts will not fire until data returns.",
+		fmt.Sprintf("%s sent span metrics in the last %s and normally has traffic at this time, but has sent none for %s, while other services of the system still do. Kamerton cannot see this service: its other alerts will not fire until data returns.",
 			p.Service, dur(NoDataSeenRange), dur(p.After)))
 	m.explain(&r, "", fmt.Sprintf(p.phrases().serviceNoData, dur(p.After)), "")
 	return r

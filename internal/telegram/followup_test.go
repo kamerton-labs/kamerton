@@ -97,3 +97,68 @@ func TestCallbackQueries(t *testing.T) {
 		t.Errorf("a press neither discovers chats nor stalls the offset: %+v", st)
 	}
 }
+
+func TestSendTracked(t *testing.T) {
+	h := newHarness(t, baseDescription)
+	ctx := context.Background()
+	_ = h.tokens.Set(ctx, testToken)
+	if _, err := h.svc.SendTracked(ctx, v1alpha1.SecretKeyRef{Name: "team-bot", Key: "bot-token"}, -100, "x"); !errors.Is(err, ErrNotKamertonBot) {
+		t.Errorf("foreign Secret: %v", err)
+	}
+	h.tg.handle("sendMessage", func(string, map[string]any) (int, string) {
+		return 200, `{"ok":true,"result":{"message_id":4242,"chat":{"id":-100,"type":"group"},"date":0}}`
+	})
+	id, err := h.svc.SendTracked(ctx, v1alpha1.SecretKeyRef{Name: DefaultSecretName, Key: DefaultSecretKey}, -100, "✅ <b>Incident over</b>")
+	if err != nil || id != 4242 {
+		t.Fatalf("id %d, %v", id, err)
+	}
+	if c := h.tg.callsOf("sendMessage"); len(c) != 1 || c[0].Params["parse_mode"] != "HTML" || c[0].Params["reply_parameters"] != nil {
+		t.Errorf("calls %+v", c)
+	}
+}
+
+type stubReplies struct {
+	got    [][2]int64
+	result ReplyResult
+}
+
+func (s *stubReplies) HandleReply(_ context.Context, chatID, replyTo int64, _ string) ReplyResult {
+	s.got = append(s.got, [2]int64{chatID, replyTo})
+	return s.result
+}
+
+func TestRepliesInPolling(t *testing.T) {
+	h := newHarness(t, baseDescription)
+	h.svc.init()
+	ctx := context.Background()
+	stub := &stubReplies{}
+	h.svc.Replies = stub
+	chat := Chat{ID: -100, Type: "group", Title: "Ops"}
+	ups := []Update{
+		{UpdateID: 1, Message: &Message{MessageID: 10, Chat: chat, Text: "not a reply"}},
+		{UpdateID: 2, Message: &Message{MessageID: 11, Chat: chat, Text: "a reply", ReplyToMessage: &Message{MessageID: 5, Chat: chat}}},
+		{UpdateID: 3, Message: &Message{MessageID: 12, Chat: chat, ReplyToMessage: &Message{MessageID: 5, Chat: chat}}},
+	}
+	if err := h.svc.process(ctx, testToken, ups, testBotID); err != nil {
+		t.Fatal(err)
+	}
+	if len(stub.got) != 1 || stub.got[0] != [2]int64{-100, 5} {
+		t.Errorf("handled %v", stub.got)
+	}
+	// Not a reply Kamerton waits for: no answer at all.
+	if len(h.tg.callsOf("setMessageReaction"))+len(h.tg.callsOf("sendMessage")) != 0 {
+		t.Error("an ignored reply was answered")
+	}
+	st, _ := h.state.Get(ctx)
+	if st.Offset != 4 || st.Chats[-100] == nil {
+		t.Errorf("replies must not stop chat discovery: %+v", st)
+	}
+	stub.result = ReplyResult{React: true, Text: "Saved"}
+	h.tg.handle("setMessageReaction", func(string, map[string]any) (int, string) { return 200, `{"ok":true,"result":true}` })
+	if err := h.svc.process(ctx, testToken, ups[1:2], testBotID); err != nil {
+		t.Fatal(err)
+	}
+	if c := h.tg.callsOf("setMessageReaction"); len(c) != 1 || c[0].Params["message_id"].(float64) != 11 || len(h.tg.callsOf("sendMessage")) != 0 {
+		t.Errorf("reaction calls %+v", c)
+	}
+}

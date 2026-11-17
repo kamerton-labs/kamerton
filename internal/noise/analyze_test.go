@@ -278,6 +278,34 @@ func TestConsequencesOfADependencyOutage(t *testing.T) {
 	}
 }
 
+// Payment goes down; checkout fails and stops calling email, which goes
+// silent (its "no data" is starved, rules.LabelStarved).
+func TestConsequencesOfStarvation(t *testing.T) {
+	yaml := strings.Replace(shopYAML, "      dependsOn: [payment]\n", "      dependsOn: [payment, email]\n", 1) +
+		"    - name: email\n      type: http\n"
+	starved := alertLabels("KamertonServiceTelemetryMissing", "email")
+	starved["kamerton_starved"] = "true"
+	own := alertLabels("KamertonServiceTelemetryMissing", "email")
+	firings := model.Matrix{
+		firing(alertLabels("KamertonNoReadyPods", "payment"), span(100, 110)...),
+		firing(alertLabels("KamertonErrorRateHigh", "checkout"), span(101, 110)...),
+		firing(starved, span(106, 110)...),
+		firing(own, span(300, 305)...),
+		firing(alertLabels("KamertonErrorRateHigh", "email"), span(104, 110)...),
+	}
+	rep := analyze(t, &fakeProm{firing: firings}, shop(t, yaml), nil)
+	if r := ruleOf(rep, "KamertonServiceTelemetryMissing", "email"); r == nil || r.Fired != 1 || r.Consequences != 1 {
+		t.Errorf("email no data: the starved firing is a consequence, the other one reached people: %+v", r)
+	}
+	if r := ruleOf(rep, "KamertonErrorRateHigh", "email"); r == nil || r.Fired != 1 || r.Consequences != 0 {
+		t.Errorf("email's own errors reach people: %+v", r)
+	}
+	off := shop(t, yaml+"  notifications:\n    groupByCause: false\n")
+	if r := ruleOf(analyze(t, &fakeProm{firing: firings}, off, nil), "KamertonServiceTelemetryMissing", "email"); r == nil || r.Fired != 2 {
+		t.Errorf("without grouping by cause nothing is muted: %+v", r)
+	}
+}
+
 func TestConsequencesOfSystemNoData(t *testing.T) {
 	sys := model.Metric{"alertname": "KamertonTelemetryMissing", "alertstate": "firing", "kamerton_system": "shop", "severity": "critical"}
 	svc := alertLabels("KamertonServiceTelemetryMissing", "checkout")

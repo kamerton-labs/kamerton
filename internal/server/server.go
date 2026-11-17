@@ -28,6 +28,7 @@ import (
 	"github.com/kamerton-labs/kamerton/internal/email"
 	"github.com/kamerton-labs/kamerton/internal/followup"
 	"github.com/kamerton-labs/kamerton/internal/generator"
+	"github.com/kamerton-labs/kamerton/internal/history"
 	"github.com/kamerton-labs/kamerton/internal/noise"
 	"github.com/kamerton-labs/kamerton/internal/rules"
 	"github.com/kamerton-labs/kamerton/internal/schema"
@@ -73,6 +74,8 @@ type Options struct {
 	FollowUpUnavailable string
 	// Feedback keeps "useful / noise" verdicts; nil: in memory.
 	Feedback *noise.Feedback
+	// History keeps incident records and notes; nil: in memory.
+	History *history.Service
 }
 
 type Server struct {
@@ -101,6 +104,7 @@ type Server struct {
 	hookAt  time.Time
 
 	feedback *noise.Feedback
+	history  *history.Service
 }
 
 func New(opts Options) *Server {
@@ -127,7 +131,20 @@ func New(opts Options) *Server {
 	if s.feedback.Descriptions == nil {
 		s.feedback.Descriptions = s.opts.Descriptions
 	}
+	s.history = opts.History
+	if s.history == nil {
+		s.history = &history.Service{Logger: s.log}
+	}
+	if s.history.Descriptions == nil {
+		s.history.Descriptions = s.opts.Descriptions
+	}
 	if f := s.opts.FollowUp; f != nil {
+		if f.History == nil {
+			f.History = s.history
+		}
+		if s.history.OnClose == nil {
+			s.history.OnClose = f.RecordsClosed
+		}
 		if f.Descriptions == nil {
 			f.Descriptions = s.opts.Descriptions
 		}
@@ -197,6 +214,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/v1/backtest", s.backtest)
 	mux.HandleFunc("GET /api/v1/alerts", s.alerts)
 	mux.HandleFunc("GET /api/v1/runbooks/{service}", s.runbook)
+	mux.HandleFunc("GET /api/v1/incidents/history", s.incidentHistory)
+	mux.HandleFunc("PUT /api/v1/incidents/history/{id}/note", s.incidentNote)
 
 	// Alertmanager webhook: bearer token instead of a session (hooks.go).
 	mux.HandleFunc("POST "+AlertmanagerHookPath, s.alertmanagerHook)
@@ -552,6 +571,7 @@ func (s *Server) alertsFor(w http.ResponseWriter, r *http.Request, snap *descsto
 			incidents = append(incidents, v)
 		}
 	}
+	s.attachHistory(ctx, list, snap, partial, bySystem, incidents)
 	out := make([]alertView, 0, len(raw))
 	muted := []alertView{}
 	for _, a := range raw {
@@ -593,6 +613,13 @@ func (s *Server) alertsFor(w http.ResponseWriter, r *http.Request, snap *descsto
 type incidentView struct {
 	triage.Incident
 	Evidence *generator.EvidenceSummary `json:"evidence,omitempty"`
+	// HistoryID is the history record of this incident; Previous the earlier
+	// incident most like it.
+	HistoryID string `json:"historyId,omitempty"`
+	// AftermathOf is set when this incident is the tail of the record
+	// HistoryID names: no record or follow-up of its own.
+	AftermathOf string            `json:"aftermathOf,omitempty"`
+	Previous    *history.Previous `json:"previous,omitempty"`
 }
 
 func triageAlert(a alertmanager.Alert) triage.Alert {

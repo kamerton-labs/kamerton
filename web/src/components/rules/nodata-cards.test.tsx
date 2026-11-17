@@ -58,7 +58,7 @@ describe('rules list', () => {
     expect(first).toBeLessThan(html.indexOf('frontend-proxy'))
     expect(html.slice(first, first + 300)).toContain('otel-demo')
     expect(html).toContain('whole system')
-    expect(html).toContain('No span metrics from any service for over 3 min')
+    expect(html).toContain('No span metrics from any service for over 3 min at an hour that normally has traffic')
     expect(html).not.toContain('>_system<')
   })
 })
@@ -82,16 +82,16 @@ describe('no-data cards', () => {
     d = setMessage(d, card(), { title: 'Корзина молчит' })
     const html = render(d, <RuleEditor rule={card()} />)
     expect(html).toContain('Нет данных дольше')
-    expect(html).toContain('Сервис присылал span-метрики за последние сутки')
+    expect(html).toContain('Сервис, у которого в этот час обычно есть трафик')
     expect(html).toContain('Корзина молчит')
-    expect(html).toContain('Kamerton не видит этот сервис: за последние сутки он присылал span-метрики, но уже 3m не присылает')
+    expect(html).toContain('Kamerton не видит этот сервис: в это время у него обычно есть трафик, но span-метрик нет уже 3m')
     expect(html).toContain('Проверьте, что его поды работают')
   })
 
   it('show the no-data note on the requests-stopped card', () => {
     const d = example()
     const traffic = deriveRules(d).find((r) => r.id === 'cart/traffic')!
-    expect(render(d, <RuleEditor rule={traffic} />)).toContain('covered by the &quot;No data&quot; rule (after 3 min)')
+    expect(render(d, <RuleEditor rule={traffic} />)).toContain('the &quot;No data&quot; rule stays silent meanwhile')
     const off = setRule(d, 'cart/noData', { enabled: false })
     expect(render(off, <RuleEditor rule={deriveRules(off).find((r) => r.id === 'cart/traffic')!} />)).not.toContain('No data')
   })

@@ -16,7 +16,8 @@ type Check struct {
 
 // DependencyChecks are instant queries that show a service failing now, before
 // the pending periods of its alerts end. They use the service's merged
-// thresholds even where its rule is turned off, and count vanished series as no calls.
+// thresholds even where its rule is turned off, and count vanished series as no
+// calls at hours that normally have traffic.
 func DependencyChecks(sd *v1alpha1.SystemDescription, svc *v1alpha1.Service) []Check {
 	g := newGen(sd, Options{})
 	d := g.defaults()

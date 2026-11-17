@@ -43,6 +43,7 @@ import (
 	"github.com/kamerton-labs/kamerton/internal/evidence"
 	"github.com/kamerton-labs/kamerton/internal/followup"
 	"github.com/kamerton-labs/kamerton/internal/generator"
+	"github.com/kamerton-labs/kamerton/internal/history"
 	"github.com/kamerton-labs/kamerton/internal/noise"
 	"github.com/kamerton-labs/kamerton/internal/schema"
 	"github.com/kamerton-labs/kamerton/internal/server"
@@ -190,6 +191,13 @@ func serve(args []string) error {
 			Logger:       log.With("component", "noise"),
 		}
 		tg.Callbacks = opts.Feedback
+		opts.History = &history.Service{
+			Store:        &history.ConfigMapStore{Client: uncached, Namespace: ns, Name: "kamerton-incident-history"},
+			Descriptions: opts.Descriptions,
+			Receiver:     tg.IsReceiver,
+			Logger:       log.With("component", "history"),
+		}
+		tg.Replies = opts.History
 		opts.Email = &email.Service{
 			Passwords:    &telegram.SecretTokenStore{Client: uncached, Namespace: ns, Name: cfg.EmailSecretName, Key: email.DefaultSecretKey, Component: "email"},
 			State:        &email.ConfigMapStateStore{Client: uncached, Namespace: ns, Name: "kamerton-email-state"},
@@ -214,7 +222,13 @@ func serve(args []string) error {
 				Telegram:     tg,
 				Email:        opts.Email,
 				Feedback:     opts.Feedback,
+				History:      opts.History,
 				Logger:       log.With("component", "followup"),
+			}
+			opts.History.OnClose = opts.FollowUp.RecordsClosed
+			// Leader-only: sweeps open incident records for missed resolves.
+			if err := mgr.Add(opts.FollowUp); err != nil {
+				return err
 			}
 			opts.WebhookToken = store
 		} else {

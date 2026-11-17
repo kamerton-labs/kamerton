@@ -15,8 +15,9 @@ import { SeverityBadge } from '@/components/common'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
-import { useRunbook } from '@/lib/api'
-import { httpUrl } from '@/lib/format'
+import { useRunbook, type RunbookExperience } from '@/lib/api'
+import { dateTime, httpUrl } from '@/lib/format'
+import { historyHref, incidentDuration } from '@/lib/incidents'
 import { t, useT, type MsgKey } from '@/i18n'
 import { serviceTypeLabel } from '@/lib/model/types'
 
@@ -42,6 +43,51 @@ function adviceFor(alert: string, signal: string): string[] {
   const key: MsgKey | undefined =
     alert in ALERT_ADVICE ? ALERT_ADVICE[alert as keyof typeof ALERT_ADVICE] : isSignal(signal) && signal !== 'no_data' && signal !== 'availability' ? (`runbook.advice.${signal}` as const) : undefined
   return key ? t(key).split('\n') : []
+}
+
+/** Notes of earlier incidents of the service; placed above the generic advice because they are about this service. */
+function Experience({ items, system }: { items: RunbookExperience[]; system: string }) {
+  const { t } = useT()
+  const shown = items.filter((e) => e.cause?.trim() || e.fix?.trim())
+  if (shown.length === 0) return null
+  return (
+    <Card data-testid="runbook-experience">
+      <CardHeader>
+        <CardTitle>{t('runbook.experience')}</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <ul className="divide-y">
+          {shown.map((e, i) => (
+            <li key={e.id ?? i} className="space-y-1 py-3 text-sm first:pt-0 last:pb-0" data-testid="runbook-experience-item">
+              <div className="text-xs text-muted-foreground">
+                {[e.startedAt && dateTime(e.startedAt), e.durationSeconds !== undefined && t('history.lasted', { d: incidentDuration(e.durationSeconds) })].filter(Boolean).join(' · ')}
+                {e.id && (
+                  <>
+                    {' · '}
+                    <Link className="underline-offset-2 hover:underline" to={historyHref(e.id, system)}>
+                      {t('history.open')}
+                    </Link>
+                  </>
+                )}
+              </div>
+              {e.fix?.trim() && (
+                <p className="font-medium [overflow-wrap:anywhere] whitespace-pre-line">
+                  <span className="text-muted-foreground">{t('note.fix')}: </span>
+                  {e.fix}
+                </p>
+              )}
+              {e.cause?.trim() && (
+                <p className="[overflow-wrap:anywhere] whitespace-pre-line">
+                  <span className="text-muted-foreground">{t('note.cause')}: </span>
+                  {e.cause}
+                </p>
+              )}
+            </li>
+          ))}
+        </ul>
+      </CardContent>
+    </Card>
+  )
 }
 
 export default function RunbookPage() {
@@ -140,6 +186,7 @@ export default function RunbookPage() {
         {s.calledBy?.length ? <div>{t('runbook.calledBy', { list: s.calledBy.join(', ') })}</div> : null}
       </div>
 
+      {data.experience && <Experience items={data.experience} system={data.system} />}
       {data.alerts.length === 0 && (
         <Alert>
           <AlertTitle>{t('runbook.noRules')}</AlertTitle>
