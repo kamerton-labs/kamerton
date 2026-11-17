@@ -14,18 +14,22 @@ flowchart TD
         G --> R["Rules library<br/>error rate, latency, saturation,<br/>queue lag, SLO burn rate"]
         R --> RV["Prometheus rulefmt validation"]
         G --> DB["Grafana dashboard JSON"]
-        G --> AM["Alertmanager routes<br/>(AlertmanagerConfig)"]
+        G --> AM["Alertmanager routes and inhibit rules<br/>(AlertmanagerConfig)"]
         G --> RB["Runbook stubs"]
         RV --> DEP["Deployer<br/>server-side apply"]
         DB --> DEP
         AM --> DEP
         RB --> DEP
-        API["HTTP API /api/v1 + embedded React UI (go:embed)<br/>discovery · backtest · triage"]
+        API["HTTP API /api/v1 + embedded React UI (go:embed)<br/>discovery · backtest · triage · incidents"]
+        FU["Follow-up<br/>incident + evidence"]
     end
 
     DEP --> OUT["PrometheusRule · AlertmanagerConfig · ConfigMaps"]
     P[("Prometheus")] -- "span metrics: who sends telemetry<br/>range query of a proposed rule" --> API
-    A[("Alertmanager")] -- "active alerts, grouped with the dependsOn graph" --> API
+    A[("Alertmanager")] -- "active alerts (muted ones too), grouped with the dependsOn graph" --> API
+    A -- "webhook: every group (bearer token)" --> FU
+    A -- "alert itself" --> TG(["Telegram / email"])
+    FU -- "one follow-up per incident" --> TG
 ```
 
 Installed alongside as pinned Helm dependencies: OpenTelemetry Collector,
@@ -55,7 +59,9 @@ Prometheus Operator and Prometheus, Alertmanager, Grafana, Loki, Tempo.
 | `internal/controller` | Reconciler, status conditions; puts the labels of the system's set on its objects; a change of the sets ConfigMap re-reconciles every system | real (tested with fake client) |
 | `internal/discovery` | Services from span metrics | real (needs Prometheus) |
 | `internal/backtest` | Firing episodes of a rule over history | real (needs Prometheus) |
-| `internal/triage` | Probable source on the dependency graph | graph walk real; trace/log enrichment TODO |
+| `internal/triage` | Probable source on the dependency graph; incidents (roots, affected services) from active alerts, using the same links as the generated inhibit rules | real |
+| `internal/evidence` | Evidence about a root service: workload changes in the last 30 minutes (pods, ReplicaSets, StatefulSets, Warning events), operations with most failed calls (span metrics, query built by the rule library), an error log line (Loki), a Grafana Explore link to failing traces (Tempo); short timeout per collector, bounded total | real (tested with fake Kubernetes, Prometheus and Loki) |
+| `internal/followup` | Alertmanager webhook notifications → incident → evidence → one follow-up message per incident to the chats and addresses that got the alert, after a short delay; in-memory record of sent incidents | real (tested with fakes) |
 | `internal/clients/*` | Prometheus (official client), Alertmanager v2 | real |
 | `internal/stack` | Sets of programs: the built-in set from the flags (addresses can be overridden and reset), sets added in the UI with extra labels for PrometheusRule / AlertmanagerConfig; stored in the ConfigMap `kamerton-stacks` (cluster), `.kamerton-stacks.json` next to the descriptions (local) or memory. Identity checks of an address per program (health path + build info / status). Discovery through the Kubernetes API: Services in all namespaces recognised by labels, operator service names and typical ports, confirmed over HTTP (bounded concurrency, short timeouts); Prometheus Operator `Prometheus`/`Alertmanager` resources → selector labels and warnings when instances cannot be told apart | real (unit-tested with a fake Kubernetes client and fake HTTP servers; used on a k3s cluster with a second Prometheus) |
 | `internal/descstore` | Systems: SystemDescription resources (cluster) or files (local); list, create, save, update, delete | real (tested through the API in both modes) |
@@ -156,7 +162,7 @@ description without them is arranged automatically). Saving from the UI keeps
 | GET | `/api/v1/systems/{id}/discovery` | services in telemetry; `described` for this system, `inSystems` for others |
 | POST | `/api/v1/systems/{id}/backtest` | `{yaml, service, alert, operation, range}` (a rule of a draft) or `{expr, for, range}` |
 | GET | `/api/v1/systems/{id}/runbooks/{service}` | runbook of a service |
-| GET | `/api/v1/systems/{id}/alerts` | active alerts of the system |
+| GET | `/api/v1/systems/{id}/alerts` | active alerts of the system (same shape as `/api/v1/alerts`) |
 | GET | `/api/v1/systems/{id}/telegram`, PUT `…/telegram/routing` | Telegram status / routing for this system |
 | GET | `/api/v1/stack` | health of the programs of one set (`?set=`, default the built-in one) |
 | GET | `/api/v1/stacks` | sets with programs (address, origin `bundled`/`own`/`none`), health and version, systems using each, warnings; discovery availability |
@@ -165,8 +171,9 @@ description without them is arranged automatically). Saving from the UI keeps
 | PUT/DELETE | `/api/v1/stacks/{id}/programs/{kind}` | `{url}` sets an address (http/https only, no credentials); DELETE resets the built-in set's address to the install-time value or disconnects it in another set |
 | POST | `/api/v1/stacks/check` | `{kind, url}` → `{state: ok, not_ready, no_answer, wrong_program, no_access, bad_url; version, message}`; only GETs go to the address |
 | GET | `/api/v1/stacks/discover` | programs found in the cluster (`kind, namespace, service, url, version, healthy, state, operator, usedBy`), operator resources, warnings; `{available: false, reason}` outside a cluster |
-| GET | `/api/v1/alerts` | active alerts of all systems from every Alertmanager in use (merged by fingerprint), with plain-words title, value, threshold and probable source |
-| GET | `/api/v1/settings` | external URL (links on/off), storage mode, namespace, Telegram availability |
+| GET | `/api/v1/alerts` | active alerts of all systems from every Alertmanager in use (merged by fingerprint), with plain-words title, value, threshold and probable source; `muted` (alerts muted by grouping by cause) and `incidents` (see Incidents) |
+| POST | `/api/v1/hooks/alertmanager` | Alertmanager webhook (payload version 4); `Authorization: Bearer <token>` from the Secret `kamerton-webhook`; no session, no `X-Requested-With`; 404 `not_available` when follow-up messages are off |
+| GET | `/api/v1/settings` | external URL (links on/off), storage mode, namespace, Telegram and email availability, `followUp: {available, reason}` |
 | GET | `/api/v1/runbooks/{service}` | runbook found by service name (`?system=` to choose); behind `runbook_url` of rules |
 | GET/PUT | `/api/v1/description` | single-description API of earlier versions: the default system |
 | POST | `/api/v1/description/validate`, `/api/v1/rules/preview`, `/api/v1/backtest` | stateless helpers |
@@ -217,6 +224,15 @@ name plus `create` on Secrets in the namespace (Kubernetes cannot restrict
 `create` by name) and no list/watch. The token is sent only to the Bot API;
 transport errors (which embed the request URL) are scrubbed before they reach
 logs or responses.
+
+The webhook token of follow-up messages is generated by the core (256
+random bits) into the Secret `kamerton-webhook` (key `token`) in its
+namespace at startup when missing; the same Role grants get/update/patch/
+delete on it by name. Generated AlertmanagerConfigs reference it under
+`httpConfig.authorization.credentials`, so only descriptions in Kamerton's
+namespace get the webhook (the Prometheus Operator drops a whole
+AlertmanagerConfig whose Secret it cannot read, and that would stop the
+alerts themselves).
 
 ## Telegram chat discovery
 
@@ -276,3 +292,100 @@ next to the English `summary`/`description`. Alertmanager executes the
 Telegram message (parse mode HTML) and the email HTML with html/template, so
 values are escaped. Links go only to the external URL (`/alerts?...` and
 `/runbooks/<service>/<alert>` in the UI); without it there are no links.
+
+## Incidents
+
+### Grouping by cause (inhibit rules)
+
+`spec.notifications.groupByCause` (default true) adds `spec.inhibitRules`
+to the AlertmanagerConfig (`internal/generator/inhibit.go`). Symptom alerts
+are `KamertonErrorRateHigh`, `KamertonOperationErrorRateHigh`,
+`KamertonLatencyHigh`, `KamertonOperationLatencyHigh`,
+`KamertonLatencyAboveNormal` and `KamertonRequestsStopped`
+(`rules.SymptomAlerts`): what a caller sees when its dependency fails. For
+each service with callers there are two rules: a critical symptom alert of
+the service mutes symptom alerts of its direct callers of any severity; a
+warning mutes only their warnings (a warning may be routed nowhere and must
+not hide a critical alert). Alertmanager lets a muted alert act as a source,
+so chains collapse to the deepest failing service. Every matcher names
+`kamerton_managed` and `kamerton_system` (inhibit rules apply to every alert
+of the Alertmanager). Source and target name different services, so no
+alert inhibits itself; links inside a dependency cycle are dropped
+(`triage.MutingEdges`), so two services that call each other never mute each
+other. Resource (memory, CPU, restarts, OOMKilled), queue, SLO and custom
+alerts neither mute nor are muted.
+
+The Prometheus Operator adds `namespace="<namespace of the
+AlertmanagerConfig>"` to both sides of an inhibit rule (and to routes)
+unless `alertmanagerConfigMatcherStrategy` is `None`. Span-metric alerts have
+no `namespace` label, so the bundled chart sets `None`; a Prometheus
+Operator with the default strategy matches neither Kamerton's routes nor its
+inhibit rules.
+
+`triage.Incidents` applies the same links to the active alerts of a system
+(the alerts API asks Alertmanager with `inhibited=true`): a symptomatic
+service whose direct dependency (by muting links) is symptomatic is
+affected, the others are roots; roots that share an affected service form
+one incident. The alerts API adds:
+
+```json
+{
+  "alerts": [{"…": "as before", "fingerprint": "f1", "muted": false, "incident": "shop:payment"}],
+  "muted": [{"…": "same shape as alerts", "muted": true, "incident": "shop:payment"}],
+  "incidents": [{
+    "id": "shop:payment",
+    "system": "shop",
+    "roots": ["payment"],
+    "rootAlerts": [{"fingerprint": "f1", "name": "KamertonRequestsStopped", "service": "payment",
+                    "severity": "critical", "startsAt": "…", "title": "…", "value": "…", "muted": false}],
+    "affected": ["checkout", "frontend"],
+    "affectedAlerts": [{"…": "same shape", "muted": true}],
+    "startsAt": "…"
+  }]
+}
+```
+
+### Follow-up message
+
+With `incidents.followUp.enabled` (Helm, default on; flag
+`--alertmanager-webhook-url`) the core makes sure the webhook token Secret
+exists, and the generator adds a last child route with `continue: true` and
+receiver `kamerton-webhook` (`webhookConfigs`, `sendResolved`, bearer
+authorization from the Secret) to AlertmanagerConfigs of descriptions in
+Kamerton's namespace whose `spec.notifications.evidenceFollowUp` is not
+false. The routes before it are unchanged, so Telegram and email keep
+getting the alert straight from Alertmanager.
+
+On a firing notification (`internal/followup`) the core answers at once and
+then: finds the system by `kamerton_system`; reads its alerts with muted
+ones from the Alertmanager of its set (the notification's alerts when that
+fails); groups them into incidents; for each incident of the notification
+records `system:roots@start` (Alertmanager repeats and group updates find
+it and send nothing; entries expire after 24 hours); collects evidence for
+up to three roots (`internal/evidence`, 5 s per collector, 12 s in total,
+failures logged); renders the message (`generator.RenderFollowUp`, language
+and time zone of the description, Telegram HTML, email HTML and text) and
+sends it no earlier than 10 seconds after the notification to the receivers
+that got the alert (severity routing and service routes of the
+description). Telegram goes only through Kamerton's bot (receivers naming
+Kamerton's token Secret), email only through the mail server configured in
+Kamerton. Nothing is sent when the evidence says no more than the alert
+(no affected services, changes, failing operation or log line).
+
+Evidence parts: workload changes of the root's pods (namespace and pod regex
+as the saturation rules use them; without a namespace, the namespace label of
+the pods' container metrics in Prometheus): the newest ReplicaSet of a
+Deployment created within 30 minutes (old and new image tag), a StatefulSet
+rolling out a new revision, containers terminated within 30 minutes or in
+CrashLoopBackOff (reason, exit code), pods not ready, the most frequent
+Warning events of the pods and their owners. The operation with most failed
+calls: `topk(3, sum by (service, operation) (increase(failed calls[30m])) > 0)`
+over the selection of the error-rate rules (`rules.FailingOperations`). The
+log line: the newest line matching an error pattern in the stream
+`{service_name="<telemetry name>"}` of the set's Loki. The trace link: Grafana
+Explore at `incidents.grafanaExternalURL` with the Tempo data source (UID
+`tempo`) and `{resource.service.name="<telemetry name>" && status=error}`.
+Workload reads need the ClusterRole rules pods/events and
+replicasets/statefulsets get/list (`incidents.followUp.workloadRead`).
+Without a cluster the follow-up is unavailable and `/api/v1/settings` says
+why.

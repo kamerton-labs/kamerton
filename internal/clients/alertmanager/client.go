@@ -21,9 +21,26 @@ type Alert struct {
 	Annotations  map[string]string `json:"annotations"`
 	StartsAt     time.Time         `json:"startsAt"`
 	GeneratorURL string            `json:"generatorURL"`
-	Status       struct {
-		State string `json:"state"`
-	} `json:"status"`
+	Status       Status            `json:"status"`
+}
+
+// Status is the state of an alert in Alertmanager: "active", "suppressed"
+// (silenced or inhibited) or "unprocessed".
+type Status struct {
+	State       string   `json:"state"`
+	SilencedBy  []string `json:"silencedBy,omitempty"`
+	InhibitedBy []string `json:"inhibitedBy,omitempty"`
+}
+
+// Inhibited reports whether an inhibit rule mutes the alert.
+func (a *Alert) Inhibited() bool { return len(a.Status.InhibitedBy) > 0 }
+
+// MutedReader also lists alerts muted by inhibit rules. Readers that do not
+// implement it are asked for active alerts only.
+type MutedReader interface {
+	// AlertsWithInhibited returns active alerts, including inhibited ones
+	// (Status.InhibitedBy set), without silenced ones.
+	AlertsWithInhibited(ctx context.Context, filter map[string]string) ([]Alert, error)
 }
 
 // Reader lists active alerts.
@@ -46,10 +63,19 @@ func New(base string) *Client {
 // ActiveAlerts returns active (not silenced, not inhibited) alerts matching
 // the label equality filter.
 func (c *Client) ActiveAlerts(ctx context.Context, filter map[string]string) ([]Alert, error) {
+	return c.list(ctx, filter, false)
+}
+
+// AlertsWithInhibited implements MutedReader.
+func (c *Client) AlertsWithInhibited(ctx context.Context, filter map[string]string) ([]Alert, error) {
+	return c.list(ctx, filter, true)
+}
+
+func (c *Client) list(ctx context.Context, filter map[string]string, inhibited bool) ([]Alert, error) {
 	q := url.Values{}
 	q.Set("active", "true")
 	q.Set("silenced", "false")
-	q.Set("inhibited", "false")
+	q.Set("inhibited", fmt.Sprint(inhibited))
 	for k, v := range filter {
 		q.Add("filter", fmt.Sprintf("%s=%q", k, v))
 	}

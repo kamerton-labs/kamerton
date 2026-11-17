@@ -272,7 +272,7 @@ func TestPerSetClients(t *testing.T) {
 	expect("billing backtest", "prom-b")
 	_, body := get(t, sys+"billing/alerts")
 	expect("billing alerts", "am-b")
-	if strings.Count(body, `"name":"KamertonErrorRateHigh"`) != 2 {
+	if countAlerts(t, body) != 2 {
 		t.Errorf("billing alerts: %s", body)
 	}
 	get(t, sys+"shop/alerts")
@@ -283,7 +283,7 @@ func TestPerSetClients(t *testing.T) {
 	if got := rec.take(); len(got) != 2 {
 		t.Errorf("all alerts must ask both Alertmanagers: %v", got)
 	}
-	if n := strings.Count(body, `"name":"KamertonErrorRateHigh"`); n != 3 {
+	if n := countAlerts(t, body); n != 3 {
 		t.Errorf("want 3 distinct alerts (shop, billing, billing-2), got %d: %s", n, body)
 	}
 
@@ -343,3 +343,22 @@ func TestSameAddress(t *testing.T) {
 }
 
 func ptr[T any](v T) *T { return &v }
+
+// countAlerts counts the delivered alerts of an alerts response (the
+// incidents of the same response list them again).
+func countAlerts(t *testing.T, body string) int {
+	t.Helper()
+	var out struct {
+		Alerts []struct {
+			Name string `json:"name"`
+		} `json:"alerts"`
+	}
+	decode(t, body, &out)
+	n := 0
+	for _, a := range out.Alerts {
+		if a.Name == "KamertonErrorRateHigh" {
+			n++
+		}
+	}
+	return n
+}

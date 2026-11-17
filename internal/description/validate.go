@@ -97,7 +97,11 @@ func (v *validator) spec(spec *v1alpha1.SystemDescriptionSpec) {
 		v.service(fmt.Sprintf("%s/services/%d", base, i), &spec.Services[i], names)
 	}
 	if cycle := findCycle(spec.Services); len(cycle) > 0 {
-		v.warnf(base+"/services", "dependency cycle: %v; probable-source search stops at the cycle", cycle)
+		msg := "dependency cycle: %v; probable-source search stops at the cycle"
+		if spec.Notifications.GroupsByCause() {
+			msg += ", and services in the cycle do not mute each other's alerts"
+		}
+		v.warnf(base+"/services", msg, cycle)
 	}
 	v.notifications(base+"/notifications", spec)
 }
@@ -340,6 +344,14 @@ func (v *validator) notifications(p string, spec *v1alpha1.SystemDescriptionSpec
 	}
 	if _, err := LoadTimeZone(n.TimeZone); err != nil {
 		v.errf(p+"/timeZone", "%v", err)
+	}
+	if len(n.Receivers) == 0 {
+		if n.GroupByCause != nil {
+			v.warnf(p+"/groupByCause", "groupByCause has no effect without receivers: no Alertmanager configuration is generated")
+		}
+		if n.EvidenceFollowUp != nil && *n.EvidenceFollowUp {
+			v.warnf(p+"/evidenceFollowUp", "evidenceFollowUp has no effect without receivers: a follow-up goes to the receivers of the alert")
+		}
 	}
 	receivers := map[string]bool{}
 	for i, r := range n.Receivers {

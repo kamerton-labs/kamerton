@@ -37,6 +37,17 @@ rules:
     resources: ["prometheuses", "alertmanagers"]
     verbs: ["get", "list"]
   {{- end }}
+  {{- if and .Values.incidents.followUp.enabled .Values.incidents.followUp.workloadRead }}
+  # Follow-up messages: read-only look at the workload of the root service
+  # of an incident (what changed in the last 30 minutes). Systems run in
+  # many namespaces, so these are cluster-wide reads; no watch, no Secrets.
+  - apiGroups: [""]
+    resources: ["pods", "events"]
+    verbs: ["get", "list"]
+  - apiGroups: ["apps"]
+    resources: ["replicasets", "statefulsets"]
+    verbs: ["get", "list"]
+  {{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -52,11 +63,12 @@ subjects:
   - kind: ServiceAccount
     name: {{ include "kamerton.serviceAccountName" . }}
     namespace: {{ .Release.Namespace }}
-{{- if or .Values.telegram.uiSetup .Values.email.uiSetup }}
+{{- if or .Values.telegram.uiSetup .Values.email.uiSetup .Values.incidents.followUp.enabled }}
 ---
 # Telegram and email setup from the UI: the core stores the bot token and
 # the SMTP password in their own Secrets and remembers chats, the mail server
-# and recipients in ConfigMaps, all in its own namespace.
+# and recipients in ConfigMaps, all in its own namespace. Follow-up messages:
+# the core creates the webhook token Secret and reads it.
 # Namespaced Role (not ClusterRole): no access to Secrets anywhere else.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
@@ -75,6 +87,9 @@ rules:
       {{- end }}
       {{- if .Values.email.uiSetup }}
       - {{ .Values.email.secretName | quote }}
+      {{- end }}
+      {{- if .Values.incidents.followUp.enabled }}
+      - {{ .Values.incidents.followUp.secretName | quote }}
       {{- end }}
     verbs: ["get", "update", "patch", "delete"]
   # Kubernetes cannot restrict "create" by resourceNames (the name is not

@@ -509,7 +509,8 @@ func (s *Server) alertmanagersInUse(ctx context.Context, list []*descstore.Snaps
 	return out
 }
 
-// fetchAlerts asks several Alertmanagers concurrently.
+// fetchAlerts asks several Alertmanagers concurrently for active alerts,
+// including those muted by inhibit rules when the reader can list them.
 func fetchAlerts(ctx context.Context, sources []amSource, filter map[string]string) (lists [][]alertmanager.Alert, errs []error) {
 	lists = make([][]alertmanager.Alert, len(sources))
 	errs = make([]error, len(sources))
@@ -518,6 +519,10 @@ func fetchAlerts(ctx context.Context, sources []amSource, filter map[string]stri
 		wg.Add(1)
 		go func(i int, src amSource) {
 			defer wg.Done()
+			if m, ok := src.am.(alertmanager.MutedReader); ok {
+				lists[i], errs[i] = m.AlertsWithInhibited(ctx, filter)
+				return
+			}
 			lists[i], errs[i] = src.am.ActiveAlerts(ctx, filter)
 		}(i, src)
 	}

@@ -31,3 +31,28 @@ func TestActiveAlerts(t *testing.T) {
 		t.Fatalf("unexpected alerts: %+v", alerts)
 	}
 }
+
+func TestAlertsWithInhibited(t *testing.T) {
+	var asked []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		asked = append(asked, r.URL.Query().Get("inhibited")+"/"+r.URL.Query().Get("silenced"))
+		_, _ = w.Write([]byte(`[{"fingerprint":"a","labels":{"service":"payment"},"status":{"state":"active"}},
+			{"fingerprint":"b","labels":{"service":"checkout"},"status":{"state":"suppressed","inhibitedBy":["a"],"silencedBy":[]}}]`))
+	}))
+	defer srv.Close()
+	c := New(srv.URL)
+	alerts, err := c.AlertsWithInhibited(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(alerts) != 2 || alerts[0].Inhibited() || !alerts[1].Inhibited() {
+		t.Fatalf("alerts = %+v", alerts)
+	}
+	if _, err := c.ActiveAlerts(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(asked) != 2 || asked[0] != "true/false" || asked[1] != "false/false" {
+		t.Errorf("queries = %v", asked)
+	}
+	var _ MutedReader = c
+}

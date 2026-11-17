@@ -288,3 +288,33 @@ func TestStackField(t *testing.T) {
 		}
 	}
 }
+
+func TestIncidentSwitches(t *testing.T) {
+	doc := func(notifications string) string {
+		return minimal + "  notifications:\n" + notifications
+	}
+	// Valid, with and without receivers; a non-boolean is a schema error.
+	res := Validate([]byte(doc("    groupByCause: false\n    evidenceFollowUp: true\n")))
+	if !res.Valid {
+		t.Fatalf("errors: %+v", res.Errors)
+	}
+	paths := map[string]bool{}
+	for _, w := range res.Warnings {
+		paths[w.Path] = true
+	}
+	if !paths["/spec/notifications/groupByCause"] || !paths["/spec/notifications/evidenceFollowUp"] {
+		t.Errorf("no warning about switches without receivers: %+v", res.Warnings)
+	}
+	if res.Document.Spec.Notifications.GroupsByCause() || !res.Document.Spec.Notifications.SendsEvidence() {
+		t.Error("switches not read")
+	}
+	res = Validate([]byte(doc("    groupByCause: maybe\n")))
+	if res.Valid {
+		t.Error("groupByCause: maybe is accepted")
+	}
+	// Defaults: both on.
+	res = Validate([]byte(minimal))
+	if n := res.Document.Spec.Notifications; !n.GroupsByCause() || !n.SendsEvidence() {
+		t.Error("defaults are not on")
+	}
+}

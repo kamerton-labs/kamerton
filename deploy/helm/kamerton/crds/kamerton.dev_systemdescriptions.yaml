@@ -418,6 +418,27 @@ spec:
               notifications:
                 description: Notification receivers and routing.
                 properties:
+                  evidenceFollowUp:
+                    description: |-
+                      Send a second, short message right after a firing notification with
+                      what Kamerton found about the probable cause: the dependency chain,
+                      what changed in the workload in the last 30 minutes (new version,
+                      restarts, pods not ready, warning events), the operation with most
+                      errors, an error log line and a link to failing traces. It goes to the
+                      same Telegram chats and email recipients as the alert, only through the
+                      bot and mail server configured in Kamerton, and only in a cluster.
+                      Nothing is sent when nothing useful was found. Default: true.
+                    type: boolean
+                  groupByCause:
+                    description: |-
+                      One message per incident: while a service that others depend on
+                      (dependsOn) has an error, latency or "requests stopped" alert, the same
+                      kinds of alerts of the services that call it are muted in Alertmanager,
+                      so the cause arrives instead of a pile of follow-on alerts. Memory, CPU,
+                      restart, queue and SLO alerts are never muted. Services in a dependency
+                      cycle do not mute each other. Default: true; set to false to get every
+                      alert separately.
+                    type: boolean
                   language:
                     description: 'Language of notification messages and of the plain-words
                       alert text: en (default) or ru.'

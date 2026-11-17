@@ -74,6 +74,14 @@ spec:
               value: {{ .Values.stacks.configMapName | quote }}
             - name: KAMERTON_STACK_DISCOVERY
               value: {{ .Values.stacks.discovery.enabled | quote }}
+            - name: KAMERTON_ALERTMANAGER_WEBHOOK_URL
+              value: {{ if and .Values.controller.enabled .Values.incidents.followUp.enabled }}{{ printf "http://%s.%s.svc:%v/api/v1/hooks/alertmanager" (include "kamerton.fullname" .) .Release.Namespace .Values.service.port | quote }}{{ else }}""{{ end }}
+            - name: KAMERTON_WEBHOOK_SECRET_NAME
+              value: {{ .Values.incidents.followUp.secretName | quote }}
+            - name: KAMERTON_WORKLOAD_EVIDENCE
+              value: {{ .Values.incidents.followUp.workloadRead | quote }}
+            - name: KAMERTON_GRAFANA_EXTERNAL_URL
+              value: {{ .Values.incidents.grafanaExternalURL | quote }}
             {{- with (include "kamerton.authSecretName" .) }}
             - name: KAMERTON_AUTH_USER
               valueFrom:

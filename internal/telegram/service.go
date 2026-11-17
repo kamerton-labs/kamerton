@@ -1260,3 +1260,24 @@ func uniqueSorted(in []string) []string {
 	}
 	return keys(m)
 }
+
+// ErrNotKamertonBot is returned for a receiver whose token Secret is not the
+// one Kamerton manages: Kamerton does not read other Secrets.
+var ErrNotKamertonBot = errors.New("the receiver uses a bot token Secret Kamerton does not manage")
+
+// SendFollowUp sends an HTML message (parse mode HTML) to a chat of a
+// receiver, with Kamerton's bot. ref is the receiver's botTokenSecret: only
+// Kamerton's own token Secret is used, so a follow-up goes out only where
+// the bot that sent the alert is Kamerton's.
+func (s *Service) SendFollowUp(ctx context.Context, ref v1alpha1.SecretKeyRef, chatID int64, htmlText string) error {
+	s.init()
+	name, key := s.Tokens.Ref()
+	if ref.Name != name || ref.Key != key {
+		return ErrNotKamertonBot
+	}
+	token, _, err := s.token(ctx)
+	if err != nil {
+		return err
+	}
+	return s.API.SendMessage(ctx, token, chatID, htmlText)
+}

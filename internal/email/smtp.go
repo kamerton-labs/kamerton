@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"mime"
+	"mime/quotedprintable"
 	"net"
 	"net/mail"
 	"net/smtp"
@@ -25,6 +26,11 @@ type Sender interface {
 	Check(ctx context.Context, cfg ServerSettings, password string) error
 	// Send sends a plain-text message.
 	Send(ctx context.Context, cfg ServerSettings, password string, to []string, subject, body string) error
+}
+
+// HTMLSender also sends a message with an HTML body next to the plain text.
+type HTMLSender interface {
+	SendHTML(ctx context.Context, cfg ServerSettings, password string, to []string, subject, text, html string) error
 }
 
 // SMTPSender implements Sender with net/smtp: implicit TLS on port 465,
@@ -115,6 +121,16 @@ func (s *SMTPSender) Check(ctx context.Context, cfg ServerSettings, password str
 
 // Send implements Sender.
 func (s *SMTPSender) Send(ctx context.Context, cfg ServerSettings, password string, to []string, subject, body string) error {
+	return s.send(ctx, cfg, password, to, buildMessage(cfg.From, to, subject, body, time.Now()))
+}
+
+// SendHTML implements HTMLSender: a multipart/alternative message with the
+// plain text first and the HTML second.
+func (s *SMTPSender) SendHTML(ctx context.Context, cfg ServerSettings, password string, to []string, subject, text, html string) error {
+	return s.send(ctx, cfg, password, to, buildHTMLMessage(cfg.From, to, subject, text, html, time.Now()))
+}
+
+func (s *SMTPSender) send(ctx context.Context, cfg ServerSettings, password string, to []string, msg []byte) error {
 	c, err := s.dial(ctx, cfg, password)
 	if err != nil {
 		return scrub(err, password)
@@ -136,7 +152,7 @@ func (s *SMTPSender) Send(ctx context.Context, cfg ServerSettings, password stri
 	if err != nil {
 		return scrub(err, password)
 	}
-	if _, err := w.Write(buildMessage(cfg.From, to, subject, body, time.Now())); err != nil {
+	if _, err := w.Write(msg); err != nil {
 		return scrub(err, password)
 	}
 	if err := w.Close(); err != nil {
@@ -154,6 +170,31 @@ func buildMessage(from string, to []string, subject, body string, now time.Time)
 	b.WriteString("MIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\n")
 	b.WriteString(strings.ReplaceAll(body, "\n", "\r\n"))
 	b.WriteString("\r\n")
+	return b.Bytes()
+}
+
+// htmlBoundary separates the parts of a multipart message. It cannot occur
+// in a quoted-printable body (no "=_" sequence survives the encoding as is).
+const htmlBoundary = "=_kamerton_alternative"
+
+func buildHTMLMessage(from string, to []string, subject, text, html string, now time.Time) []byte {
+	var b bytes.Buffer
+	b.WriteString("From: " + from + "\r\n")
+	b.WriteString("To: " + strings.Join(to, ", ") + "\r\n")
+	b.WriteString("Subject: " + mime.QEncoding.Encode("utf-8", subject) + "\r\n")
+	b.WriteString("Date: " + now.Format(time.RFC1123Z) + "\r\n")
+	b.WriteString("MIME-Version: 1.0\r\nContent-Type: multipart/alternative; boundary=\"" + htmlBoundary + "\"\r\n\r\n")
+	part := func(contentType, body string) {
+		b.WriteString("--" + htmlBoundary + "\r\n")
+		b.WriteString("Content-Type: " + contentType + "; charset=utf-8\r\nContent-Transfer-Encoding: quoted-printable\r\n\r\n")
+		w := quotedprintable.NewWriter(&b)
+		_, _ = w.Write([]byte(strings.ReplaceAll(body, "\n", "\r\n")))
+		_ = w.Close()
+		b.WriteString("\r\n")
+	}
+	part("text/plain", text)
+	part("text/html", html)
+	b.WriteString("--" + htmlBoundary + "--\r\n")
 	return b.Bytes()
 }
 
