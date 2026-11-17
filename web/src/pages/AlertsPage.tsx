@@ -8,6 +8,7 @@
 import { useMemo } from 'react'
 import { ChevronRight } from 'lucide-react'
 import { Link, useSearchParams } from 'react-router'
+import FeedbackButtons from '@/components/alerts/FeedbackButtons'
 import IncidentBlock from '@/components/alerts/IncidentBlock'
 import { Page, SeverityBadge } from '@/components/common'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
@@ -40,9 +41,12 @@ function AlertCard({ a }: { a: ActiveAlert }) {
             <span title={dateTime(a.startsAt)}>{sinceText(a.startsAt)}</span>
           </div>
         </div>
-        <Button variant="outline" size="sm" asChild>
-          <Link to={runbookHref(a.system, a.service, a.name)}>{t('alerts.runbook')}</Link>
-        </Button>
+        <div className="flex flex-wrap items-center gap-1">
+          {a.system && <FeedbackButtons system={a.system} alert={a.name} service={a.service} operation={a.labels.operation} />}
+          <Button variant="outline" size="sm" asChild>
+            <Link to={runbookHref(a.system, a.service, a.name)}>{t('alerts.runbook')}</Link>
+          </Button>
+        </div>
       </div>
       {(a.value || a.threshold) && (
         <div className="flex flex-wrap gap-x-6 gap-y-1 text-sm">

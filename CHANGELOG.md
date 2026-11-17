@@ -8,6 +8,23 @@ All notable changes to Kamerton are listed here. The format follows
 
 ### Added
 
+- Quieter rules. `GET /api/v1/systems/{id}/noise?window=7d` (1d, 3d, 7d)
+  returns, per rule, how often it fired in the window, how many firings
+  cleared within 5 minutes, the longest firing, when it last fired, the
+  verdicts of people and whether it is noisy (at least 5 firings, more than
+  half short; or at least 2 "noise" verdicts outnumbering "useful"). For a
+  noisy rule with a threshold or `for`, a suggestion found with the
+  backtest: the smallest longer `for` or higher threshold that removes at
+  least 80% of the short firings and misses no firing of 10 minutes or
+  more, written as the description field takes it. Two range queries per
+  system for the statistics; suggestions for at most 5 rules, computed on
+  request and never applied by Kamerton.
+- "Useful" / "Noise" buttons under the follow-up message in Telegram
+  («По делу» / «Шум» in Russian), handled by the bot's polling (callback
+  queries, `allowed_updates` now includes `callback_query`), accepted only
+  from chats that receive the system's alerts. Verdicts also come from
+  `POST /api/v1/systems/{id}/noise/feedback`. Counters only, in the
+  ConfigMap `kamerton-noise-state` (memory without a cluster).
 - One message per incident: generated AlertmanagerConfigs carry inhibit
   rules built from `dependsOn`. While a service has an error, latency or
   "requests stopped" alert, the same kinds of alerts of the services that

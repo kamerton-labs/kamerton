@@ -18,6 +18,7 @@ import (
 	"github.com/kamerton-labs/kamerton/internal/clients/alertmanager"
 	"github.com/kamerton-labs/kamerton/internal/description"
 	"github.com/kamerton-labs/kamerton/internal/followup"
+	"github.com/kamerton-labs/kamerton/internal/telegram"
 )
 
 type staticToken struct {
@@ -42,7 +43,7 @@ type recordingTelegram struct {
 	sent []string
 }
 
-func (r *recordingTelegram) SendFollowUp(_ context.Context, _ v1alpha1.SecretKeyRef, _ int64, html string) error {
+func (r *recordingTelegram) SendFollowUp(_ context.Context, _ v1alpha1.SecretKeyRef, _ int64, html string, _ telegram.Keyboard) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.sent = append(r.sent, html)

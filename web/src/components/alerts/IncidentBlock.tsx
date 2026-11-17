@@ -7,6 +7,7 @@ import { Link } from 'react-router'
 import { cn } from 'cn'
 import { SeverityBadge } from '@/components/common'
 import { Button } from '@/components/ui/button'
+import FeedbackButtons from './FeedbackButtons'
 import { useT } from '@/i18n'
 import type { Incident, IncidentAlert, IncidentEvidence } from '@/lib/api'
 import { dateTime, httpUrl, sinceText, timeAgo } from '@/lib/format'
@@ -55,9 +56,12 @@ function RootAlert({ a, system }: { a: IncidentAlert; system: string }) {
           <span title={dateTime(a.startsAt)}>{sinceText(a.startsAt)}</span>
         </div>
       </div>
-      <Button variant="outline" size="sm" asChild>
-        <Link to={runbookHref(system, a.service, a.name)}>{t('alerts.runbook')}</Link>
-      </Button>
+      <div className="flex flex-wrap items-center gap-1">
+        <FeedbackButtons system={system} alert={a.name} service={a.service} />
+        <Button variant="outline" size="sm" asChild>
+          <Link to={runbookHref(system, a.service, a.name)}>{t('alerts.runbook')}</Link>
+        </Button>
+      </div>
     </li>
   )
 }

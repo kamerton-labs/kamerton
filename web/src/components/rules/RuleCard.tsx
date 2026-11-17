@@ -19,6 +19,7 @@ import { severityLabel, type CustomRule } from '@/lib/model/types'
 import CustomRuleForm from './CustomRuleForm'
 import MessageEditor from './MessageEditor'
 import RuleBacktest from './RuleBacktest'
+import RuleNoise from './RuleNoise'
 
 /** 0.02 calls/s -> "1.2 requests per minute" (in Russian the genitive after "fewer than"). */
 function perMinute(rps: number): string {
@@ -161,6 +162,7 @@ export function RuleEditor({ rule, className }: { rule: RuleItem; className?: st
           </div>
         )}
         <RuleBacktest rule={rule} />
+        <RuleNoise rule={rule} />
         <MessageEditor rule={rule} />
         {rule.removable && (
           <div className="flex justify-end">

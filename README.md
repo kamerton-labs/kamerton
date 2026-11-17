@@ -401,6 +401,39 @@ Grouping needs the Prometheus Operator to leave Kamerton's matchers alone
 (`alertmanagerConfigMatcherStrategy: None`, set by the bundled chart):
 span-metric alerts carry no `namespace` label.
 
+### Quieter rules
+
+A rule that fires forty times a week and clears by itself each time teaches
+people to ignore it. Kamerton counts this from the alert history in the
+system's Prometheus (`ALERTS`, `ALERTS_FOR_STATE`) and, for such a rule,
+suggests a change; nothing is changed until someone applies it.
+
+- **How often and how long.** For each rule over the last 1, 3 or 7 days:
+  how many times it fired, how many firings cleared within 5 minutes
+  ("short"), the longest firing and when it last fired.
+- **Noisy.** At least 5 firings with more than half of them short, or at
+  least 2 people said "noise" and they outnumber "useful". The same number
+  of "useful" outnumbering "noise" makes a rule not noisy whatever its
+  history.
+- **A suggestion.** For a noisy rule with a threshold or a pending period
+  (`for`), Kamerton runs the backtest with a few changes, smallest first: a
+  longer `for` (1m, 2m, 3m, 5m, 10m) and a threshold 1.25, 1.5, 2 or 3 times
+  higher (lower for a custom "less than" rule). It suggests the first change
+  that would have removed at least 80% of the short firings and still caught
+  every firing that lasted 10 minutes or more; if none does, there is no
+  suggestion. It says how often the rule would have fired. The value is
+  written as the description field takes it (`errorRate.threshold: 0.063`,
+  `latency.for: 5m`, `saturation.memory: 768Mi`), so applying it is an
+  ordinary edit of the description.
+- **Useful or noise.** The follow-up message in Telegram has two buttons,
+  "Useful" and "Noise" ("По делу" and "Шум" in Russian). A press counts for
+  the rules of the incident's root alerts; pressing the other button
+  changes the verdict. Presses count only from chats that get the system's
+  alerts through Kamerton's bot. The UI sends the same verdict through the
+  API. Kamerton keeps counters only, nothing about who pressed, in the
+  ConfigMap `kamerton-noise-state` (in memory without a cluster). The
+  alert message itself comes from Alertmanager and cannot have buttons.
+
 ### Login
 
 When login is on, the core has one shared user name and password, taken from

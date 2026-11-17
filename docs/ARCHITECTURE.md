@@ -62,6 +62,7 @@ Prometheus Operator and Prometheus, Alertmanager, Grafana, Loki, Tempo.
 | `internal/triage` | Probable source on the dependency graph; incidents (roots, affected services) from active alerts, using the same links as the generated inhibit rules | real |
 | `internal/evidence` | Evidence about a root service: workload changes in the last 30 minutes (pods, ReplicaSets, StatefulSets, Warning events), operations with most failed calls (span metrics, query built by the rule library), an error log line (Loki), a Grafana Explore link to failing traces (Tempo); short timeout per collector, bounded total | real (tested with fake Kubernetes, Prometheus and Loki) |
 | `internal/followup` | Alertmanager webhook notifications → incident → evidence (and the likely cause among the dependencies of a root whose own alert came first) → one follow-up message per incident to the chats and addresses that got the alert, after a short delay; sent incidents in the ConfigMap `kamerton-followup-state` (memory when it cannot be written); last evidence per incident in memory for the alerts API | real (tested with fakes) |
+| `internal/noise` | Noise statistics per rule from `ALERTS`/`ALERTS_FOR_STATE` (two range queries per system), the "noisy" definition, suggestions through the backtest (`generator.Tunables` names the description field of each rule kind), "useful / noise" counters in the ConfigMap `kamerton-noise-state` (memory without a cluster), the Telegram buttons and their presses | real (tested with fake Prometheus, a fake Bot API and a fake Kubernetes client) |
 | `internal/clients/*` | Prometheus (official client), Alertmanager v2 | real |
 | `internal/stack` | Sets of programs: the built-in set from the flags (addresses can be overridden and reset), sets added in the UI with extra labels for PrometheusRule / AlertmanagerConfig; stored in the ConfigMap `kamerton-stacks` (cluster), `.kamerton-stacks.json` next to the descriptions (local) or memory. Identity checks of an address per program (health path + build info / status). Discovery through the Kubernetes API: Services in all namespaces recognised by labels, operator service names and typical ports, confirmed over HTTP (bounded concurrency, short timeouts); Prometheus Operator `Prometheus`/`Alertmanager` resources → selector labels and warnings when instances cannot be told apart | real (unit-tested with a fake Kubernetes client and fake HTTP servers; used on a k3s cluster with a second Prometheus) |
 | `internal/descstore` | Systems: SystemDescription resources (cluster) or files (local); list, create, save, update, delete | real (tested through the API in both modes) |
@@ -202,6 +203,8 @@ description without them is arranged automatically). Saving from the UI keeps
 | POST | `/api/v1/systems/{id}/backtest` | `{yaml, service, alert, operation, range}` (a rule of a draft) or `{expr, for, range}` |
 | GET | `/api/v1/systems/{id}/runbooks/{service}` | runbook of a service; `_system`: the alerts about the whole system (`service: {name: "_system", system: true}`) |
 | GET | `/api/v1/systems/{id}/alerts` | active alerts of the system (same shape as `/api/v1/alerts`) |
+| GET | `/api/v1/systems/{id}/noise` | `?window=1d\|3d\|7d` (default 7d): per rule fired, short, longest, last firing, verdicts, `noisy`, optional `suggestion` (see Noise) |
+| POST | `/api/v1/systems/{id}/noise/feedback` | `{alert, service, operation?, verdict: useful\|noise}` → `{recorded, alert, service, operation, feedback}` |
 | GET | `/api/v1/systems/{id}/telegram`, PUT `…/telegram/routing` | Telegram status / routing for this system |
 | GET | `/api/v1/stack` | health of the programs of one set (`?set=`, default the built-in one) |
 | GET | `/api/v1/stacks` | sets with programs (address, origin `bundled`/`own`/`none`), health and version, systems using each, warnings; discovery availability |
@@ -276,8 +279,10 @@ alerts themselves).
 ## Telegram chat discovery
 
 The Bot API has no "list my chats" call. The core long-polls `getUpdates`
-with `allowed_updates = [my_chat_member, message, channel_post]` (requested
-explicitly because Telegram remembers the last setting):
+with `allowed_updates = [my_chat_member, message, channel_post, callback_query]`
+(requested explicitly because Telegram remembers the last setting;
+`callback_query` carries the presses of the buttons under follow-ups, see
+Noise):
 
 - `my_chat_member`: the bot was added (member/administrator, restricted with
   `is_member`) or removed (left/kicked) → chat available or unavailable;
@@ -493,3 +498,117 @@ Workload reads need the ClusterRole rules pods/events and
 replicasets/statefulsets get/list (`incidents.followUp.workloadRead`).
 Without a cluster the follow-up is unavailable and `/api/v1/settings` says
 why.
+
+## Noise
+
+`GET /api/v1/systems/{id}/noise` (`internal/noise`) answers how noisy each
+rule of a system was over a window and how to make it quieter. Nothing is
+stored and nothing is applied: the UI writes a suggestion back through the
+normal description edit.
+
+```json
+{
+  "window": "7d", "available": true, "reason": "", "shortUnder": "5m", "longFrom": "10m",
+  "rules": [{
+    "alert": "KamertonErrorRateHigh", "service": "checkout", "operation": "",
+    "fired": 40, "short": 37, "longestSeconds": 720, "lastFiredAt": "2026-11-16T04:18:00Z",
+    "feedback": {"useful": 1, "noise": 5}, "noisy": true,
+    "suggestion": {"field": "threshold", "current": "0.05", "suggested": "0.075", "unit": "",
+                   "wouldFire": 3, "wouldMiss": 0, "wouldShort": 1,
+                   "path": "errorRate.threshold", "format": "share"}
+  }]
+}
+```
+
+**History.** Two range queries over the window with a 1m step, whatever
+the number of rules: `max_over_time(ALERTS{kamerton_system, kamerton_managed,
+alertstate="firing"}[1m])` and the same over `ALERTS_FOR_STATE`, whose value
+is the time the alert became active. `max_over_time` over one step sees a
+firing shorter than the step. Samples of a series form one firing while
+consecutive; across a gap they stay one firing when the activation time is
+the same (Prometheus restored the alert after a restart), and a new
+activation time starts a new firing even without a gap. Without
+`ALERTS_FOR_STATE`, a gap ends the firing, as in the backtest. A sample at
+t means the alert fired within (t-1m, t], so durations are measured to the
+minute. A firing already on when the window began, or still on at its end,
+counts as fired but never as short.
+
+**Rule identity** is the one the UI uses for rule cards and rule states:
+`alert`, `service` and `operation`. The aggregated per-operation rules put
+each series' operation into the label; their firings are counted under
+`operation: ""`, the card they belong to. Rules that never fired are left
+out unless they have verdicts. `available: false` with a plain `reason`
+when the set has no Prometheus or it does not answer.
+
+**Definitions** (constants in `internal/noise/noise.go`): short is under
+5 minutes (a notification arrives within about a minute, so someone who
+opens it finds the problem gone); long is 10 minutes or more. Noisy: at least
+5 firings in the window with more than half short, or at least 2 "noise"
+verdicts outnumbering "useful"; at least 2 "useful" outnumbering "noise"
+makes a rule not noisy whatever its history.
+
+**Suggestions** are computed for at most 5 noisy rules (most firings
+first) that have short firings and a field to change
+(`generator.Tunables`). The backtest of the rule as it is must find at
+least half of the real firings (else its metrics are gone or renamed and
+any change would look perfect). Candidates, smallest step first, a longer
+`for` before a threshold at the same step: `for` of 1m, 2m, 3m, 5m, 10m
+above the current one (at most four); a threshold 1.25, 1.5, 2 and 3 times
+the current one, rounded to two significant digits (divided for custom
+"<" and "<=" conditions; a share stays below 1). Each candidate is applied
+to a copy of the description and generated, so the backtest runs exactly
+the rule it would produce; a longer `for` reuses the query of the rule as
+it is. The first candidate that fires less, leaves at most 20% of the short
+firings and overlaps every real firing of 10 minutes or more (same series,
+by the labels of the expression's result) is the suggestion. At most 1 + 4
+range queries per rule, three rules at a time, within the request's 60 s.
+
+| Rule kind (alert) | `threshold` field | unit, form | `for` field |
+|---|---|---|---|
+| `KamertonErrorRateHigh`, `KamertonOperationErrorRateHigh` (aggregated) | `errorRate.threshold` | share 0..1 | `errorRate.for` |
+| `KamertonOperationErrorRateHigh` (one operation) | `operations[<op>].errorRate.threshold` | share 0..1 | `operations[<op>].errorRate.for` |
+| `KamertonLatencyHigh` | `latency.thresholdMs` | ms | `latency.for` |
+| `KamertonOperationLatencyHigh` (aggregated) | `latency.thresholdMs` | ms | none (the library caps it at 30s) |
+| `KamertonOperationLatencyHigh` (one operation) | `operations[<op>].latency.thresholdMs` | ms | `operations[<op>].latency.for` |
+| `KamertonLatencyAboveNormal` | `latency.aboveNormalFactor` | × | none (capped at 1m) |
+| `KamertonMemoryHigh` | `saturation.memory` | Kubernetes quantity (`768Mi`) | `saturation.for` |
+| `KamertonMemoryNearLimit` | `saturation.memoryLimitShare` | share 0..1 | `saturation.for` |
+| `KamertonCPUHigh` | `saturation.cpuCores` | cores | `saturation.for` |
+| `KamertonCPUNearLimit` | `saturation.cpuLimitShare` | share 0..1 | `saturation.for` |
+| `KamertonCPUAboveNormal` | `saturation.cpuAboveNormalFactor` | × | `saturation.for` |
+| `KamertonPodRestarting` | `saturation.maxRestartsPerHour` | integer, per hour | none |
+| `KamertonQueueLagHigh` | `queue.maxLag` | messages | `queue.for` |
+| `KamertonRequestsStopped` | none (lower is quieter) | | `trafficDrop.for` |
+| `KamertonNoReadyPods` | none | | `noReadyPods.for` |
+| `KamertonCustom…` (condition) | `customRules[<name>].condition.threshold` | the rule's `unit` | `customRules[<name>].for` |
+| `KamertonCustom…` (expression) | none | | `customRules[<name>].for` |
+
+Paths are relative to the service; a value inherited from `defaults` is
+written to the service. `for` values are Prometheus durations with an empty
+unit. SLO burn-rate, "no data", out-of-memory and stopped-consumer rules get
+no suggestion.
+
+**Verdicts.** `POST /api/v1/systems/{id}/noise/feedback` and the Telegram
+buttons add to counters per system and rule in the ConfigMap
+`kamerton-noise-state` (key `state.json`, optimistic concurrency like the
+follow-up state; memory without a cluster). Counters only: no user IDs,
+names or chats. At most 1000 rules (the least recently changed go first),
+each counter at most 100000.
+
+**Buttons.** The follow-up (and only it: the alert itself comes from
+Alertmanager) carries an inline keyboard "Useful" / "Noise" («По делу» /
+«Шум» for `language: ru`). Before sending, the follow-up stores the rules
+of the incident's root alerts (at most 5) under a random 16-character
+reference in the same ConfigMap (at most 500 messages, 7 days). Callback
+data is `kn:<verdict><before>:<ref>`, 22 bytes (Telegram allows 64):
+verdict `u` or `n`, before the verdict this chat gave earlier for the
+message (`-` for none). The polling loop of the leader stores the update
+offset first, then handles each press: it checks that the chat is a
+receiver of the system through Kamerton's bot, adds the verdict (and takes
+back the earlier one), answers the callback (`answerCallbackQuery`, which
+stops the client's spinner and shows a short confirmation) and replaces
+the keyboard (`editMessageReplyMarkup`) with the chosen button checked
+("✓ Noise"); its buttons now carry `before`, so a repeated press changes
+nothing and the other button moves the verdict. Malformed data, an unknown
+or expired reference and a press from another chat are answered and
+change nothing. Nothing in the callback data is secret.

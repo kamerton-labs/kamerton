@@ -1111,10 +1111,14 @@ export interface AlertStateSample {
   severity?: string
 }
 
+/** Whether a series of the core (alert state, noise counters) belongs to the card: alert name, service and operation label. */
+export const ruleMatches = (rule: RuleItem, x: { alert?: string; service?: string; operation?: string }): boolean =>
+  rule.alerts.includes(x.alert ?? '') && (x.service ?? '') === rule.service && (x.operation ?? '') === rule.alertOperation
+
 export function ruleState(rule: RuleItem, samples: AlertStateSample[] | undefined): RuleState {
   if (!samples) return 'unknown'
   if (!rule.enabled) return 'ok'
-  const mine = samples.filter((x) => rule.alerts.includes(x.alert) && x.service === rule.service && (x.operation ?? '') === rule.alertOperation)
+  const mine = samples.filter((x) => ruleMatches(rule, x))
   if (mine.some((x) => x.state === 'firing' && x.severity === 'warning')) return mine.some((x) => x.state === 'firing' && x.severity === 'critical') ? 'firing' : 'warning'
   if (mine.some((x) => x.state === 'firing')) return 'firing'
   if (mine.some((x) => x.state === 'pending')) return 'pending'

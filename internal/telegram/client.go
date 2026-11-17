@@ -132,12 +132,33 @@ type Update struct {
 	MyChatMember      *ChatMemberUpdated `json:"my_chat_member,omitempty"`
 	EditedMessage     *Message           `json:"edited_message,omitempty"`
 	EditedChannelPost *Message           `json:"edited_channel_post,omitempty"`
+	CallbackQuery     *CallbackQuery     `json:"callback_query,omitempty"`
 }
+
+// CallbackQuery is a press of an inline button. From is not decoded: Kamerton
+// keeps nothing about who pressed.
+type CallbackQuery struct {
+	ID string `json:"id"`
+	// Message is nil for buttons of inline-mode messages, which Kamerton never sends.
+	Message *Message `json:"message,omitempty"`
+	Data    string   `json:"data,omitempty"`
+}
+
+// MaxCallbackData is the Bot API limit on callback_data, in bytes.
+const MaxCallbackData = 64
+
+type InlineButton struct {
+	Text         string `json:"text"`
+	CallbackData string `json:"callback_data"`
+}
+
+// Keyboard is the rows of an inline keyboard.
+type Keyboard [][]InlineButton
 
 // AllowedUpdates are requested explicitly because getUpdates remembers the
 // last allowed_updates of the bot. message and channel_post carry migrations,
-// title changes and chats in which someone talks to the bot.
-var AllowedUpdates = []string{"my_chat_member", "message", "channel_post"}
+// title changes and chats; callback_query the presses of follow-up buttons.
+var AllowedUpdates = []string{"my_chat_member", "message", "channel_post", "callback_query"}
 
 type Client struct {
 	// BaseURL defaults to DefaultAPIURL. Tests point it at a fake server.
@@ -244,9 +265,33 @@ func (c *Client) GetChatMember(ctx context.Context, token string, chatID, userID
 }
 
 func (c *Client) SendMessage(ctx context.Context, token string, chatID int64, html string) error {
-	return c.call(ctx, token, "sendMessage", map[string]any{
+	return c.SendMessageWithKeyboard(ctx, token, chatID, html, nil)
+}
+
+func (c *Client) SendMessageWithKeyboard(ctx context.Context, token string, chatID int64, html string, kb Keyboard) error {
+	params := map[string]any{
 		"chat_id": chatID, "text": html, "parse_mode": "HTML",
 		"link_preview_options": map[string]any{"is_disabled": true},
+	}
+	if len(kb) > 0 {
+		params["reply_markup"] = map[string]any{"inline_keyboard": kb}
+	}
+	return c.call(ctx, token, "sendMessage", params, nil)
+}
+
+// AnswerCallbackQuery stops the spinner on the pressed button; text, when
+// set, is shown to the person for a few seconds (at most 200 characters).
+func (c *Client) AnswerCallbackQuery(ctx context.Context, token, id, text string) error {
+	params := map[string]any{"callback_query_id": id}
+	if text != "" {
+		params["text"] = text
+	}
+	return c.call(ctx, token, "answerCallbackQuery", params, nil)
+}
+
+func (c *Client) EditMessageKeyboard(ctx context.Context, token string, chatID, messageID int64, kb Keyboard) error {
+	return c.call(ctx, token, "editMessageReplyMarkup", map[string]any{
+		"chat_id": chatID, "message_id": messageID, "reply_markup": map[string]any{"inline_keyboard": kb},
 	}, nil)
 }
 
