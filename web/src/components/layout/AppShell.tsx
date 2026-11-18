@@ -83,9 +83,17 @@ function AlertCount() {
 
 /** Open requests waiting for a merge, or a mark when the repository needs attention. */
 function GitCount() {
-  const git = useSystems().data?.git
+  const data = useSystems().data
+  const git = data?.git
   if (!git) return null
   if (git.error || gitProblems(git) > 0) return <span className="ml-auto rounded-full bg-firing/15 px-1.5 text-xs font-medium text-firing">!</span>
+  const unpushed = data?.gitChanges?.length ?? 0
+  if (unpushed > 0)
+    return (
+      <span className="ml-auto rounded-full bg-warn/15 px-1.5 text-xs font-medium tabular-nums text-warn" data-testid="git-unpushed-count" title="Not pushed">
+        {unpushed}
+      </span>
+    )
   const n = git.requests?.length ?? 0
   if (!n) return null
   return (

@@ -182,6 +182,8 @@ func serve(args []string) error {
 				Token: secretValue(uncached, ns, cfg.GitSecretName, "token"),
 				Write: gitsync.ParseWrite(cfg.GitWrite), Provider: cfg.GitProvider, APIURL: cfg.GitAPIURL,
 				CommitStatus: cfg.GitCommitStatus, GeneratedPath: cfg.GitGeneratedPath, Generate: generateForGit,
+				// Changes saved in the UI wait here for a push and survive a restart.
+				Pending: &gitsync.ConfigMapPending{Client: uncached, Namespace: ns, Name: "kamerton-git-changes"},
 				Logger: log.With("component", "git"),
 			}
 			gitWriter = opts.Git

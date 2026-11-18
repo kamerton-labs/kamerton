@@ -65,6 +65,8 @@ export interface GitProposal {
 }
 
 export interface SaveDescriptionResult {
+  /** 202: the change of a system kept in git is saved and waits for a push. */
+  staged?: boolean
   saved?: boolean
   source?: string
   mode?: string
@@ -138,6 +140,59 @@ export interface GitRequest {
   branch: string
 }
 
+export type GitChangeKind = 'change' | 'new' | 'delete' | 'move'
+
+/** A change saved in the UI and not pushed, with what it does to the rules. */
+export interface GitChange {
+  system: string
+  kind: GitChangeKind
+  path?: string
+  savedAt: string
+  author?: string
+  diff?: GitPreview['diff']
+  error?: string
+}
+
+export interface GitCommit {
+  hash: string
+  title: string
+  author: string
+  when: string
+  url?: string
+  systems?: string[]
+  applied?: boolean
+}
+
+export const useGitChanges = (enabled: boolean) =>
+  useQuery({ queryKey: ['git', 'changes'], queryFn: () => request<{ changes: GitChange[] }>('/git/changes'), enabled })
+
+export const useGitCommits = (enabled: boolean) =>
+  useQuery({ queryKey: ['git', 'commits'], queryFn: () => request<{ commits: GitCommit[] }>('/git/commits'), enabled, staleTime: 30_000 })
+
+export const useGitPush = () => {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (v: { message: string; systems?: string[] }) => postJSON<{ proposal: GitProposal }>('/git/push', v),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['git'] })
+      void qc.invalidateQueries({ queryKey: ['systems'] })
+      void qc.invalidateQueries({ queryKey: ['system'] })
+    },
+  })
+}
+
+export const useGitDiscard = () => {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (system: string) => request<{ discarded: boolean }>(`/git/changes/${encodeURIComponent(system)}`, { method: 'DELETE' }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['git'] })
+      void qc.invalidateQueries({ queryKey: ['systems'] })
+      void qc.invalidateQueries({ queryKey: ['system'] })
+    },
+  })
+}
+
 /** What a description would change if written to the repository (POST /git/preview). */
 export interface GitPreview {
   system: string
@@ -177,6 +232,8 @@ export const useGitSync = () => {
 export interface SystemsResponse {
   mode: 'cluster' | 'file' | 'none'
   writable: boolean
+  /** Changes saved in the UI and not pushed yet. */
+  gitChanges?: { system: string; kind: GitChangeKind }[]
   /** Present when system descriptions are read from a git repository. */
   git?: GitStatus
   systems: SystemSummary[]
@@ -198,6 +255,8 @@ export interface SystemResponse {
   gitWrite?: 'pullRequest' | 'commit'
   /** The file on the hosting service, when it is known. */
   gitFileURL?: string
+  /** The kind of this system's saved, not pushed change; the yaml above is then that saved version. */
+  gitSaved?: GitChangeKind
   valid: boolean
   errors: Issue[]
   warnings: Issue[]
@@ -896,16 +955,22 @@ export const useCreateSystem = () => {
 }
 
 /** Puts a system made by hand under the git repository; it keeps working until the merge. */
-export const useMoveToGit = () =>
-  useMutation({
-    mutationFn: (v: { id: string } & GitNote) => request<{ proposed: boolean; proposal: GitProposal }>(`${sys(v.id)}/git`, { method: 'POST', headers: noteHeaders(v) }),
+export const useMoveToGit = () => {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) => request<{ staged: boolean }>(`${sys(id)}/git`, { method: 'POST' }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['git'] })
+      void qc.invalidateQueries({ queryKey: ['systems'] })
+    },
   })
+}
 
 export const useDeleteSystem = () => {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (v: string | ({ id: string } & GitNote)) =>
-      request<{ deleted?: boolean; proposed?: boolean; proposal?: GitProposal }>(sys(typeof v === 'string' ? v : v.id), {
+      request<{ deleted?: boolean; staged?: boolean }>(sys(typeof v === 'string' ? v : v.id), {
         method: 'DELETE',
         headers: noteHeaders(typeof v === 'string' ? undefined : v),
       }),

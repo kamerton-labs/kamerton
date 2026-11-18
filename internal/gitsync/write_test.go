@@ -188,12 +188,20 @@ func TestSaveFromUIBecomesAPullRequest(t *testing.T) {
 	}
 
 	changed := "# our shop\n" + strings.ReplaceAll(shop, "name: api", "name: gateway")
-	_, _, err := store.Save(context.Background(), "shop", []byte(changed))
-	var proposed *descstore.ProposedError
-	if !errors.As(err, &proposed) {
-		t.Fatalf("Save = %v, want a proposal", err)
+	// Saving keeps the change; nothing is pushed until someone says so.
+	if _, _, err := store.Save(context.Background(), "shop", []byte(changed)); !errors.Is(err, descstore.ErrStaged) {
+		t.Fatalf("Save = %v, want ErrStaged", err)
 	}
-	p := proposed.Proposal
+	if out := h.git(h.bare, "branch", "--list", "kamerton/*"); out != "" {
+		t.Fatalf("a save must not push: %s", out)
+	}
+	if saved, ok := s.Saved(context.Background(), "shop"); !ok || saved.Kind != KindChange || string(saved.Content) != changed {
+		t.Fatalf("saved change: %+v %v", saved, ok)
+	}
+	p := *push(t, s, "")
+	if list, _ := s.Changes(context.Background()); len(list) != 0 {
+		t.Errorf("a push must clear the saved changes: %+v", list)
+	}
 	if p.Direct || !strings.HasPrefix(p.Branch, "kamerton/shop-") || p.URL != "https://example.com/obs/pull/7" {
 		t.Fatalf("proposal = %+v", p)
 	}
@@ -238,10 +246,11 @@ func TestSaveFromUICommitsStraightToTheBranch(t *testing.T) {
 	store.Git = s
 	s.Sync(context.Background())
 
-	_, _, err := store.Save(context.Background(), "shop", []byte(strings.ReplaceAll(shop, "name: api", "name: gateway")))
-	var proposed *descstore.ProposedError
-	if !errors.As(err, &proposed) || !proposed.Proposal.Direct || proposed.Proposal.Branch != "main" {
+	if _, _, err := store.Save(context.Background(), "shop", []byte(strings.ReplaceAll(shop, "name: api", "name: gateway"))); !errors.Is(err, descstore.ErrStaged) {
 		t.Fatalf("Save = %v", err)
+	}
+	if p := push(t, s, ""); !p.Direct || p.Branch != "main" {
+		t.Fatalf("push = %+v", p)
 	}
 	if got := h.git(h.bare, "show", "main:systems/shop.yaml"); !strings.Contains(got, "name: gateway") {
 		t.Errorf("main:\n%s", got)
@@ -252,10 +261,10 @@ func TestSaveFromUICommitsStraightToTheBranch(t *testing.T) {
 	}
 
 	// Deleting the system removes its file, and the system goes with it.
-	err = store.Delete(context.Background(), "shop")
-	if !errors.As(err, &proposed) {
+	if err := store.Delete(context.Background(), "shop"); !errors.Is(err, descstore.ErrStaged) {
 		t.Fatalf("Delete = %v", err)
 	}
+	push(t, s, "")
 	if out := h.git(h.bare, "ls-tree", "-r", "--name-only", "main"); strings.Contains(out, "shop.yaml") {
 		t.Errorf("the file is still there: %s", out)
 	}
@@ -273,10 +282,20 @@ func TestNewSystemBecomesANewFile(t *testing.T) {
 	s.Sync(context.Background())
 
 	billing := strings.ReplaceAll(shop, "name: shop", "name: billing")
-	_, _, err := store.Create(context.Background(), []byte(billing))
-	var proposed *descstore.ProposedError
-	if !errors.As(err, &proposed) || !proposed.Proposal.Direct {
-		t.Fatalf("Create = %v, want a proposal", err)
+	if _, _, err := store.Create(context.Background(), []byte(billing)); !errors.Is(err, descstore.ErrStaged) {
+		t.Fatalf("Create = %v, want ErrStaged", err)
+	}
+	// Two saved changes go out together, in one commit with one message.
+	if _, _, err := store.Save(context.Background(), "shop", []byte(strings.ReplaceAll(shop, "name: api", "name: gateway"))); !errors.Is(err, descstore.ErrStaged) {
+		t.Fatalf("Save = %v", err)
+	}
+	before := h.git(h.bare, "rev-list", "--count", "main")
+	push(t, s, "Add system billing")
+	if after := h.git(h.bare, "rev-list", "--count", "main"); after == before || h.git(h.bare, "rev-list", "--count", "main") != "2" {
+		t.Errorf("two changes must be one commit: %s -> %s", before, after)
+	}
+	if got := h.git(h.bare, "show", "main:systems/shop.yaml"); !strings.Contains(got, "name: gateway") {
+		t.Errorf("the second change is not in the commit:\n%s", got)
 	}
 	if got := h.git(h.bare, "show", "main:systems/billing.yaml"); got != strings.TrimSpace(billing) {
 		t.Errorf("new file:\n%s", got)
@@ -306,9 +325,15 @@ func TestMoveToGitTakesASystemOverInPlace(t *testing.T) {
 	store.Git = s
 	s.Sync(context.Background())
 
-	p, err := store.MoveToGit(context.Background(), "legacy")
-	if err != nil || p.Direct || !strings.HasPrefix(p.Branch, "kamerton/legacy-") {
-		t.Fatalf("MoveToGit = %+v, %v", p, err)
+	if err := store.MoveToGit(context.Background(), "legacy"); err != nil {
+		t.Fatalf("MoveToGit = %v", err)
+	}
+	if saved, ok := s.Saved(context.Background(), "legacy"); !ok || saved.Kind != KindMove {
+		t.Fatalf("saved: %+v %v", saved, ok)
+	}
+	p := push(t, s, "")
+	if p.Direct || !strings.HasPrefix(p.Branch, "kamerton/legacy-") {
+		t.Fatalf("push = %+v", p)
 	}
 	if got := h.git(h.bare, "show", p.Branch+":systems/legacy.yaml"); !strings.Contains(got, "made-by-hand") || strings.Contains(got, "git-adopt") {
 		t.Errorf("file on the branch:\n%s", got)
@@ -331,7 +356,7 @@ func TestMoveToGitTakesASystemOverInPlace(t *testing.T) {
 	if sd.Spec.Services[0].Name != "made-by-hand" {
 		t.Errorf("the description changed on the way: %+v", sd.Spec.Services)
 	}
-	if _, err := store.MoveToGit(context.Background(), "legacy"); err == nil {
+	if err := store.MoveToGit(context.Background(), "legacy"); err == nil {
 		t.Error("moving a system that is already in git must be refused")
 	}
 }
@@ -355,10 +380,11 @@ func TestStartingFromAnEmptyRepository(t *testing.T) {
 
 	// The first system made in the UI starts the branch, even in pull-request mode: there is
 	// nothing to open a request into yet.
-	_, _, err := store.Create(context.Background(), []byte(shop))
-	var proposed *descstore.ProposedError
-	if !errors.As(err, &proposed) || !proposed.Proposal.Direct || proposed.Proposal.Branch != "main" {
-		t.Fatalf("Create = %v, want a first commit on main", err)
+	if _, _, err := store.Create(context.Background(), []byte(shop)); !errors.Is(err, descstore.ErrStaged) {
+		t.Fatalf("Create = %v, want ErrStaged", err)
+	}
+	if p := push(t, s, ""); !p.Direct || p.Branch != "main" {
+		t.Fatalf("push = %+v, want a first commit on main", p)
 	}
 	if got := h.git(h.bare, "show", "main:systems/shop.yaml"); got != strings.TrimSpace(shop) {
 		t.Errorf("first file:\n%s", got)
@@ -411,9 +437,10 @@ func TestProjectFileSetsTheLayout(t *testing.T) {
 	// A new system goes where the project file says, and no generated files are written: the
 	// project file turned them off, whatever the installation's settings say.
 	warehouse := strings.ReplaceAll(shop, "name: shop", "name: warehouse")
-	if _, _, err := store.Create(context.Background(), []byte(warehouse)); err == nil {
-		t.Fatal("Create must answer with a proposal")
+	if _, _, err := store.Create(context.Background(), []byte(warehouse)); !errors.Is(err, descstore.ErrStaged) {
+		t.Fatalf("Create = %v", err)
 	}
+	push(t, s, "")
 	tree := h.git(h.bare, "ls-tree", "-r", "--name-only", "main")
 	if !strings.Contains(tree, "obs/descriptions/warehouse.yaml") || strings.Contains(tree, "from-settings") || strings.Contains(tree, "rules.yaml") {
 		t.Errorf("tree after a new system:\n%s", tree)
@@ -438,9 +465,10 @@ func TestFolderThatIsNotThereYet(t *testing.T) {
 	if st := s.Sync(context.Background()); st.Error != "" || len(st.Files) != 0 {
 		t.Fatalf("a folder yet to be made is not an error: %+v", st)
 	}
-	if _, _, err := store.Create(context.Background(), []byte(shop)); err == nil {
-		t.Fatal("Create must answer with a proposal")
+	if _, _, err := store.Create(context.Background(), []byte(shop)); !errors.Is(err, descstore.ErrStaged) {
+		t.Fatalf("Create = %v", err)
 	}
+	push(t, s, "")
 	s.Sync(context.Background())
 	if get(t, c, "shop") == nil {
 		t.Fatal("the first system did not come back")
@@ -453,6 +481,68 @@ func TestFolderThatIsNotThereYet(t *testing.T) {
 	s.mu.Unlock()
 	if st := s.Sync(context.Background()); !strings.Contains(st.Error, "not found") || get(t, c, "shop") == nil {
 		t.Fatalf("a typo after systems exist: %+v", st)
+	}
+}
+
+func push(t *testing.T, s *Service, message string) *descstore.GitProposal {
+	t.Helper()
+	p, err := s.Push(context.Background(), nil, message, "")
+	if err != nil {
+		t.Fatalf("Push: %v", err)
+	}
+	return p
+}
+
+func TestSavedChangesCanBeDiscardedAndUndone(t *testing.T) {
+	h := newHosted(t, "tok", map[string]string{"systems/shop.yaml": shop})
+	store, _ := cluster(t)
+	s := &Service{URL: h.url(), Path: "systems", Target: store, Token: token("tok"), Write: WriteCommit}
+	store.Git = s
+	s.Sync(context.Background())
+	ctx := context.Background()
+
+	changed := strings.ReplaceAll(shop, "name: api", "name: gateway")
+	_, _, _ = store.Save(ctx, "shop", []byte(changed))
+	// Saving the repository's own content again leaves nothing to push.
+	_, _, _ = store.Save(ctx, "shop", []byte(shop))
+	if list, _ := s.Changes(ctx); len(list) != 0 {
+		t.Fatalf("back to the repository's content: %+v", list)
+	}
+	_, _, _ = store.Save(ctx, "shop", []byte(changed))
+	if err := s.Discard(ctx, "shop"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Push(ctx, nil, "", ""); err == nil {
+		t.Error("nothing is left to push after a discard")
+	}
+	// A new system that was never pushed is forgotten when deleted.
+	billing := strings.ReplaceAll(shop, "name: shop", "name: billing")
+	_, _, _ = store.Create(ctx, []byte(billing))
+	_ = s.Stage(ctx, descstore.GitChange{System: "billing"})
+	if list, _ := s.Changes(ctx); len(list) != 0 {
+		t.Errorf("a deleted unpushed system: %+v", list)
+	}
+}
+
+func TestCommitsListsTheBranch(t *testing.T) {
+	h := newHosted(t, "tok", map[string]string{"systems/shop.yaml": shop})
+	store, _ := cluster(t)
+	s := &Service{URL: h.url(), Path: "systems", Target: store, Token: token("tok"), Write: WriteCommit}
+	store.Git = s
+	s.Sync(context.Background())
+	_, _, _ = store.Save(context.Background(), "shop", []byte(strings.ReplaceAll(shop, "name: api", "name: gateway")))
+	push(t, s, "shop: rename the service")
+	st := s.Sync(context.Background())
+
+	list, err := s.Commits(context.Background(), 10)
+	if err != nil || len(list) != 2 {
+		t.Fatalf("commits: %+v, %v", list, err)
+	}
+	if c := list[0]; c.Title != "shop: rename the service" || c.Author != "Kamerton" || !c.Applied || c.Hash != st.Commit || len(c.Systems) != 1 || c.Systems[0] != "shop" {
+		t.Errorf("newest commit: %+v", c)
+	}
+	if list[1].Title != "first" || list[1].Applied {
+		t.Errorf("oldest commit: %+v", list[1])
 	}
 }
 

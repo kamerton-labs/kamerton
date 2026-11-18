@@ -2,13 +2,15 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 import { Link } from 'react-router'
-import { ExternalLink, GitPullRequest, Loader2, RefreshCw } from 'lucide-react'
+import { useState } from 'react'
+import { ArrowUp, ExternalLink, GitPullRequest, Loader2, RefreshCw } from 'lucide-react'
 import { Page, StateDot } from '@/components/common'
+import GitCommitDialog, { ChangeSummary } from '@/components/GitCommitDialog'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useT } from '@/i18n'
-import { useGitSync, useSystems, type GitStatus } from '@/lib/api'
+import { useGitChanges, useGitCommits, useGitDiscard, useGitPush, useGitSync, useSystems, type GitProposal, type GitStatus } from '@/lib/api'
 import { timeAgo } from '@/lib/format'
 import { gitProblems, projectName } from '@/lib/git'
 
@@ -62,6 +64,14 @@ function Connected({ git, ids }: { git: GitStatus; ids: Map<string, string> }) {
   const { t, tn } = useT()
   const sync = useGitSync()
   const problems = gitProblems(git)
+  const changes = useGitChanges(true)
+  const commits = useGitCommits(!git.empty)
+  const push = useGitPush()
+  const discard = useGitDiscard()
+  const [committing, setCommitting] = useState(false)
+  const [pushed, setPushed] = useState<GitProposal | null>(null)
+  const saved = changes.data?.changes ?? []
+  const target = t(git.write === 'pullRequest' && !git.empty ? 'gitc.where.propose' : 'gitc.where.commit', { branch: git.branch })
   return (
     <Page
       title={projectName(git)}
@@ -76,6 +86,44 @@ function Connected({ git, ids }: { git: GitStatus; ids: Map<string, string> }) {
           <AlertTitle>{t('gitp.errorTitle')}</AlertTitle>
           <AlertDescription>{t('git.error', { error: git.error })}</AlertDescription>
         </Alert>
+      )}
+
+      {pushed && (
+        <p className="text-sm" data-testid="git-pushed">
+          {pushed.direct ? (
+            t('system.gitPushed', { branch: pushed.branch })
+          ) : pushed.url ? (
+            <>
+              {t('system.gitProposed')}{' '}
+              <a className={ext} href={pushed.url} target="_blank" rel="noreferrer">
+                {pushed.url}
+              </a>
+            </>
+          ) : (
+            t('system.gitPushed', { branch: pushed.branch })
+          )}
+        </p>
+      )}
+
+      {saved.length > 0 && (
+        <section className="rounded-xl border bg-card p-4" data-testid="git-changes">
+          <div className="mb-2 flex items-center justify-between gap-3">
+            <h2 className="text-sm font-medium">{tn('gitp.changes', saved.length)}</h2>
+            <Button size="sm" onClick={() => setCommitting(true)} data-testid="git-push">
+              <ArrowUp /> Push
+            </Button>
+          </div>
+          <ul className="divide-y">
+            {saved.map((c) => (
+              <li key={c.system} className="flex items-start justify-between gap-3 py-2 text-sm">
+                <ChangeSummary c={c} />
+                <button type="button" className="shrink-0 text-xs text-muted-foreground underline underline-offset-2" onClick={() => discard.mutate(c.system)} disabled={discard.isPending}>
+                  {t('gitp.discard')}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </section>
       )}
 
       <div>
@@ -138,6 +186,30 @@ function Connected({ git, ids }: { git: GitStatus; ids: Map<string, string> }) {
       </Section>
       )}
 
+      {commits.data && commits.data.commits.length > 0 && (
+        <Section title="Commits" testid="git-commits">
+          <ul className="divide-y">
+            {commits.data.commits.map((c) => (
+              <li key={c.hash} className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 py-2 text-sm">
+                {c.url ? (
+                  <a className="font-mono text-xs underline underline-offset-2" href={c.url} target="_blank" rel="noreferrer">
+                    {c.hash.slice(0, 8)}
+                  </a>
+                ) : (
+                  <span className="font-mono text-xs">{c.hash.slice(0, 8)}</span>
+                )}
+                <span className="min-w-0 [overflow-wrap:anywhere]">{c.title}</span>
+                {c.systems && c.systems.length > 0 && <span className="text-xs text-muted-foreground">{c.systems.join(', ')}</span>}
+                {c.applied && <span className="rounded bg-ok/10 px-1.5 text-xs text-ok">{t('gitp.state.applied')}</span>}
+                <span className="ml-auto text-xs text-muted-foreground">
+                  {c.author} · {timeAgo(c.when)}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </Section>
+      )}
+
       <Section title={tn('gitp.files', git.files.length)} testid="git-files">
         {git.files.length === 0 ? (
           <p className="text-sm text-muted-foreground">{t('gitp.files.none')}</p>
@@ -168,6 +240,26 @@ function Connected({ git, ids }: { git: GitStatus; ids: Map<string, string> }) {
         )}
         {problems > 0 && <p className="mt-2 text-xs text-muted-foreground">{t('gitp.files.kept')}</p>}
       </Section>
+      {committing && (
+        <GitCommitDialog
+          changes={saved}
+          target={target}
+          pending={push.isPending}
+          error={push.error?.message}
+          onClose={() => setCommitting(false)}
+          onConfirm={(message) =>
+            push.mutate(
+              { message },
+              {
+                onSuccess: (res) => {
+                  setPushed(res.proposal)
+                  setCommitting(false)
+                },
+              },
+            )
+          }
+        />
+      )}
     </Page>
   )
 }

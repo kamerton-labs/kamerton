@@ -10,7 +10,7 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { useT } from '@/i18n'
-import { ApiError, useCreateSystem, useDiscovery, useSystems, type GitProposal } from '@/lib/api'
+import { ApiError, useCreateSystem, useDiscovery, useSystems } from '@/lib/api'
 import { NAME_RE } from '@/lib/model/types'
 
 export default function CreateSystemDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v: boolean) => void }) {
@@ -32,8 +32,6 @@ function Body({ onDone }: { onDone: () => void }) {
   const [picked, setPicked] = useState<string[]>([])
   // With writing to git on, a new system becomes a new file in the repository.
   const gitWrite = systems.data?.git?.write
-  const [proposal, setProposal] = useState<GitProposal | null>(null)
-  const [message, setMessage] = useState('')
   const taken = systems.data?.systems.some((s) => s.name === name)
   const nameError = name && !NAME_RE.test(name) ? t('create.nameFormat') : taken ? t('create.nameTaken') : undefined
   const inUse = (s: { described: boolean; inSystems?: string[] }) => (s.described || (s.inSystems?.length ?? 0) > 0 ? 1 : 0)
@@ -47,47 +45,19 @@ function Body({ onDone }: { onDone: () => void }) {
       metadata: { name, ...(about.trim() ? { annotations: { 'kamerton.dev/description': about.trim() } } : {}) },
       spec: { services },
     }
-    create.mutate(
-      { yaml: stringify(doc), message: gitWrite ? message.trim() || `Add system ${name}` : undefined },
-      {
+    create.mutate(stringify(doc), {
       onSuccess: (r) => {
-        if (r.proposed && r.proposal) {
-          // The system does not exist here yet: it arrives from the repository.
-          setProposal(r.proposal)
+        if (r.staged) {
+          // Saved, not pushed: the system is listed under Git until it is.
+          onDone()
+          navigate('/git')
           return
         }
         onDone()
         navigate(`/systems/${encodeURIComponent(r.id)}`)
       },
-      },
-    )
+    })
   }
-
-  if (proposal)
-    return (
-      <>
-        <DialogHeader>
-          <DialogTitle>{t('create.git.title', { name })}</DialogTitle>
-          <DialogDescription data-testid="create-proposal">
-            {proposal.direct ? (
-              t('create.git.committed', { branch: proposal.branch })
-            ) : proposal.url ? (
-              <>
-                {t('create.git.proposed')}{' '}
-                <a className="font-medium underline underline-offset-2" href={proposal.url} target="_blank" rel="noreferrer">
-                  {proposal.url}
-                </a>
-              </>
-            ) : (
-              t('create.git.pushed', { branch: proposal.branch })
-            )}
-          </DialogDescription>
-        </DialogHeader>
-        <DialogFooter>
-          <Button onClick={onDone}>{t('create.git.close')}</Button>
-        </DialogFooter>
-      </>
-    )
 
   return (
     <>
@@ -127,11 +97,6 @@ function Body({ onDone }: { onDone: () => void }) {
             </div>
           )}
         </Field>
-        {gitWrite && (
-          <Field label={t('create.git.message')} htmlFor="sys-msg" hint={t('create.optional')}>
-            <Input id="sys-msg" value={message} onChange={(e) => setMessage(e.target.value)} placeholder={`Add system ${name || 'shop'}`} maxLength={120} />
-          </Field>
-        )}
         {create.isError && (
           <p className="text-sm text-destructive">
             {t('create.error', { error: create.error instanceof ApiError && create.error.code === 'not_writable' ? t('create.notWritable') : create.error.message })}

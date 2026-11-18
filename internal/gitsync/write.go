@@ -53,11 +53,19 @@ func (s *Service) RepoKey() string { return s.repoKey() }
 // WriteEnabled implements descstore.GitWriter.
 func (s *Service) WriteEnabled() bool { return s.Write == WritePullRequest || s.Write == WriteCommit }
 
-// Propose implements descstore.GitWriter: one commit with the change of one system's file and,
-// when GeneratedPath is set, the files generated from it.
+// Propose implements descstore.GitWriter: one commit with one change.
 func (s *Service) Propose(ctx context.Context, c descstore.GitChange) (*descstore.GitProposal, error) {
+	return s.proposeAll(ctx, []descstore.GitChange{c}, c.Message, c.Author)
+}
+
+// proposeAll writes changes to the repository in one commit: the description files and, with
+// a folder for them, the files generated from each.
+func (s *Service) proposeAll(ctx context.Context, changes []descstore.GitChange, message, author string) (*descstore.GitProposal, error) {
 	if !s.WriteEnabled() {
 		return nil, descstore.ErrFromGit
+	}
+	if len(changes) == 0 {
+		return nil, errors.New("nothing to push")
 	}
 	ctx, cancel := context.WithTimeout(ctx, 90*time.Second)
 	defer cancel()
@@ -105,47 +113,57 @@ func (s *Service) Propose(ctx context.Context, c descstore.GitChange) (*descstor
 	if err != nil {
 		return nil, err
 	}
-	file := cleanPath(c.Path)
-	what := "Change"
-	if c.New {
-		what = "Add"
-		file = path.Join(lay.systems, safeRef(c.System)+".yaml")
-		if _, err := fs.Stat(file); err == nil {
-			return nil, fmt.Errorf("the repository already has %s; a system with this name may be waiting there with an error", file)
+	var titles []string
+	for _, c := range changes {
+		file := cleanPath(c.Path)
+		what := "Change"
+		if c.New {
+			what = "Add"
+			file = path.Join(lay.systems, safeRef(c.System)+".yaml")
+			if _, err := fs.Stat(file); err == nil {
+				return nil, fmt.Errorf("the repository already has %s; a system with this name may be waiting there with an error", file)
+			}
 		}
-	}
-	if file == "" {
-		return nil, errors.New("the system has no file path")
-	}
-	if c.Content == nil {
-		what = "Remove"
-		if _, err := wt.Remove(file); err != nil {
-			return nil, fmt.Errorf("remove %s: %w", file, err)
+		if file == "" {
+			return nil, fmt.Errorf("system %s has no file path", c.System)
 		}
-	} else {
-		if err := util.WriteFile(fs, file, c.Content, 0o644); err != nil {
-			return nil, fmt.Errorf("write %s: %w", file, err)
+		if c.Content == nil {
+			what = "Remove"
+			if _, err := wt.Remove(file); err != nil {
+				return nil, fmt.Errorf("remove %s: %w", file, err)
+			}
+		} else {
+			if err := util.WriteFile(fs, file, c.Content, 0o644); err != nil {
+				return nil, fmt.Errorf("write %s: %w", file, err)
+			}
+			if _, err := wt.Add(file); err != nil {
+				return nil, err
+			}
 		}
-		if _, err := wt.Add(file); err != nil {
+		if err := s.writeGenerated(fs, wt, c, lay.generated); err != nil {
 			return nil, err
 		}
-	}
-	if err := s.writeGenerated(fs, wt, c, lay.generated); err != nil {
-		return nil, err
+		titles = append(titles, fmt.Sprintf("%s system %s", what, c.System))
 	}
 	if st, err := wt.Status(); err != nil {
 		return nil, err
 	} else if st.IsClean() {
 		return nil, errors.New("nothing to change: the repository already has this content")
 	}
-	title := fmt.Sprintf("%s system %s", what, c.System)
+	title := titles[0]
+	if len(titles) > 1 {
+		title = fmt.Sprintf("Change %d systems", len(titles))
+	}
 	note := "Made in the Kamerton UI."
-	if c.Author != "" {
-		note = "Made in the Kamerton UI by " + oneLine(c.Author) + "."
+	if author != "" {
+		note = "Made in the Kamerton UI by " + oneLine(author) + "."
+	}
+	if len(titles) > 1 {
+		note = strings.Join(titles, "\n") + "\n\n" + note
 	}
 	// The first line of a person's message is the title; the rest goes into the body.
-	if first, rest, _ := strings.Cut(strings.TrimSpace(c.Message), "\n"); oneLine(first) != "" {
-		title = oneLine(first)
+	if head, rest, _ := strings.Cut(strings.TrimSpace(message), "\n"); oneLine(head) != "" {
+		title = oneLine(head)
 		if rest = strings.TrimSpace(rest); rest != "" {
 			note = rest + "\n\n" + note
 		}
@@ -158,13 +176,17 @@ func (s *Service) Propose(ctx context.Context, c descstore.GitChange) (*descstor
 	}
 	out := &descstore.GitProposal{Branch: s.branch(), Direct: s.Write == WriteCommit || first, Commit: hash.String()}
 	if !out.Direct {
-		out.Branch = branchPrefix + safeRef(c.System) + "-" + short(hash.String())
+		name := "changes"
+		if len(changes) == 1 {
+			name = safeRef(changes[0].System)
+		}
+		out.Branch = branchPrefix + name + "-" + short(hash.String())
 	}
 	spec := gitconfig.RefSpec(fmt.Sprintf("refs/heads/%s:refs/heads/%s", s.branch(), out.Branch))
 	if err := repo.PushContext(ctx, &git.PushOptions{RemoteName: "origin", Auth: auth, RefSpecs: []gitconfig.RefSpec{spec}}); err != nil {
 		return nil, s.gitErr("push", err)
 	}
-	s.log().Info("git: change written", "system", c.System, "file", file, "branch", out.Branch, "commit", short(out.Commit))
+	s.log().Info("git: pushed", "systems", len(changes), "branch", out.Branch, "commit", short(out.Commit))
 	if out.Direct {
 		// Do not wait for the next tick.
 		go s.Sync(context.WithoutCancel(ctx))

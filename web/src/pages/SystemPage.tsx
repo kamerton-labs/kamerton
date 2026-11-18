@@ -12,13 +12,12 @@ import { cn } from 'cn'
 import SystemCanvas from '@/components/canvas/SystemCanvas'
 import { StatePill } from '@/components/common'
 import { useConfirm } from '@/components/ConfirmDialog'
-import GitCommitDialog, { type GitAction } from '@/components/GitCommitDialog'
 import RulesView from '@/components/rules/RulesView'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Skeleton } from '@/components/ui/skeleton'
-import { ApiError, useAlerts, useDeleteSystem, useMoveToGit, useRuleStates, useSaveSystem, useStacks, useSystem, useSystems, useTelegram, useEmail, validateSystem, type GitProposal, type Issue, type SystemResponse } from '@/lib/api'
+import { ApiError, useAlerts, useDeleteSystem, useMoveToGit, useRuleStates, useSaveSystem, useStacks, useSystem, useSystems, useTelegram, useEmail, validateSystem, type Issue, type SystemResponse } from '@/lib/api'
 import { t as tCurrent, useT } from '@/i18n'
 import { EditorContext, useDebounced, type EditorState } from '@/lib/editor'
 import { systemStateText } from '@/lib/format'
@@ -154,47 +153,16 @@ function Editor({ data }: { data: SystemResponse }) {
     [id, draft, desc, readOnly, editFn, states.data, tg.data, em.data, issues],
   )
 
-  // A system kept in git is not saved to the cluster: the change goes to the repository.
-  const [proposal, setProposal] = useState<GitProposal | null>(null)
-  // Before a change goes to the repository a person sees where it goes and what it does.
-  const [gitAction, setGitAction] = useState<GitAction | null>(null)
-  const doSave = (message?: string) =>
-    save.mutate(
-      { yaml: draft.text, message },
-      {
-        onSuccess: (res) => {
-          setProposal(res.proposed && res.proposal ? res.proposal : null)
-          setDraft((d) => markSaved(d))
-          setGitAction(null)
-        },
+  // Saving a system kept in git keeps the change for a later push; nothing else moves.
+  const [staged, setStaged] = useState<boolean>(false)
+  const unpushed = staged || !!data.gitSaved || !!systems.data?.gitChanges?.some((c) => c.system === data.name)
+  const doSave = () =>
+    save.mutate(draft.text, {
+      onSuccess: (res) => {
+        setStaged(!!res.staged)
+        setDraft((d) => markSaved(d))
       },
-    )
-  const onGitConfirm = (message: string) => {
-    if (gitAction === 'save') doSave(message)
-    else if (gitAction === 'move')
-      move.mutate(
-        { id, message },
-        {
-          onSuccess: (res) => {
-            setProposal(res.proposal)
-            setGitAction(null)
-          },
-        },
-      )
-    else if (gitAction === 'delete')
-      del.mutate(
-        { id, message },
-        {
-          onSuccess: (res) => {
-            setGitAction(null)
-            if (res.proposed && res.proposal && !res.proposal.direct) setProposal(res.proposal)
-            else navigate('/', { replace: true })
-          },
-        },
-      )
-  }
-  const gitPending = save.isPending || move.isPending || del.isPending
-  const gitError = gitAction === 'save' ? save.error?.message : gitAction === 'move' ? move.error?.message : gitAction === 'delete' ? del.error?.message : undefined
+    })
   const openRequest = systems.data?.git?.requests?.find((r) => r.system === data.name)
   const saveError = save.error instanceof ApiError ? save.error : null
   // A set the description asks for that does not exist: the built-in set is used instead.
@@ -232,16 +200,15 @@ function Editor({ data }: { data: SystemResponse }) {
         </div>
         <div className="ml-auto flex items-center gap-2">
           <span className="hidden text-xs text-muted-foreground lg:inline">
-            {save.isPending ? t('system.saving') : dirty ? t('system.unsaved') : save.isSuccess && !proposal ? t('system.saved') : ''}
+            {save.isPending ? t('system.saving') : dirty ? t('system.unsaved') : save.isSuccess ? t('system.saved') : ''}
           </span>
           {dirty && (
             <Button variant="ghost" size="sm" onClick={() => setDraft(initDraft(draft.saved))}>
               {t('system.discard')}
             </Button>
           )}
-          <Button size="sm" onClick={() => (data.gitWrite ? setGitAction('save') : doSave())} disabled={!canSave} data-testid="save-button">
-            {save.isPending ? <Loader2 className="animate-spin" /> : !dirty ? <Check /> : null}{' '}
-            {!dirty ? t(proposal ? 'system.gitSent' : 'system.saved') : data.gitWrite === 'pullRequest' ? t('system.gitPropose') : data.gitWrite === 'commit' ? t('system.gitCommit') : t('system.save')}
+          <Button size="sm" onClick={doSave} disabled={!canSave} data-testid="save-button">
+            {save.isPending ? <Loader2 className="animate-spin" /> : !dirty ? <Check /> : null} {dirty ? t('system.save') : t('system.saved')}
           </Button>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
@@ -259,7 +226,7 @@ function Editor({ data }: { data: SystemResponse }) {
                 <DropdownMenuItem
                   data-testid="move-to-git"
                   disabled={dirty || move.isPending}
-                  onSelect={() => setGitAction('move')}
+                  onSelect={() => move.mutate(id, { onSuccess: () => setStaged(true) })}
                 >
                   <GitBranch /> {t('system.moveToGit')}
                 </DropdownMenuItem>
@@ -268,18 +235,12 @@ function Editor({ data }: { data: SystemResponse }) {
                 variant="destructive"
                 disabled={!data.writable}
                 onSelect={async () => {
-                  if (data.gitWrite) {
-                    setGitAction('delete')
-                    return
-                  }
                   const extra = data.mode === 'cluster' ? t('system.delete.cluster') : t('system.delete.file')
                   const ok = await confirm({ title: t('system.delete.title', { name: data.name }), description: `${t('system.delete.text')} ${extra}` })
                   if (ok)
                     del.mutate(id, {
-                      onSuccess: (res) => {
-                        if (res.proposed && res.proposal && !res.proposal.direct) setProposal(res.proposal)
-                        else navigate('/', { replace: true })
-                      },
+                      // A system from git is not deleted here: its removal waits for a push.
+                      onSuccess: (res) => navigate(res.staged ? '/git' : '/', { replace: true }),
                     })
                 }}
               >
@@ -290,7 +251,7 @@ function Editor({ data }: { data: SystemResponse }) {
         </div>
       </div>
 
-      {(syntaxError || issues.length > 0 || saveError || !data.writable || data.git || proposal || openRequest || del.isError || move.isError || missingStack) && (
+      {(syntaxError || issues.length > 0 || saveError || !data.writable || data.git || unpushed || openRequest || del.isError || move.isError || missingStack) && (
         <div className="space-y-2 border-b bg-muted/20 px-3 py-2 md:px-4">
           {syntaxError && (
             <p className="text-sm text-destructive">
@@ -312,23 +273,15 @@ function Editor({ data }: { data: SystemResponse }) {
             </div>
           )}
           {saveError && <p className="text-sm text-destructive">{t('system.saveError', { error: saveError.code === 'conflict' ? t('system.conflict') : saveError.message })}</p>}
-          {proposal && (
-            <p className="text-sm" data-testid="git-proposal">
-              {proposal.direct ? (
-                t('system.gitCommitted', { branch: proposal.branch })
-              ) : proposal.url ? (
-                <>
-                  {t('system.gitProposed')}{' '}
-                  <a className="font-medium underline underline-offset-2" href={proposal.url} target="_blank" rel="noreferrer">
-                    {proposal.url}
-                  </a>
-                </>
-              ) : (
-                t('system.gitPushed', { branch: proposal.branch })
-              )}
+          {unpushed && (
+            <p className="flex flex-wrap items-center gap-x-2 text-sm" data-testid="git-unpushed">
+              {t('system.gitUnpushed')}
+              <Link className="font-medium underline underline-offset-2" to="/git">
+                Push
+              </Link>
             </p>
           )}
-          {openRequest && !proposal && (
+          {openRequest && (
             <p className="text-sm" data-testid="git-open-request">
               {t('system.gitOpenRequest')}{' '}
               <a className="font-medium underline underline-offset-2" href={openRequest.url} target="_blank" rel="noreferrer">
@@ -395,20 +348,7 @@ function Editor({ data }: { data: SystemResponse }) {
           </Suspense>
         )}
       </div>
-      {gitAction && (
-        <GitCommitDialog
-          action={gitAction}
-          system={data.name}
-          yaml={gitAction === 'move' ? data.yaml : draft.text}
-          mode={data.gitWrite ?? systems.data?.git?.write ?? 'pullRequest'}
-          file={data.git?.path}
-          pending={gitPending}
-          error={gitError}
-          onConfirm={onGitConfirm}
-          onClose={() => setGitAction(null)}
-        />
-      )}
-      {confirmDialog}
+{confirmDialog}
     </div>
   )
 }

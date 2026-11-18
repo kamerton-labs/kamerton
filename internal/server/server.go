@@ -212,6 +212,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/v1/systems/{id}/git", s.moveSystemToGit)
 	mux.HandleFunc("POST /api/v1/git/sync", s.gitSync)
 	mux.HandleFunc("POST /api/v1/git/preview", s.gitPreview)
+	mux.HandleFunc("GET /api/v1/git/changes", s.gitChanges)
+	mux.HandleFunc("DELETE /api/v1/git/changes/{system}", s.gitDiscard)
+	mux.HandleFunc("POST /api/v1/git/push", s.gitPush)
+	mux.HandleFunc("GET /api/v1/git/commits", s.gitCommits)
 	mux.HandleFunc("DELETE /api/v1/systems/{id}", s.deleteSystem)
 	mux.HandleFunc("POST /api/v1/systems/{id}/validate", s.validateSystem)
 	mux.HandleFunc("POST /api/v1/systems/{id}/rules/preview", s.previewSystemRules)
@@ -739,6 +743,9 @@ func writeStoreErr(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusConflict, "conflict", err.Error())
 	case errors.Is(err, descstore.ErrExists):
 		writeError(w, http.StatusConflict, "exists", err.Error())
+	case errors.Is(err, descstore.ErrStaged):
+		// Accepted and kept: the change waits for a push; nothing in the repository or the cluster changed.
+		writeJSON(w, http.StatusAccepted, map[string]any{"staged": true})
 	case errors.As(err, &proposed):
 		// Accepted, not applied: the change is in the repository and waits for a merge or the next read.
 		writeJSON(w, http.StatusAccepted, map[string]any{"proposed": true, "message": proposed.Error(), "proposal": proposed.Proposal})

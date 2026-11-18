@@ -84,9 +84,11 @@ type Service struct {
 	// files generated from the description (<GeneratedPath>/<system>/), made by Generate.
 	GeneratedPath string
 	Generate      func(description []byte) (map[string][]byte, error)
-	Interval      time.Duration
-	Logger        *slog.Logger
-	Now           func() time.Time
+	// Pending keeps the changes saved in the UI until they are pushed; nil: in memory.
+	Pending  PendingStore
+	Interval time.Duration
+	Logger   *slog.Logger
+	Now      func() time.Time
 
 	mu     sync.Mutex
 	status Status
@@ -99,6 +101,9 @@ type Service struct {
 	requests []Request
 	// lay is the layout seen at the last read.
 	lay layout
+	// commits is the history read while the branch stood at commitsAt.
+	commits   []Commit
+	commitsAt string
 }
 
 // webBase is the repository's address for a browser; empty when the URL is not http(s).

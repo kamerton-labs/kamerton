@@ -21,6 +21,7 @@ import (
 	"github.com/kamerton-labs/kamerton/internal/description"
 	"github.com/kamerton-labs/kamerton/internal/descstore"
 	"github.com/kamerton-labs/kamerton/internal/generator"
+	"github.com/kamerton-labs/kamerton/internal/gitsync"
 	"github.com/kamerton-labs/kamerton/internal/rulediff"
 	"github.com/kamerton-labs/kamerton/internal/rules"
 	"github.com/kamerton-labs/kamerton/internal/stack"
@@ -134,7 +135,15 @@ func (s *Server) listSystems(w http.ResponseWriter, r *http.Request) {
 		"systems": out, "alertsConfigured": configured, "starter": starterDescription, "stacks": nsets,
 	}
 	if s.opts.Git != nil {
-		resp["git"] = s.opts.Git.Status()
+		st := s.opts.Git.Status()
+		resp["git"] = st
+		if list, err := s.opts.Git.Changes(ctx); err == nil {
+			saved := make([]map[string]string, 0, len(list))
+			for _, c := range list {
+				saved = append(saved, map[string]string{"system": c.System, "kind": c.Kind})
+			}
+			resp["gitChanges"] = saved
+		}
 	}
 	if aerr != nil {
 		resp["alertsError"] = aerr.Error()
@@ -283,6 +292,13 @@ func (s *Server) getSystem(w http.ResponseWriter, r *http.Request) {
 			if u := g.FileURL(from.Path); u != "" {
 				resp["gitFileURL"] = u
 			}
+			if c, ok := g.Saved(r.Context(), snap.Name()); ok {
+				// The saved, not pushed version is what the person goes on editing.
+				resp["gitSaved"] = c.Kind
+				if c.Content != nil {
+					resp["yaml"] = string(c.Content)
+				}
+			}
 		}
 	}
 	if snap.Invalid != nil {
@@ -401,11 +417,124 @@ func (s *Server) gitPreview(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
+// gitChange is a saved change with what it does to the rules.
+type gitChange struct {
+	System  string           `json:"system"`
+	Kind    string           `json:"kind"`
+	Path    string           `json:"path,omitempty"`
+	SavedAt time.Time        `json:"savedAt"`
+	Author  string           `json:"author,omitempty"`
+	Diff    *rulediff.Result `json:"diff,omitempty"`
+	Error   string           `json:"error,omitempty"`
+}
+
+// gitChanges lists the changes saved in the UI and not pushed, each with its effect on the rules.
+func (s *Server) gitChanges(w http.ResponseWriter, r *http.Request) {
+	g := s.opts.Git
+	if g == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"changes": []gitChange{}})
+		return
+	}
+	list, err := g.Changes(r.Context())
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "changes_unavailable", err.Error())
+		return
+	}
+	out := make([]gitChange, 0, len(list))
+	for _, c := range list {
+		one := gitChange{System: c.System, Kind: c.Kind, Path: c.Path, SavedAt: c.SavedAt, Author: c.Author}
+		if c.Kind != gitsync.KindDelete {
+			after := description.Validate(c.Content).Document
+			if after == nil {
+				one.Error = "the saved description has errors"
+			} else {
+				var before *v1alpha1.SystemDescription
+				if c.Kind == gitsync.KindChange {
+					if raw, ok := g.Raw(c.Path); ok {
+						before = description.Validate(raw).Document
+					}
+					if before == nil {
+						if stored := s.storedByName(r.Context(), after); stored != nil {
+							before = stored.SD
+						}
+					}
+				}
+				if d, err := rulediff.Compare(before, after); err == nil {
+					one.Diff = &d
+				} else {
+					one.Error = err.Error()
+				}
+			}
+		}
+		out = append(out, one)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"changes": out})
+}
+
+func (s *Server) gitDiscard(w http.ResponseWriter, r *http.Request) {
+	if s.opts.Git == nil {
+		writeError(w, http.StatusConflict, "git_off", "system descriptions are not read from git")
+		return
+	}
+	if err := s.opts.Git.Discard(r.Context(), r.PathValue("system")); err != nil {
+		writeError(w, http.StatusBadGateway, "discard_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"discarded": true})
+}
+
+// gitPush writes the saved changes to the repository in one commit.
+func (s *Server) gitPush(w http.ResponseWriter, r *http.Request) {
+	g := s.opts.Git
+	if g == nil || g.WriteMode() == "" {
+		writeError(w, http.StatusConflict, "git_off", "writing to git is off")
+		return
+	}
+	var in struct {
+		Message string   `json:"message"`
+		Systems []string `json:"systems"`
+	}
+	body, ok := readBody(w, r)
+	if !ok {
+		return
+	}
+	if len(body) > 0 {
+		if err := json.Unmarshal(body, &in); err != nil {
+			writeError(w, http.StatusBadRequest, "bad_request", "the request body is not JSON")
+			return
+		}
+	}
+	author := ""
+	if a := s.opts.Auth; a != nil {
+		author, _ = a.session(r)
+	}
+	p, err := g.Push(r.Context(), in.Systems, in.Message, author)
+	if err != nil {
+		writeError(w, http.StatusConflict, "push_failed", err.Error())
+		return
+	}
+	s.log.Info("git: pushed from the UI", "branch", p.Branch, "commit", p.Commit)
+	writeJSON(w, http.StatusOK, map[string]any{"proposal": p})
+}
+
+func (s *Server) gitCommits(w http.ResponseWriter, r *http.Request) {
+	if s.opts.Git == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"commits": []gitsync.Commit{}})
+		return
+	}
+	list, err := s.opts.Git.Commits(r.Context(), 30)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "commits_unavailable", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"commits": list})
+}
+
 // moveSystemToGit puts a system made by hand under the repository: its description becomes a
 // file there, and the file takes the system over once it is merged.
 func (s *Server) moveSystemToGit(w http.ResponseWriter, r *http.Request) {
 	mover, ok := s.opts.Descriptions.(interface {
-		MoveToGit(ctx context.Context, id string) (*descstore.GitProposal, error)
+		MoveToGit(ctx context.Context, id string) error
 	})
 	if !ok || s.opts.Git == nil || s.opts.Git.WriteMode() == "" {
 		writeError(w, http.StatusConflict, "git_off", "writing to git is off: set git.url and git.write")
@@ -413,7 +542,7 @@ func (s *Server) moveSystemToGit(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
 	defer cancel()
-	p, err := mover.MoveToGit(s.gitNote(ctx, r), r.PathValue("id"))
+	err := mover.MoveToGit(s.gitNote(ctx, r), r.PathValue("id"))
 	if errors.Is(err, descstore.ErrNoDescription) {
 		writeError(w, http.StatusNotFound, "not_found", "no such system")
 		return
@@ -422,8 +551,7 @@ func (s *Server) moveSystemToGit(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "move_failed", err.Error())
 		return
 	}
-	s.log.Info("system moved to git", "system", r.PathValue("id"), "branch", p.Branch)
-	writeJSON(w, http.StatusAccepted, map[string]any{"proposed": true, "proposal": p})
+	writeJSON(w, http.StatusAccepted, map[string]any{"staged": true})
 }
 
 func (s *Server) deleteSystem(w http.ResponseWriter, r *http.Request) {
