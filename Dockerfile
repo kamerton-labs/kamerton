@@ -23,7 +23,7 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 COPY --from=ui /src/web/dist ./web/dist
-ARG VERSION=0.2.2
+ARG VERSION=0.2.3
 ARG COMMIT=unknown
 ARG TARGETOS=linux
 ARG TARGETARCH

@@ -6,6 +6,8 @@ All notable changes to Kamerton are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-11-18
+
 ### Added
 
 - The consequences of an incident stay out of the channels after its cause
