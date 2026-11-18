@@ -104,6 +104,8 @@ type Service struct {
 	// commits is the history read while the branch stood at commitsAt.
 	commits   []Commit
 	commitsAt string
+	// history is the clone the commits were read from, kept to open one of them.
+	history *git.Repository
 }
 
 // webBase is the repository's address for a browser; empty when the URL is not http(s).

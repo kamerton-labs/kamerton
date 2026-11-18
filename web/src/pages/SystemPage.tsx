@@ -275,7 +275,7 @@ function Editor({ data }: { data: SystemResponse }) {
           {saveError && <p className="text-sm text-destructive">{t('system.saveError', { error: saveError.code === 'conflict' ? t('system.conflict') : saveError.message })}</p>}
           {unpushed && (
             <p className="flex flex-wrap items-center gap-x-2 text-sm" data-testid="git-unpushed">
-              {t('system.gitUnpushed')}
+              {t(data.draft ? 'system.gitDraft' : 'system.gitUnpushed')}
               <Link className="font-medium underline underline-offset-2" to="/project">
                 Push
               </Link>

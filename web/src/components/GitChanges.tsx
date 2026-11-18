@@ -3,7 +3,7 @@
 
 import { useState } from 'react'
 import { useT } from '@/i18n'
-import type { GitChange, RuleLine } from '@/lib/api'
+import type { DiffLine, GitChange, GitCommitFile, RuleLine } from '@/lib/api'
 
 const one = (c: GitChange) => (c.kind === 'delete' ? `Remove system ${c.system}` : c.kind === 'change' ? `Change system ${c.system}` : `Add system ${c.system}`)
 
@@ -12,14 +12,34 @@ const one = (c: GitChange) => (c.kind === 'delete' ? `Remove system ${c.system}`
 export const defaultMessage = (changes: GitChange[]) => (changes.length === 1 ? one(changes[0]) : `Change ${changes.length} systems`)
 
 /** One saved change: the system, and in words what happens to its rules. */
-export function ChangeSummary({ c }: { c: GitChange }) {
+/** The text of a change, line by line: removed lines red, added green. */
+export function TextDiff({ lines }: { lines: DiffLine[] }) {
+  return (
+    <pre className="mt-2 overflow-x-auto rounded-md border bg-muted/30 py-1 font-mono text-xs leading-5" data-testid="text-diff">
+      {lines.map((l, i) =>
+        l.op === '@' ? (
+          <div key={i} className="px-2 text-muted-foreground">
+            {l.text ?? '···'}
+          </div>
+        ) : (
+          <div key={i} className={l.op === '+' ? 'bg-ok/10 px-2 text-ok' : l.op === '-' ? 'bg-firing/10 px-2 text-firing' : 'px-2 text-muted-foreground'}>
+            {l.op} {l.text}
+          </div>
+        ),
+      )}
+    </pre>
+  )
+}
+
+export function ChangeSummary({ c }: { c: (GitChange | GitCommitFile) & { system?: string; error?: string } }) {
   const { t, tn } = useT()
+  const [open, setOpen] = useState(false)
   const d = c.diff
   const none = d && !d.new && d.changed.length + d.added.length + d.removed.length === 0
   return (
     <div>
       <div className="flex flex-wrap items-baseline gap-x-2">
-        <span className="font-medium">{c.system}</span>
+        <span className="font-medium">{c.system || c.path}</span>
         <span className="text-xs text-muted-foreground">
           {c.kind === 'delete'
             ? t('gitc.kind.delete')
@@ -41,6 +61,14 @@ export function ChangeSummary({ c }: { c: GitChange }) {
           <Lines lines={d.changed} sep=": " />
           <Lines lines={d.added} sep=" " prefix="+ " />
           <Lines lines={d.removed} sep=" " prefix="− " />
+        </>
+      )}
+      {c.text && c.text.length > 0 && (
+        <>
+          <button type="button" className="mt-1 text-xs text-muted-foreground underline underline-offset-2" onClick={() => setOpen((v) => !v)} data-testid="diff-toggle">
+            {open ? t('gitc.diff.hide') : 'Diff'}
+          </button>
+          {open && <TextDiff lines={c.text} />}
         </>
       )}
     </div>

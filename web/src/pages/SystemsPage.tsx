@@ -30,7 +30,13 @@ function SystemCard({ s, stacks, incidents }: { s: SystemSummary; stacks: number
           <div className="truncate text-base font-semibold">{s.name}</div>
           <div className="truncate text-sm text-muted-foreground">{s.description || (s.environment ? t('systems.environment', { env: s.environment }) : ' ')}</div>
         </div>
-        <StatePill state={s.state}>{systemStateText(s, incidents)}</StatePill>
+        {s.draft ? (
+          <span className="shrink-0 rounded-full bg-warn/10 px-2 py-0.5 text-xs font-medium text-warn" data-testid="system-draft">
+            {t('systems.draft')}
+          </span>
+        ) : (
+          <StatePill state={s.state}>{systemStateText(s, incidents)}</StatePill>
+        )}
       </div>
       {s.valid ? (
         <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm text-muted-foreground">

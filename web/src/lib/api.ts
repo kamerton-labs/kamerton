@@ -86,6 +86,8 @@ export interface SystemSummary {
   services: number
   rules: number
   receivers: number
+  /** Made here and not pushed yet: it runs nowhere until its file is on the followed branch. */
+  draft?: boolean
   /** Set for a system that comes from a git repository: it is changed there, not in the UI. */
   git?: GitSource
   /** Receivers whose Secret is missing: nothing reaches their channel yet. */
@@ -208,7 +210,35 @@ export interface GitChange {
   author?: string
   diff?: GitPreview['diff']
   error?: string
+  /** The change of the description file, line by line. */
+  text?: DiffLine[]
 }
+
+/** One line of a text diff: " " same, "+" added, "-" removed, "@" lines left out. */
+export interface DiffLine {
+  op: ' ' | '+' | '-' | '@'
+  text?: string
+}
+
+/** One description file of a commit: what it does to the rules and to the text. */
+export interface GitCommitFile {
+  path: string
+  system?: string
+  kind: GitChangeKind
+  diff?: GitPreview['diff']
+  text?: DiffLine[]
+}
+
+export interface GitCommitDetail {
+  commit: GitCommit
+  message?: string
+  files: GitCommitFile[]
+  /** Changed files that are not descriptions. */
+  others: number
+}
+
+export const useGitCommit = (hash: string | null) =>
+  useQuery({ queryKey: ['git', 'commit', hash], queryFn: () => request<GitCommitDetail>(`/git/commits/${hash}`), enabled: !!hash, staleTime: Infinity })
 
 export interface GitCommit {
   hash: string
@@ -318,6 +348,8 @@ export interface SystemResponse {
   gitWrite?: 'pullRequest' | 'commit'
   /** The file on the hosting service, when it is known. */
   gitFileURL?: string
+  /** Made here and not pushed yet. */
+  draft?: boolean
   /** The kind of this system's saved, not pushed change; the yaml above is then that saved version. */
   gitSaved?: GitChangeKind
   valid: boolean

@@ -13,7 +13,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useT } from '@/i18n'
-import { useGitChanges, useGitCommits, useGitDiscard, useGitPush, useGitSettings, useGitSync, useSystems, type GitProposal, type GitSettingsView, type GitStatus } from '@/lib/api'
+import { useGitChanges, useGitCommit, useGitCommits, useGitDiscard, useGitPush, useGitSettings, useGitSync, useSystems, type GitProposal, type GitSettingsView, type GitStatus } from '@/lib/api'
 import { timeAgo } from '@/lib/format'
 import { gitProblems, projectName } from '@/lib/git'
 
@@ -77,6 +77,7 @@ function Connected({ git, settings, ids }: { git: GitStatus; settings?: GitSetti
   const problems = gitProblems(git)
   const changes = useGitChanges(true)
   const [commitLimit, setCommitLimit] = useState(10)
+  const [openCommit, setOpenCommit] = useState<string | null>(null)
   const commits = useGitCommits(!git.empty, commitLimit)
   const push = useGitPush()
   const discard = useGitDiscard()
@@ -233,20 +234,23 @@ function Connected({ git, settings, ids }: { git: GitStatus; settings?: GitSetti
         <Section title="Commits" testid="git-commits">
           <ul className="divide-y">
             {commits.data.commits.map((c) => (
-              <li key={c.hash} className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 py-2 text-sm">
-                {c.url ? (
-                  <a className="font-mono text-xs underline underline-offset-2" href={c.url} target="_blank" rel="noreferrer">
-                    {c.hash.slice(0, 8)}
-                  </a>
-                ) : (
+              <li key={c.hash} className="py-2 text-sm">
+                <button
+                  type="button"
+                  className="flex w-full flex-wrap items-baseline gap-x-3 gap-y-0.5 text-left"
+                  onClick={() => setOpenCommit((h) => (h === c.hash ? null : c.hash))}
+                  aria-expanded={openCommit === c.hash}
+                  data-testid="git-commit-row"
+                >
                   <span className="font-mono text-xs">{c.hash.slice(0, 8)}</span>
-                )}
-                <span className="min-w-0 [overflow-wrap:anywhere]">{c.title}</span>
-                {c.systems && c.systems.length > 0 && <span className="text-xs text-muted-foreground">{c.systems.join(', ')}</span>}
-                {c.applied && <span className="rounded bg-ok/10 px-1.5 text-xs text-ok">{t('gitp.state.applied')}</span>}
-                <span className="ml-auto text-xs text-muted-foreground">
-                  {c.author} · {timeAgo(c.when)}
-                </span>
+                  <span className="min-w-0 [overflow-wrap:anywhere]">{c.title}</span>
+                  {c.systems && c.systems.length > 0 && <span className="text-xs text-muted-foreground">{c.systems.join(', ')}</span>}
+                  {c.applied && <span className="rounded bg-ok/10 px-1.5 text-xs text-ok">{t('gitp.state.applied')}</span>}
+                  <span className="ml-auto text-xs text-muted-foreground">
+                    {c.author} · {timeAgo(c.when)}
+                  </span>
+                </button>
+                {openCommit === c.hash && <CommitBody hash={c.hash} url={c.url} />}
               </li>
             ))}
           </ul>
@@ -306,5 +310,31 @@ function Connected({ git, settings, ids }: { git: GitStatus; settings?: GitSetti
         </Dialog>
       )}
     </Page>
+  )
+}
+
+/** What a commit changed: per description file, the rules in words and the text behind "Diff". */
+function CommitBody({ hash, url }: { hash: string; url?: string }) {
+  const { t, tn } = useT()
+  const detail = useGitCommit(hash)
+  if (detail.isLoading) return <Skeleton className="mt-2 h-10" />
+  if (!detail.data) return <p className="mt-2 text-xs text-muted-foreground">{t('gitp.commit.unknown')}</p>
+  const d = detail.data
+  return (
+    <div className="mt-2 space-y-3 rounded-md bg-muted/20 p-3" data-testid="git-commit-body">
+      {d.message && <p className="text-xs whitespace-pre-line text-muted-foreground">{d.message}</p>}
+      {d.files.length === 0 && <p className="text-xs text-muted-foreground">{t('gitp.commit.noSystems')}</p>}
+      {d.files.map((f) => (
+        <ChangeSummary key={f.path} c={f} />
+      ))}
+      <p className="flex flex-wrap gap-x-3 text-xs text-muted-foreground">
+        {d.others > 0 && <span>{tn('gitp.commit.others', d.others)}</span>}
+        {url && (
+          <a className={ext} href={url} target="_blank" rel="noreferrer">
+            {t('gitp.commit.open')} <ExternalLink className="size-3" />
+          </a>
+        )}
+      </p>
+    </div>
   )
 }

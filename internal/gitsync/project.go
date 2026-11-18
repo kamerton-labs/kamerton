@@ -157,6 +157,8 @@ kamerton diff -f systems/shop.yaml --against <the file before the change>
 Secrets do not belong here. Bot tokens and mail passwords are entered in the Kamerton UI and
 kept in the cluster.
 `),
+		// Git keeps no empty folders: this one shows where the systems go.
+		path.Join(root, "systems", ".gitkeep"): []byte(""),
 		path.Join(root, ".gitignore"): []byte(`# Local output of "kamerton generate -o out/".
 out/
 .before.yaml

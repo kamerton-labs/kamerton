@@ -391,7 +391,7 @@ func TestStartingFromAnEmptyRepository(t *testing.T) {
 	}
 	// The new repository describes itself: a project file, a README and a .gitignore.
 	tree := h.git(h.bare, "ls-tree", "-r", "--name-only", "main")
-	for _, want := range []string{"kamerton.yaml", "README.md", ".gitignore", "systems/shop.yaml", "generated/shop/rules/shop.rules.yaml"} {
+	for _, want := range []string{"kamerton.yaml", "README.md", ".gitignore", "systems/.gitkeep", "systems/shop.yaml", "generated/shop/rules/shop.rules.yaml"} {
 		if !strings.Contains(tree, want) {
 			t.Errorf("the first commit lacks %s:\n%s", want, tree)
 		}
@@ -544,6 +544,17 @@ func TestCommitsListsTheBranch(t *testing.T) {
 	if list[1].Title != "first" || list[1].Applied {
 		t.Errorf("oldest commit: %+v", list[1])
 	}
+	// A commit opens: the description file it changed, before and after.
+	d, err := s.CommitDetail(context.Background(), list[0].Hash)
+	if err != nil || len(d.Files) != 1 || d.Files[0].Path != "systems/shop.yaml" {
+		t.Fatalf("detail: %+v, %v", d, err)
+	}
+	if !strings.Contains(d.Files[0].Before, "name: api") || !strings.Contains(d.Files[0].After, "name: gateway") {
+		t.Errorf("before/after: %q -> %q", d.Files[0].Before, d.Files[0].After)
+	}
+	if _, err := s.CommitDetail(context.Background(), "0000000000000000000000000000000000000000"); err == nil {
+		t.Error("an unknown commit must be an error")
+	}
 }
 
 func TestReadOnlyRepositoryRefusesASave(t *testing.T) {
@@ -681,7 +692,7 @@ func TestCreateAProjectInARepositoryThatHasOtherThings(t *testing.T) {
 		t.Fatalf("Create = %+v, %v", p, err)
 	}
 	tree := h.git(h.bare, "ls-tree", "-r", "--name-only", "main")
-	for _, want := range []string{"observability/kamerton.yaml", "observability/README.md", "observability/.gitignore", "README.md", "src/main.go"} {
+	for _, want := range []string{"observability/kamerton.yaml", "observability/README.md", "observability/.gitignore", "observability/systems/.gitkeep", "README.md", "src/main.go"} {
 		if !strings.Contains(tree, want) {
 			t.Errorf("tree lacks %s:\n%s", want, tree)
 		}
