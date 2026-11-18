@@ -544,6 +544,7 @@ export const en = {
   'orient.receivers': { one: '{n} receiver in system descriptions', other: '{n} receivers in system descriptions' },
   'orient.channelNone': 'Alerts go nowhere yet',
   'orient.open': 'Open',
+  'orient.channelsOff': 'Systems name channels that are not connected yet: their alerts reach no one.',
   'orient.connectTelegram': 'Connect Telegram',
   'orient.allDone': 'All set: Prometheus and Alertmanager are running, services are found, rules are created, alerts are delivered.',
   'orient.titleDone': 'What is set up',

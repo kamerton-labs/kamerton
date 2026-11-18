@@ -557,6 +557,7 @@ export const ru: Messages = {
   'orient.receivers': { one: '{n} получатель в описаниях систем', few: '{n} получателя в описаниях систем', many: '{n} получателей в описаниях систем' },
   'orient.channelNone': 'Оповещения пока никуда не уходят',
   'orient.open': 'Открыть',
+  'orient.channelsOff': 'В системах указаны каналы, которые ещё не подключены: оповещения никому не приходят.',
   'orient.connectTelegram': 'Подключить Telegram',
   'orient.allDone': 'Всё настроено: Prometheus и Alertmanager работают, сервисы найдены, правила созданы, оповещения уходят.',
   'orient.titleDone': 'Что настроено',
