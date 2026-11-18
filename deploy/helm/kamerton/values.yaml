@@ -125,6 +125,27 @@ git:
   #   kubectl -n kamerton create secret generic kamerton-git --from-literal=token=<token>
   secretName: kamerton-git
   interval: 1m
+  # What "Save" in the UI does to a system from git. Empty: nothing, the
+  # system is read-only in the UI. "pullRequest": Kamerton pushes the change
+  # to a new branch kamerton/<system>-<commit> and, on GitHub and GitLab,
+  # opens a pull or merge request; the change reaches the cluster after the
+  # merge. "commit": Kamerton commits straight to the followed branch. Both
+  # need a token with write access in the Secret above.
+  write: ""
+  # Hosting service, for pull requests and commit statuses: "github" or
+  # "gitlab". Worked out from the url for github.com and gitlab hosts; set it,
+  # and apiURL, for a self-hosted one (https://host/api/v3 for GitHub
+  # Enterprise, https://host/api/v4 for GitLab).
+  provider: ""
+  apiURL: ""
+  # Mark every read commit as applied or not, like a build system does. The
+  # token must be allowed to set commit statuses.
+  commitStatus: false
+  # A folder for generated files. When set, a change written by Kamerton also
+  # carries <generatedPath>/<system>/ with the rules, dashboards and runbooks
+  # generated from the description, so the review shows what changes. The
+  # layout is that of `kamerton generate -o`. Empty: only the description.
+  generatedPath: ""
 
 # Sets of programs. The addresses under
 # endpoints / bringYourOwn below form the built-in set; in the UI each of its

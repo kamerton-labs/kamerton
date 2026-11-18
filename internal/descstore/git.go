@@ -31,6 +31,60 @@ var (
 	ErrNotFromGit = errors.New("a system with this name already exists and does not come from this repository; rename one of them or delete the existing system")
 )
 
+// GitChange is a change to one system's file, to be written to the repository.
+type GitChange struct {
+	System string
+	// Path of the file in the repository.
+	Path string
+	// Content is the new file; nil deletes it.
+	Content []byte
+}
+
+// GitProposal says where a change went.
+type GitProposal struct {
+	// Branch the change was pushed to. Direct: it is the followed branch itself, so the change
+	// reaches the cluster with the next read; otherwise it waits for a merge.
+	Branch string `json:"branch"`
+	Direct bool   `json:"direct"`
+	// URL of the pull or merge request, when the hosting service is known.
+	URL    string `json:"url,omitempty"`
+	Commit string `json:"commit"`
+}
+
+// GitWriter writes a change to the repository instead of the cluster.
+type GitWriter interface {
+	// WriteEnabled is false when the repository is only read.
+	WriteEnabled() bool
+	Propose(ctx context.Context, c GitChange) (*GitProposal, error)
+}
+
+// ProposedError is not a failure: the change of a system kept in git was written to the
+// repository and is not in the cluster yet.
+type ProposedError struct{ Proposal GitProposal }
+
+func (e *ProposedError) Error() string {
+	if e.Proposal.Direct {
+		return "the change was committed to branch " + e.Proposal.Branch + "; Kamerton applies it within a minute"
+	}
+	if e.Proposal.URL != "" {
+		return "the change was proposed: " + e.Proposal.URL + "; it applies after the merge"
+	}
+	return "the change was pushed to branch " + e.Proposal.Branch + "; it applies after that branch is merged"
+}
+
+// propose sends a change of a git system to the repository, or refuses when it is read-only.
+func (c *Cluster) propose(ctx context.Context, sd *v1alpha1.SystemDescription, content []byte) error {
+	from := FromGit(sd)
+	if c.Git == nil || !c.Git.WriteEnabled() {
+		return ErrFromGit
+	}
+	p, err := c.Git.Propose(ctx, GitChange{System: sd.Name, Path: from.Path, Content: content})
+	if err != nil {
+		return fmt.Errorf("write the change to git: %w", err)
+	}
+	return &ProposedError{Proposal: *p}
+}
+
 // GitSource says where a system's file is.
 type GitSource struct {
 	// Repo identifies the repository and branch ("https://host/team/repo.git#main"); it must not
@@ -125,6 +179,25 @@ func (c *Cluster) PruneGit(ctx context.Context, repo string, keep map[string]boo
 		gone = append(gone, sd.Name)
 	}
 	return gone, nil
+}
+
+// GitPaths returns the file paths of the systems that came from this repository.
+func (c *Cluster) GitPaths(ctx context.Context, repo string) ([]string, error) {
+	var list v1alpha1.SystemDescriptionList
+	var opts []client.ListOption
+	if c.WatchNamespace != "" {
+		opts = append(opts, client.InNamespace(c.WatchNamespace))
+	}
+	if err := c.Client.List(ctx, &list, opts...); err != nil {
+		return nil, err
+	}
+	var out []string
+	for i := range list.Items {
+		if from := FromGit(&list.Items[i]); from != nil && from.Repo == repo {
+			out = append(out, from.Path)
+		}
+	}
+	return out, nil
 }
 
 // GitKey is the key PruneGit expects for the system of a file.

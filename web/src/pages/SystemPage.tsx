@@ -17,7 +17,7 @@ import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Skeleton } from '@/components/ui/skeleton'
-import { ApiError, useAlerts, useDeleteSystem, useRuleStates, useSaveSystem, useStacks, useSystem, useSystems, useTelegram, useEmail, validateSystem, type Issue, type SystemResponse } from '@/lib/api'
+import { ApiError, useAlerts, useDeleteSystem, useRuleStates, useSaveSystem, useStacks, useSystem, useSystems, useTelegram, useEmail, validateSystem, type GitProposal, type Issue, type SystemResponse } from '@/lib/api'
 import { t as tCurrent, useT } from '@/i18n'
 import { EditorContext, useDebounced, type EditorState } from '@/lib/editor'
 import { systemStateText } from '@/lib/format'
@@ -150,9 +150,14 @@ function Editor({ data }: { data: SystemResponse }) {
     [id, draft, desc, readOnly, editFn, states.data, tg.data, em.data, issues],
   )
 
+  // A system kept in git is not saved to the cluster: the change goes to the repository.
+  const [proposal, setProposal] = useState<GitProposal | null>(null)
   const doSave = () =>
     save.mutate(draft.text, {
-      onSuccess: () => setDraft((d) => markSaved(d)),
+      onSuccess: (res) => {
+        setProposal(res.proposed && res.proposal ? res.proposal : null)
+        setDraft((d) => markSaved(d))
+      },
     })
   const saveError = save.error instanceof ApiError ? save.error : null
   // A set the description asks for that does not exist: the built-in set is used instead.
@@ -190,7 +195,7 @@ function Editor({ data }: { data: SystemResponse }) {
         </div>
         <div className="ml-auto flex items-center gap-2">
           <span className="hidden text-xs text-muted-foreground lg:inline">
-            {save.isPending ? t('system.saving') : dirty ? t('system.unsaved') : save.isSuccess ? t('system.saved') : ''}
+            {save.isPending ? t('system.saving') : dirty ? t('system.unsaved') : save.isSuccess && !proposal ? t('system.saved') : ''}
           </span>
           {dirty && (
             <Button variant="ghost" size="sm" onClick={() => setDraft(initDraft(draft.saved))}>
@@ -198,7 +203,8 @@ function Editor({ data }: { data: SystemResponse }) {
             </Button>
           )}
           <Button size="sm" onClick={doSave} disabled={!canSave}>
-            {save.isPending ? <Loader2 className="animate-spin" /> : !dirty ? <Check /> : null} {dirty ? t('system.save') : t('system.saved')}
+            {save.isPending ? <Loader2 className="animate-spin" /> : !dirty ? <Check /> : null}{' '}
+            {!dirty ? t(proposal ? 'system.gitSent' : 'system.saved') : data.gitWrite === 'pullRequest' ? t('system.gitPropose') : data.gitWrite === 'commit' ? t('system.gitCommit') : t('system.save')}
           </Button>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
@@ -218,7 +224,13 @@ function Editor({ data }: { data: SystemResponse }) {
                 onSelect={async () => {
                   const extra = data.mode === 'cluster' ? t('system.delete.cluster') : t('system.delete.file')
                   const ok = await confirm({ title: t('system.delete.title', { name: data.name }), description: `${t('system.delete.text')} ${extra}` })
-                  if (ok) del.mutate(id, { onSuccess: () => navigate('/', { replace: true }) })
+                  if (ok)
+                    del.mutate(id, {
+                      onSuccess: (res) => {
+                        if (res.proposed && res.proposal && !res.proposal.direct) setProposal(res.proposal)
+                        else navigate('/', { replace: true })
+                      },
+                    })
                 }}
               >
                 <Trash2 /> {t('system.delete')}
@@ -228,7 +240,7 @@ function Editor({ data }: { data: SystemResponse }) {
         </div>
       </div>
 
-      {(syntaxError || issues.length > 0 || saveError || !data.writable || del.isError || missingStack) && (
+      {(syntaxError || issues.length > 0 || saveError || !data.writable || data.git || del.isError || missingStack) && (
         <div className="space-y-2 border-b bg-muted/20 px-3 py-2 md:px-4">
           {syntaxError && (
             <p className="text-sm text-destructive">
@@ -250,9 +262,29 @@ function Editor({ data }: { data: SystemResponse }) {
             </div>
           )}
           {saveError && <p className="text-sm text-destructive">{t('system.saveError', { error: saveError.code === 'conflict' ? t('system.conflict') : saveError.message })}</p>}
+          {proposal && (
+            <p className="text-sm" data-testid="git-proposal">
+              {proposal.direct ? (
+                t('system.gitCommitted', { branch: proposal.branch })
+              ) : proposal.url ? (
+                <>
+                  {t('system.gitProposed')}{' '}
+                  <a className="font-medium underline underline-offset-2" href={proposal.url} target="_blank" rel="noreferrer">
+                    {proposal.url}
+                  </a>
+                </>
+              ) : (
+                t('system.gitPushed', { branch: proposal.branch })
+              )}
+            </p>
+          )}
           {data.git ? (
             <p className="text-sm text-muted-foreground" data-testid="system-from-git">
-              {t('system.fromGit', { path: data.git.path, commit: data.git.commit.slice(0, 8), repo: data.git.repo })}
+              {t(data.gitWrite === 'pullRequest' ? 'system.fromGitPropose' : data.gitWrite === 'commit' ? 'system.fromGitCommit' : 'system.fromGit', {
+                path: data.git.path,
+                commit: data.git.commit.slice(0, 8),
+                repo: data.git.repo,
+              })}
             </p>
           ) : (
             !data.writable && <p className="text-sm text-muted-foreground">{t('system.readOnly')}</p>

@@ -26,6 +26,9 @@ type Cluster struct {
 	WatchNamespace string
 	// Name, when set, is listed first and so becomes the default system.
 	Name string
+	// Git, when it can write, takes the changes of systems kept in git: Save and Delete of such
+	// a system go to the repository and return a *ProposedError.
+	Git GitWriter
 }
 
 func (c *Cluster) Mode() string { return ModeCluster }
@@ -135,7 +138,7 @@ func (c *Cluster) Save(ctx context.Context, id string, raw []byte) (*Snapshot, d
 		return nil, res, err
 	}
 	if FromGit(&existing) != nil {
-		return nil, res, ErrFromGit
+		return nil, res, c.propose(ctx, &existing, raw)
 	}
 	existing.Spec = doc.Spec
 	existing.Annotations = keepOwnAnnotations(existing.Annotations, doc.Annotations)
@@ -198,7 +201,7 @@ func (c *Cluster) Delete(ctx context.Context, id string) error {
 		return err
 	}
 	if cur, err := c.Get(ctx, id); err == nil && FromGit(cur.SD) != nil {
-		return ErrFromGit
+		return c.propose(ctx, cur.SD, nil)
 	}
 	obj := &v1alpha1.SystemDescription{}
 	obj.Name, obj.Namespace = key.Name, key.Namespace

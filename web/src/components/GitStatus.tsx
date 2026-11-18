@@ -34,7 +34,7 @@ export default function GitStatus({ git }: { git: Status }) {
             ))}
           </ul>
         )}
-        {!bad && <p>{t('git.hint')}</p>}
+        {!bad && <p>{t(git.write === 'pullRequest' ? 'git.hintPropose' : git.write === 'commit' ? 'git.hintCommit' : 'git.hint')}</p>}
       </AlertDescription>
     </Alert>
   )

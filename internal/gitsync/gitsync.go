@@ -54,7 +54,12 @@ type Target interface {
 	ApplyGit(ctx context.Context, raw []byte, src descstore.GitSource) (name string, changed bool, res description.Result, err error)
 	PruneGit(ctx context.Context, repo string, keep map[string]bool) ([]string, error)
 	GitKey(doc *v1alpha1.SystemDescription) string
+	GitPaths(ctx context.Context, repo string) ([]string, error)
 }
+
+// errNoFolder: the folder is not on the branch. A typo and a folder whose last file was
+// deleted look the same in git.
+var errNoFolder = errors.New("folder not found")
 
 type Service struct {
 	// URL is an http(s) or file URL of the repository, Branch its branch, Path a folder in it
@@ -62,14 +67,77 @@ type Service struct {
 	URL, Branch, Path string
 	// Token, when it returns a non-empty string, is sent as the password of HTTP basic auth,
 	// which is how GitHub, GitLab and Gitea take access tokens. Read on every sync.
-	Token    func(ctx context.Context) (string, error)
-	Target   Target
-	Interval time.Duration
-	Logger   *slog.Logger
-	Now      func() time.Time
+	Token  func(ctx context.Context) (string, error)
+	Target Target
+	// Write says what a save in the UI does to a system from git: WriteOff, WritePullRequest or
+	// WriteCommit. Writing needs a token with write access.
+	Write string
+	// Provider (github or gitlab) and APIURL are worked out from URL for github.com and
+	// gitlab hosts; set them for a self-hosted service.
+	Provider, APIURL string
+	// CommitStatus marks every read commit on the hosting service as applied or not.
+	CommitStatus bool
+	// GeneratedPath, when set, is a folder where a change written by Kamerton also carries the
+	// files generated from the description (<GeneratedPath>/<system>/), made by Generate.
+	GeneratedPath string
+	Generate      func(description []byte) (map[string][]byte, error)
+	Interval      time.Duration
+	Logger        *slog.Logger
+	Now           func() time.Time
 
 	mu     sync.Mutex
 	status Status
+	// raw holds the files of the last read by path, so the UI edits the text people wrote,
+	// comments included, not the cluster's copy.
+	raw map[string][]byte
+	// reported is the commit and outcome last sent as a commit status.
+	reported string
+}
+
+// Raw returns a file as it was at the last read.
+func (s *Service) Raw(path string) ([]byte, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	b, ok := s.raw[path]
+	return b, ok
+}
+
+// WriteMode is the write mode in effect.
+func (s *Service) WriteMode() string {
+	if s.WriteEnabled() {
+		return s.Write
+	}
+	return WriteOff
+}
+
+// report marks the commit on the hosting service; a refusal is logged once per outcome.
+func (s *Service) report(ctx context.Context, st Status) {
+	h := s.host()
+	if !s.CommitStatus || h == nil || s.Token == nil || st.Commit == "" {
+		return
+	}
+	ok, text := true, fmt.Sprintf("applied: %d systems", len(st.Files))
+	for _, f := range st.Files {
+		if f.State != StateApplied && f.State != StateUnchanged {
+			ok, text = false, fmt.Sprintf("not applied: %s: %s", f.Path, f.Error)
+			break
+		}
+	}
+	key := st.Commit + "|" + text
+	s.mu.Lock()
+	done := s.reported == key
+	s.reported = key
+	s.mu.Unlock()
+	if done {
+		return
+	}
+	tok, err := s.Token(ctx)
+	if err == nil {
+		err = h.setStatus(ctx, strings.TrimSpace(tok), st.Commit, ok, text)
+	}
+	if err != nil {
+		s.log().Warn("git: commit status not set", "commit", short(st.Commit), "error", err)
+	}
 }
 
 type FileStatus struct {
@@ -85,12 +153,14 @@ type Status struct {
 	Branch string `json:"branch"`
 	Path   string `json:"path,omitempty"`
 	// Commit is the commit the files were read from; empty before the first successful read.
-	Commit    string       `json:"commit,omitempty"`
-	CheckedAt time.Time    `json:"checkedAt,omitzero"`
-	SyncedAt  time.Time    `json:"syncedAt,omitzero"`
-	Error     string       `json:"error,omitempty"`
-	Files     []FileStatus `json:"files"`
-	Removed   []string     `json:"removed,omitempty"`
+	Commit    string    `json:"commit,omitempty"`
+	CheckedAt time.Time `json:"checkedAt,omitzero"`
+	SyncedAt  time.Time `json:"syncedAt,omitzero"`
+	Error     string    `json:"error,omitempty"`
+	// Write: pullRequest, commit or empty when the repository is only read.
+	Write   string       `json:"write,omitempty"`
+	Files   []FileStatus `json:"files"`
+	Removed []string     `json:"removed,omitempty"`
 }
 
 // NeedLeaderElection: one replica writes.
@@ -120,6 +190,7 @@ func (s *Service) Status() Status {
 	defer s.mu.Unlock()
 	st := s.status
 	st.Repo, st.Branch, st.Path = s.Repo(), s.branch(), cleanPath(s.Path)
+	st.Write = s.WriteMode()
 	if st.Files == nil {
 		st.Files = []FileStatus{}
 	}
@@ -178,6 +249,10 @@ func (s *Service) Sync(ctx context.Context) Status {
 		return s.Status()
 	}
 	files, err := s.read(ctx, auth)
+	if errors.Is(err, errNoFolder) && s.hadFilesIn(ctx, cleanPath(s.Path)) {
+		// Systems were read from this folder before, so it is not a typo: its last file is gone.
+		files, err = nil, nil
+	}
 	if err != nil {
 		return fail(err)
 	}
@@ -230,10 +305,17 @@ func (s *Service) Sync(ctx context.Context) Status {
 			s.log().Info("git: system removed, its file is gone", "system", name, "commit", short(head))
 		}
 	}
+	raw := make(map[string][]byte, len(files))
+	for _, f := range files {
+		raw[f.path] = f.raw
+	}
 	s.mu.Lock()
 	s.status = Status{Commit: head, CheckedAt: now, SyncedAt: now, Files: out, Removed: removed}
+	s.raw = raw
 	s.mu.Unlock()
-	return s.Status()
+	st := s.Status()
+	s.report(ctx, st)
+	return st
 }
 
 // firstTime: a problem is retried on every pass, but logged once per commit.
@@ -249,6 +331,19 @@ func (s *Service) firstTime(commit string, f FileStatus) bool {
 		}
 	}
 	return true
+}
+
+func (s *Service) hadFilesIn(ctx context.Context, root string) bool {
+	paths, err := s.Target.GitPaths(ctx, s.repoKey())
+	if err != nil {
+		return false
+	}
+	for _, p := range paths {
+		if strings.HasPrefix(p, root+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 func hasProblems(files []FileStatus) bool {
@@ -314,7 +409,7 @@ func (s *Service) read(ctx context.Context, auth transport.AuthMethod) ([]file, 
 	root := cleanPath(s.Path)
 	if root != "" {
 		if st, err := fs.Stat(root); err != nil || !st.IsDir() {
-			return nil, fmt.Errorf("folder %q not found on branch %s", root, s.branch())
+			return nil, fmt.Errorf("%w: %q on branch %s", errNoFolder, root, s.branch())
 		}
 	}
 	var out []file

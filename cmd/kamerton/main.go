@@ -71,12 +71,14 @@ func main() {
 		err = validate(args)
 	case "generate":
 		err = generate(args)
+	case "diff":
+		err = diff(args)
 	case "schema":
 		_, err = os.Stdout.Write(schema.JSON())
 	case "version":
 		fmt.Printf("kamerton %s (%s)\n", version.Version, version.Commit)
 	case "help", "-h", "--help":
-		fmt.Println("usage: kamerton [serve|validate|generate|schema|version] [flags]")
+		fmt.Println("usage: kamerton [serve|validate|generate|diff|schema|version] [flags]")
 	default:
 		err = fmt.Errorf("unknown command %q", cmd)
 	}
@@ -168,6 +170,7 @@ func serve(args []string) error {
 		} else {
 			opts.DiscoveryUnavailable = "Discovery is turned off in this installation (Helm: stacks.discovery.enabled=false, flag --stack-discovery=false). Enter the addresses by hand."
 		}
+		var gitWriter *gitsync.Service
 		if cfg.GitURL != "" {
 			cluster := &descstore.Cluster{Client: uncached, Namespace: ns, WatchNamespace: cfg.WatchNamespace, Name: cfg.DescriptionName}
 			every, err := time.ParseDuration(cfg.GitInterval)
@@ -176,19 +179,27 @@ func serve(args []string) error {
 			}
 			opts.Git = &gitsync.Service{
 				URL: cfg.GitURL, Branch: cfg.GitBranch, Path: cfg.GitPath, Target: cluster, Interval: every,
-				Token:  secretValue(uncached, ns, cfg.GitSecretName, "token"),
+				Token: secretValue(uncached, ns, cfg.GitSecretName, "token"),
+				Write: gitsync.ParseWrite(cfg.GitWrite), Provider: cfg.GitProvider, APIURL: cfg.GitAPIURL,
+				CommitStatus: cfg.GitCommitStatus, GeneratedPath: cfg.GitGeneratedPath, Generate: generateForGit,
 				Logger: log.With("component", "git"),
 			}
+			gitWriter = opts.Git
 			// Leader-only: one replica writes descriptions.
 			if err := m.Add(opts.Git); err != nil {
 				return err
 			}
-			log.Info("system descriptions are read from git", "repo", opts.Git.Repo(), "branch", cfg.GitBranch, "path", cfg.GitPath, "every", every.String())
+			log.Info("system descriptions are read from git", "repo", opts.Git.Repo(), "branch", cfg.GitBranch, "path", cfg.GitPath, "every", every.String(), "write", opts.Git.WriteMode())
 		}
 		opts.SecretMissing = func(ctx context.Context, namespace string, ref v1alpha1.SecretKeyRef) bool {
 			return controller.SecretMissing(ctx, uncached, namespace, ref)
 		}
-		opts.Descriptions = &descstore.Cluster{Client: uncached, Namespace: ns, WatchNamespace: cfg.WatchNamespace, Name: cfg.DescriptionName}
+		store := &descstore.Cluster{Client: uncached, Namespace: ns, WatchNamespace: cfg.WatchNamespace, Name: cfg.DescriptionName}
+		if gitWriter != nil {
+			// Saves of systems kept in git go to the repository.
+			store.Git = gitWriter
+		}
+		opts.Descriptions = store
 		if cfg.DescriptionFile != "" {
 			log.Warn("--description is ignored in cluster mode; the description is read from SystemDescription resources", "file", cfg.DescriptionFile)
 		}
@@ -512,32 +523,16 @@ func generate(args []string) error {
 		_, err = os.Stdout.Write(b.RulesYAML)
 		return err
 	}
-	write := func(rel string, data []byte) error {
+	files, err := generatedFiles(sd.Name, b)
+	if err != nil {
+		return err
+	}
+	for rel, data := range files {
 		p := filepath.Join(*outDir, rel)
 		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 			return err
 		}
-		return os.WriteFile(p, data, 0o644)
-	}
-	if err := write("rules/"+sd.Name+".rules.yaml", b.RulesYAML); err != nil {
-		return err
-	}
-	for name, d := range b.Dashboards {
-		if err := write("dashboards/"+name, d); err != nil {
-			return err
-		}
-	}
-	for name, rb := range b.Runbooks {
-		if err := write("runbooks/"+name, []byte(rb)); err != nil {
-			return err
-		}
-	}
-	if b.AlertmanagerConfig != nil {
-		j, err := json.MarshalIndent(b.AlertmanagerConfig, "", "  ")
-		if err != nil {
-			return err
-		}
-		if err := write("alertmanager/alertmanagerconfig-spec.json", j); err != nil {
+		if err := os.WriteFile(p, data, 0o644); err != nil {
 			return err
 		}
 	}
@@ -575,4 +570,38 @@ func secretValue(c client.Client, ns, name, key string) func(ctx context.Context
 		}
 		return string(s.Data[key]), nil
 	}
+}
+
+// generatedFiles lays out what a description generates, the same for `kamerton generate -o` and
+// for the files Kamerton writes to a git repository, so one can be checked against the other.
+func generatedFiles(system string, b *generator.Bundle) (map[string][]byte, error) {
+	files := map[string][]byte{"rules/" + system + ".rules.yaml": b.RulesYAML}
+	for name, d := range b.Dashboards {
+		files["dashboards/"+name] = d
+	}
+	for name, rb := range b.Runbooks {
+		files["runbooks/"+name] = []byte(rb)
+	}
+	if b.AlertmanagerConfig != nil {
+		j, err := json.MarshalIndent(b.AlertmanagerConfig, "", "  ")
+		if err != nil {
+			return nil, err
+		}
+		files["alertmanager/alertmanagerconfig-spec.json"] = j
+	}
+	return files, nil
+}
+
+// generateForGit renders a description the way `kamerton generate` does: no links and no
+// webhook, so the files do not depend on where Kamerton runs.
+func generateForGit(raw []byte) (map[string][]byte, error) {
+	res := description.Validate(raw)
+	if !res.Valid || res.Document == nil {
+		return nil, errors.New("the description is invalid")
+	}
+	b, err := generator.Generate(res.Document, generator.Options{})
+	if err != nil {
+		return nil, err
+	}
+	return generatedFiles(res.Document.Name, b)
 }

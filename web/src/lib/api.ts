@@ -54,11 +54,24 @@ export interface VersionInfo {
   apiVersion: string
 }
 
+/** Where a change of a system kept in git went instead of the cluster. */
+export interface GitProposal {
+  branch: string
+  /** Committed to the followed branch: Kamerton applies it with the next read. Otherwise it waits for a merge. */
+  direct: boolean
+  /** Pull or merge request, when the hosting service is known. */
+  url?: string
+  commit: string
+}
+
 export interface SaveDescriptionResult {
-  saved: boolean
-  source: string
-  mode: string
-  warnings: Issue[]
+  saved?: boolean
+  source?: string
+  mode?: string
+  warnings?: Issue[]
+  /** 202: the change was written to the repository, not to the cluster. */
+  proposed?: boolean
+  proposal?: GitProposal
 }
 
 export interface SystemSummary {
@@ -102,6 +115,7 @@ export interface GitStatus {
   checkedAt?: string
   syncedAt?: string
   error?: string
+  write?: 'pullRequest' | 'commit'
   files: { path: string; system?: string; state: 'applied' | 'unchanged' | 'invalid' | 'conflict' | 'failed'; error?: string }[]
   removed?: string[]
 }
@@ -126,6 +140,8 @@ export interface SystemResponse {
   mode: 'cluster' | 'file' | 'none'
   writable: boolean
   git?: GitSource
+  /** How a save of a system from git is written to the repository; absent when it is read-only. */
+  gitWrite?: 'pullRequest' | 'commit'
   valid: boolean
   errors: Issue[]
   warnings: Issue[]
@@ -815,7 +831,7 @@ export const useCreateSystem = () => {
 export const useDeleteSystem = () => {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: (id: string) => request<{ deleted: boolean }>(sys(id), { method: 'DELETE' }),
+    mutationFn: (id: string) => request<{ deleted?: boolean; proposed?: boolean; proposal?: GitProposal }>(sys(id), { method: 'DELETE' }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['systems'] }),
   })
 }

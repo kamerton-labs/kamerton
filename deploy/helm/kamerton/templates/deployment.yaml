@@ -92,6 +92,16 @@ spec:
               value: {{ dig "secretName" "kamerton-git" $git | toString | quote }}
             - name: KAMERTON_GIT_INTERVAL
               value: {{ dig "interval" "1m" $git | toString | quote }}
+            - name: KAMERTON_GIT_WRITE
+              value: {{ dig "write" "" $git | toString | quote }}
+            - name: KAMERTON_GIT_PROVIDER
+              value: {{ dig "provider" "" $git | toString | quote }}
+            - name: KAMERTON_GIT_API_URL
+              value: {{ dig "apiURL" "" $git | toString | quote }}
+            - name: KAMERTON_GIT_COMMIT_STATUS
+              value: {{ dig "commitStatus" false $git | toString | quote }}
+            - name: KAMERTON_GIT_GENERATED_PATH
+              value: {{ dig "generatedPath" "" $git | toString | quote }}
             - name: KAMERTON_TAIL_MUTE
               # Empty after an upgrade with --reuse-values from an older chart: the core uses its default.
               value: {{ dig "tailMute" "" (.Values.incidents | default dict) | toString | quote }}
