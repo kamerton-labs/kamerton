@@ -195,7 +195,7 @@ function Editor({ data }: { data: SystemResponse }) {
         </div>
         <div className="ml-auto flex items-center gap-2">
           <span className="hidden text-xs text-muted-foreground lg:inline">
-            {save.isPending ? t('system.saving') : dirty ? t('system.unsaved') : save.isSuccess ? t('system.saved') : ''}
+            {save.isPending ? t('system.saving') : dirty ? t('system.unsaved') : save.isSuccess && !proposal ? t('system.saved') : ''}
           </span>
           {dirty && (
             <Button variant="ghost" size="sm" onClick={() => setDraft(initDraft(draft.saved))}>
