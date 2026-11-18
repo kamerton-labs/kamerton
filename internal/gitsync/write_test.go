@@ -43,6 +43,13 @@ func newHosted(t *testing.T, token string, files map[string]string) *hosted {
 	root := t.TempDir()
 	h := &hosted{t: t, bare: filepath.Join(root, "obs.git")}
 	work := filepath.Join(root, "work")
+	if files == nil {
+		// A repository as it is right after "New repository": no commits, no branch.
+		h.git(root, "init", "-q", "--bare", "-b", "main", h.bare)
+		h.git(h.bare, "config", "http.receivepack", "true")
+		h.serve(backend, root, token)
+		return h
+	}
 	h.git(root, "init", "-q", "-b", "main", work)
 	for name, content := range files {
 		full := filepath.Join(work, name)
@@ -57,6 +64,11 @@ func newHosted(t *testing.T, token string, files map[string]string) *hosted {
 	h.git(work, "commit", "-q", "-m", "first")
 	h.git(root, "clone", "-q", "--bare", work, h.bare)
 	h.git(h.bare, "config", "http.receivepack", "true")
+	h.serve(backend, root, token)
+	return h
+}
+
+func (h *hosted) serve(backend, root, token string) {
 	cgiHandler := &cgi.Handler{Path: backend, Env: []string{"GIT_PROJECT_ROOT=" + root, "GIT_HTTP_EXPORT_ALL=1"}}
 	h.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if _, pass, ok := r.BasicAuth(); token != "" && (!ok || pass != token) {
@@ -66,8 +78,7 @@ func newHosted(t *testing.T, token string, files map[string]string) *hosted {
 		}
 		cgiHandler.ServeHTTP(w, r)
 	}))
-	t.Cleanup(h.srv.Close)
-	return h
+	h.t.Cleanup(h.srv.Close)
 }
 
 func (h *hosted) url() string { return h.srv.URL + "/obs.git" }
@@ -322,6 +333,61 @@ func TestMoveToGitTakesASystemOverInPlace(t *testing.T) {
 	}
 	if _, err := store.MoveToGit(context.Background(), "legacy"); err == nil {
 		t.Error("moving a system that is already in git must be refused")
+	}
+}
+
+func TestStartingFromAnEmptyRepository(t *testing.T) {
+	h := newHosted(t, "tok", nil)
+	store, c := cluster(t)
+	s := &Service{URL: h.url(), Path: "systems", Target: store, Token: token("tok"), Write: WritePullRequest}
+	store.Git = s
+
+	// An empty repository is a state, not an error.
+	st := s.Sync(context.Background())
+	if st.Error != "" || !st.Empty || st.Commit != "" {
+		t.Fatalf("empty repository: %+v", st)
+	}
+
+	// The first system made in the UI starts the branch, even in pull-request mode: there is
+	// nothing to open a request into yet.
+	_, _, err := store.Create(context.Background(), []byte(shop))
+	var proposed *descstore.ProposedError
+	if !errors.As(err, &proposed) || !proposed.Proposal.Direct || proposed.Proposal.Branch != "main" {
+		t.Fatalf("Create = %v, want a first commit on main", err)
+	}
+	if got := h.git(h.bare, "show", "main:systems/shop.yaml"); got != strings.TrimSpace(shop) {
+		t.Errorf("first file:\n%s", got)
+	}
+	st = s.Sync(context.Background())
+	if st.Empty || st.Error != "" || get(t, c, "shop") == nil {
+		t.Fatalf("after the first commit: %+v", st)
+	}
+}
+
+func TestFolderThatIsNotThereYet(t *testing.T) {
+	// The repository exists, with a README, but nobody made the folder yet.
+	h := newHosted(t, "tok", map[string]string{"README.md": "observability"})
+	store, c := cluster(t)
+	s := &Service{URL: h.url(), Path: "systems", Target: store, Token: token("tok"), Write: WriteCommit}
+	store.Git = s
+	if st := s.Sync(context.Background()); st.Error != "" || len(st.Files) != 0 {
+		t.Fatalf("a folder yet to be made is not an error: %+v", st)
+	}
+	if _, _, err := store.Create(context.Background(), []byte(shop)); err == nil {
+		t.Fatal("Create must answer with a proposal")
+	}
+	s.Sync(context.Background())
+	if get(t, c, "shop") == nil {
+		t.Fatal("the first system did not come back")
+	}
+	// Now a typo in the folder is an error again, and the system stays.
+	s.Path = "sistems"
+	h.git(h.bare, "update-ref", "refs/heads/keep", "main")
+	s.mu.Lock()
+	s.status.Commit = ""
+	s.mu.Unlock()
+	if st := s.Sync(context.Background()); !strings.Contains(st.Error, "not found") || get(t, c, "shop") == nil {
+		t.Fatalf("a typo after systems exist: %+v", st)
 	}
 }
 

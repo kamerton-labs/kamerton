@@ -57,6 +57,9 @@ type Target interface {
 	GitPaths(ctx context.Context, repo string) ([]string, error)
 }
 
+// errEmptyRepo: the repository has no commits yet, which is how every repository starts.
+var errEmptyRepo = errors.New("the repository is empty")
+
 // errNoFolder: the folder is not on the branch. A typo and a folder whose last file was
 // deleted look the same in git.
 var errNoFolder = errors.New("folder not found")
@@ -196,6 +199,8 @@ type Status struct {
 	CheckedAt time.Time `json:"checkedAt,omitzero"`
 	SyncedAt  time.Time `json:"syncedAt,omitzero"`
 	Error     string    `json:"error,omitempty"`
+	// Empty: the repository has no commits yet.
+	Empty bool `json:"empty,omitempty"`
 	// Write: pullRequest, commit or empty when the repository is only read.
 	Write   string       `json:"write,omitempty"`
 	Files   []FileStatus `json:"files"`
@@ -286,6 +291,15 @@ func (s *Service) Sync(ctx context.Context) Status {
 		return fail(err)
 	}
 	head, err := s.remoteHead(ctx, auth)
+	if errors.Is(err, errEmptyRepo) {
+		// Not a failure: nothing to read yet, and nothing is deleted. The first system made in
+		// the UI, or the first push, starts the branch.
+		s.mu.Lock()
+		s.status = Status{CheckedAt: now, Empty: true}
+		s.raw = nil
+		s.mu.Unlock()
+		return s.Status()
+	}
 	if err != nil {
 		return fail(err)
 	}
@@ -301,8 +315,9 @@ func (s *Service) Sync(ctx context.Context) Status {
 		return s.Status()
 	}
 	files, err := s.read(ctx, auth)
-	if errors.Is(err, errNoFolder) && s.hadFilesIn(ctx, cleanPath(s.Path)) {
-		// Systems were read from this folder before, so it is not a typo: its last file is gone.
+	if errors.Is(err, errNoFolder) && s.folderMayBeEmpty(ctx, cleanPath(s.Path)) {
+		// Either the folder's last file is gone, or nothing was ever read from this repository
+		// and the folder is yet to be made. A typo is told apart below.
 		files, err = nil, nil
 	}
 	if err != nil {
@@ -385,10 +400,16 @@ func (s *Service) firstTime(commit string, f FileStatus) bool {
 	return true
 }
 
-func (s *Service) hadFilesIn(ctx context.Context, root string) bool {
+// folderMayBeEmpty tells an empty folder from a mistyped one. A typo shows as systems that came
+// from this repository but from another folder: then the missing folder is an error, and
+// nothing is deleted. With no systems from this repository at all there is nothing to lose.
+func (s *Service) folderMayBeEmpty(ctx context.Context, root string) bool {
 	paths, err := s.Target.GitPaths(ctx, s.repoKey())
 	if err != nil {
 		return false
+	}
+	if len(paths) == 0 {
+		return true
 	}
 	for _, p := range paths {
 		if strings.HasPrefix(p, root+"/") {
@@ -431,6 +452,9 @@ func (s *Service) auth(ctx context.Context) (transport.AuthMethod, error) {
 func (s *Service) remoteHead(ctx context.Context, auth transport.AuthMethod) (string, error) {
 	remote := git.NewRemote(memory.NewStorage(), &gitconfig.RemoteConfig{Name: "origin", URLs: []string{s.URL}})
 	refs, err := remote.ListContext(ctx, &git.ListOptions{Auth: auth})
+	if errors.Is(err, transport.ErrEmptyRemoteRepository) {
+		return "", errEmptyRepo
+	}
 	if err != nil {
 		return "", s.gitErr("list branches", err)
 	}

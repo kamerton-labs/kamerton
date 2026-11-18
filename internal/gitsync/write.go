@@ -19,6 +19,7 @@ import (
 	gitconfig "github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
+	"github.com/go-git/go-git/v5/plumbing/transport"
 	"github.com/go-git/go-git/v5/storage/memory"
 
 	"github.com/kamerton-labs/kamerton/internal/descstore"
@@ -72,6 +73,16 @@ func (s *Service) Propose(ctx context.Context, c descstore.GitChange) (*descstor
 		URL: s.URL, Auth: auth, ReferenceName: plumbing.NewBranchReferenceName(s.branch()),
 		SingleBranch: true, Depth: 1, Tags: git.NoTags,
 	})
+	// An empty repository has nothing to clone and no branch to open a request into: the first
+	// change starts the followed branch, whatever the write mode.
+	first := errors.Is(err, transport.ErrEmptyRemoteRepository)
+	if first {
+		fs = memfs.New()
+		repo, err = git.InitWithOptions(memory.NewStorage(), fs, git.InitOptions{DefaultBranch: plumbing.NewBranchReferenceName(s.branch())})
+		if err == nil {
+			_, err = repo.CreateRemote(&gitconfig.RemoteConfig{Name: "origin", URLs: []string{s.URL}})
+		}
+	}
 	if err != nil {
 		return nil, s.gitErr("clone", err)
 	}
@@ -130,7 +141,7 @@ func (s *Service) Propose(ctx context.Context, c descstore.GitChange) (*descstor
 	if err != nil {
 		return nil, fmt.Errorf("commit: %w", err)
 	}
-	out := &descstore.GitProposal{Branch: s.branch(), Direct: s.Write == WriteCommit, Commit: hash.String()}
+	out := &descstore.GitProposal{Branch: s.branch(), Direct: s.Write == WriteCommit || first, Commit: hash.String()}
 	if !out.Direct {
 		out.Branch = branchPrefix + safeRef(c.System) + "-" + short(hash.String())
 	}
