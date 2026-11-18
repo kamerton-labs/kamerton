@@ -65,6 +65,8 @@ export interface GitProposal {
 }
 
 export interface SaveDescriptionResult {
+  /** 202: the change of a system kept in git is saved and waits for a push. */
+  staged?: boolean
   saved?: boolean
   source?: string
   mode?: string
@@ -118,11 +120,174 @@ export interface GitStatus {
   write?: 'pullRequest' | 'commit'
   files: { path: string; system?: string; state: 'applied' | 'unchanged' | 'invalid' | 'conflict' | 'failed'; error?: string }[]
   removed?: string[]
+  /** Name from the project file (kamerton.yaml); hasProjectFile is false for a repository laid out by the installation's settings. */
+  project?: string
+  hasProjectFile?: boolean
+  systemsPath?: string
+  generatedPath?: string
+  /** The repository has no commits yet. */
+  empty?: boolean
+  /** Open pull or merge requests Kamerton made, when the hosting service is known. */
+  requests?: GitRequest[]
+  repoURL?: string
+  commitURL?: string
+}
+
+export interface GitRequest {
+  system: string
+  title: string
+  url: string
+  branch: string
+}
+
+/** The connection to the repository as the UI edits it; the token is write-only. */
+export interface GitSettings {
+  url: string
+  branch?: string
+  path?: string
+  write?: '' | 'pullRequest' | 'commit'
+  provider?: string
+  apiURL?: string
+  commitStatus?: boolean
+}
+
+export interface GitSettingsView extends GitSettings {
+  /** False where a repository cannot be connected from the UI (no cluster). */
+  available: boolean
+  /** Set by the installation: shown, not editable. */
+  locked: boolean
+  connected: boolean
+  hasToken: boolean
+}
+
+export interface GitCheck {
+  ok: boolean
+  empty?: boolean
+  error?: string
+  files: number
+}
+
+const gitInvalidate = (qc: ReturnType<typeof useQueryClient>) => {
+  void qc.invalidateQueries({ queryKey: ['git'] })
+  void qc.invalidateQueries({ queryKey: ['systems'] })
+  void qc.invalidateQueries({ queryKey: ['system'] })
+}
+
+export const useGitSettings = () => useQuery({ queryKey: ['git', 'settings'], queryFn: () => request<GitSettingsView>('/git/settings') })
+
+export const testGitSettings = (v: GitSettings & { token?: string }) => postJSON<GitCheck>('/git/settings/test', v)
+
+export const useSaveGitSettings = () => {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (v: GitSettings & { token?: string }) =>
+      request<GitSettingsView>('/git/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(v) }),
+    onSuccess: () => gitInvalidate(qc),
+  })
+}
+
+export const useDisconnectGit = () => {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: () => request<GitSettingsView>('/git/settings', { method: 'DELETE' }),
+    onSuccess: () => gitInvalidate(qc),
+  })
+}
+
+export type GitChangeKind = 'change' | 'new' | 'delete' | 'move'
+
+/** A change saved in the UI and not pushed, with what it does to the rules. */
+export interface GitChange {
+  system: string
+  kind: GitChangeKind
+  path?: string
+  savedAt: string
+  author?: string
+  diff?: GitPreview['diff']
+  error?: string
+}
+
+export interface GitCommit {
+  hash: string
+  title: string
+  author: string
+  when: string
+  url?: string
+  systems?: string[]
+  applied?: boolean
+}
+
+export const useGitChanges = (enabled: boolean) =>
+  useQuery({ queryKey: ['git', 'changes'], queryFn: () => request<{ changes: GitChange[] }>('/git/changes'), enabled })
+
+export const useGitCommits = (enabled: boolean) =>
+  useQuery({ queryKey: ['git', 'commits'], queryFn: () => request<{ commits: GitCommit[] }>('/git/commits'), enabled, staleTime: 30_000 })
+
+export const useGitPush = () => {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (v: { message: string; systems?: string[] }) => postJSON<{ proposal: GitProposal }>('/git/push', v),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['git'] })
+      void qc.invalidateQueries({ queryKey: ['systems'] })
+      void qc.invalidateQueries({ queryKey: ['system'] })
+    },
+  })
+}
+
+export const useGitDiscard = () => {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (system: string) => request<{ discarded: boolean }>(`/git/changes/${encodeURIComponent(system)}`, { method: 'DELETE' }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['git'] })
+      void qc.invalidateQueries({ queryKey: ['systems'] })
+      void qc.invalidateQueries({ queryKey: ['system'] })
+    },
+  })
+}
+
+/** What a description would change if written to the repository (POST /git/preview). */
+export interface GitPreview {
+  system: string
+  mode: 'pullRequest' | 'commit'
+  branch: string
+  repo: string
+  repoURL?: string
+  file: string
+  new: boolean
+  /** A system made by hand that would move to git as it is. */
+  move?: boolean
+  diff: { total: number; new: boolean; changed: RuleLine[]; added: RuleLine[]; removed: RuleLine[] }
+}
+
+export interface RuleLine {
+  rule: string
+  what?: string
+}
+
+/** A change that may go to git: the commit message a person wrote travels in a header. */
+export interface GitNote {
+  message?: string
+}
+
+const noteHeaders = (note?: GitNote): Record<string, string> => (note?.message?.trim() ? { 'X-Kamerton-Message': encodeURIComponent(note.message.trim()) } : {})
+
+export const gitPreview = (yaml: string) => postYAML<GitPreview>('/git/preview', yaml)
+
+export const useGitSync = () => {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: () => request<GitStatus>('/git/sync', { method: 'POST' }),
+    onSettled: () => qc.invalidateQueries({ queryKey: ['systems'] }),
+  })
 }
 
 export interface SystemsResponse {
   mode: 'cluster' | 'file' | 'none'
   writable: boolean
+  /** Changes saved in the UI and not pushed yet. */
+  gitChanges?: { system: string; kind: GitChangeKind }[]
   /** Present when system descriptions are read from a git repository. */
   git?: GitStatus
   systems: SystemSummary[]
@@ -142,6 +307,10 @@ export interface SystemResponse {
   git?: GitSource
   /** How a save of a system from git is written to the repository; absent when it is read-only. */
   gitWrite?: 'pullRequest' | 'commit'
+  /** The file on the hosting service, when it is known. */
+  gitFileURL?: string
+  /** The kind of this system's saved, not pushed change; the yaml above is then that saved version. */
+  gitSaved?: GitChangeKind
   valid: boolean
   errors: Issue[]
   warnings: Issue[]
@@ -811,7 +980,14 @@ export const backtestRule = (id: string, req: RuleBacktestRequest) => postJSON<R
 export const useSaveSystem = (id: string) => {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: (yaml: string) => request<SaveDescriptionResult>(sys(id), { method: 'PUT', headers: { 'Content-Type': 'application/yaml' }, body: yaml }),
+    mutationFn: (v: string | ({ yaml: string } & GitNote)) => {
+      const yaml = typeof v === 'string' ? v : v.yaml
+      return request<SaveDescriptionResult>(sys(id), {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/yaml', ...noteHeaders(typeof v === 'string' ? undefined : v) },
+        body: yaml,
+      })
+    },
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['systems'] })
       void qc.invalidateQueries({ queryKey: ['telegram'] })
@@ -822,22 +998,36 @@ export const useSaveSystem = (id: string) => {
 export const useCreateSystem = () => {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: (yaml: string) =>
-      request<SaveDescriptionResult & { id: string }>('/systems', { method: 'POST', headers: { 'Content-Type': 'application/yaml' }, body: yaml }),
+    mutationFn: (v: string | ({ yaml: string } & GitNote)) =>
+      request<SaveDescriptionResult & { id: string }>('/systems', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/yaml', ...noteHeaders(typeof v === 'string' ? undefined : v) },
+        body: typeof v === 'string' ? v : v.yaml,
+      }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['systems'] }),
   })
 }
 
 /** Puts a system made by hand under the git repository; it keeps working until the merge. */
-export const useMoveToGit = () =>
-  useMutation({
-    mutationFn: (id: string) => request<{ proposed: boolean; proposal: GitProposal }>(`${sys(id)}/git`, { method: 'POST' }),
+export const useMoveToGit = () => {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) => request<{ staged: boolean }>(`${sys(id)}/git`, { method: 'POST' }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['git'] })
+      void qc.invalidateQueries({ queryKey: ['systems'] })
+    },
   })
+}
 
 export const useDeleteSystem = () => {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: (id: string) => request<{ deleted?: boolean; proposed?: boolean; proposal?: GitProposal }>(sys(id), { method: 'DELETE' }),
+    mutationFn: (v: string | ({ id: string } & GitNote)) =>
+      request<{ deleted?: boolean; staged?: boolean }>(sys(typeof v === 'string' ? v : v.id), {
+        method: 'DELETE',
+        headers: noteHeaders(typeof v === 'string' ? undefined : v),
+      }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['systems'] }),
   })
 }

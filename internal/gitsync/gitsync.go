@@ -57,6 +57,9 @@ type Target interface {
 	GitPaths(ctx context.Context, repo string) ([]string, error)
 }
 
+// errEmptyRepo: the repository has no commits yet, which is how every repository starts.
+var errEmptyRepo = errors.New("the repository is empty")
+
 // errNoFolder: the folder is not on the branch. A typo and a folder whose last file was
 // deleted look the same in git.
 var errNoFolder = errors.New("folder not found")
@@ -81,9 +84,11 @@ type Service struct {
 	// files generated from the description (<GeneratedPath>/<system>/), made by Generate.
 	GeneratedPath string
 	Generate      func(description []byte) (map[string][]byte, error)
-	Interval      time.Duration
-	Logger        *slog.Logger
-	Now           func() time.Time
+	// Pending keeps the changes saved in the UI until they are pushed; nil: in memory.
+	Pending  PendingStore
+	Interval time.Duration
+	Logger   *slog.Logger
+	Now      func() time.Time
 
 	mu     sync.Mutex
 	status Status
@@ -92,6 +97,50 @@ type Service struct {
 	raw map[string][]byte
 	// reported is the commit and outcome last sent as a commit status.
 	reported string
+	// requests are the open requests seen at the last look.
+	requests []Request
+	// lay is the layout seen at the last read.
+	lay layout
+	// commits is the history read while the branch stood at commitsAt.
+	commits   []Commit
+	commitsAt string
+}
+
+// webBase is the repository's address for a browser; empty when the URL is not http(s).
+func (s *Service) webBase() string {
+	if !isHTTP(s.URL) {
+		return ""
+	}
+	return strings.TrimSuffix(s.Repo(), ".git")
+}
+
+// FileURL opens a file of the followed branch on the hosting service; empty when unknown.
+func (s *Service) FileURL(file string) string {
+	h, base := s.host(), s.webBase()
+	if h == nil || base == "" {
+		return ""
+	}
+	return h.web(base, "file", s.branch(), file)
+}
+
+// refreshRequests looks up the open requests; a failure keeps the last list.
+func (s *Service) refreshRequests(ctx context.Context) {
+	h := s.host()
+	if h == nil || s.Token == nil || !s.WriteEnabled() {
+		return
+	}
+	tok, err := s.Token(ctx)
+	if err != nil || strings.TrimSpace(tok) == "" {
+		return
+	}
+	list, err := h.openRequests(ctx, strings.TrimSpace(tok))
+	if err != nil {
+		s.log().Debug("git: open requests unavailable", "error", err)
+		return
+	}
+	s.mu.Lock()
+	s.requests = list
+	s.mu.Unlock()
 }
 
 // Raw returns a file as it was at the last read.
@@ -157,10 +206,23 @@ type Status struct {
 	CheckedAt time.Time `json:"checkedAt,omitzero"`
 	SyncedAt  time.Time `json:"syncedAt,omitzero"`
 	Error     string    `json:"error,omitempty"`
+	// Project is the name in the project file; HasProjectFile is false for a repository laid
+	// out by the installation's settings. SystemsPath and GeneratedPath are where files are.
+	Project        string `json:"project,omitempty"`
+	HasProjectFile bool   `json:"hasProjectFile"`
+	SystemsPath    string `json:"systemsPath,omitempty"`
+	GeneratedPath  string `json:"generatedPath,omitempty"`
+	// Empty: the repository has no commits yet.
+	Empty bool `json:"empty,omitempty"`
 	// Write: pullRequest, commit or empty when the repository is only read.
 	Write   string       `json:"write,omitempty"`
 	Files   []FileStatus `json:"files"`
 	Removed []string     `json:"removed,omitempty"`
+	// Requests are the open pull or merge requests Kamerton made, when the hosting service is known.
+	Requests []Request `json:"requests,omitempty"`
+	// RepoURL and CommitURL open the repository and the applied commit on the hosting service.
+	RepoURL   string `json:"repoURL,omitempty"`
+	CommitURL string `json:"commitURL,omitempty"`
 }
 
 // NeedLeaderElection: one replica writes.
@@ -191,6 +253,14 @@ func (s *Service) Status() Status {
 	st := s.status
 	st.Repo, st.Branch, st.Path = s.Repo(), s.branch(), cleanPath(s.Path)
 	st.Write = s.WriteMode()
+	st.Project, st.SystemsPath, st.GeneratedPath, st.HasProjectFile = s.lay.name, s.lay.systems, s.lay.generated, s.lay.manifest
+	st.Requests = s.requests
+	if base := s.webBase(); base != "" {
+		st.RepoURL = base
+		if h := s.host(); h != nil && st.Commit != "" {
+			st.CommitURL = h.web(base, "commit", st.Commit, "")
+		}
+	}
 	if st.Files == nil {
 		st.Files = []FileStatus{}
 	}
@@ -235,9 +305,19 @@ func (s *Service) Sync(ctx context.Context) Status {
 		return fail(err)
 	}
 	head, err := s.remoteHead(ctx, auth)
+	if errors.Is(err, errEmptyRepo) {
+		// Not a failure: nothing to read yet, and nothing is deleted. The first system made in
+		// the UI, or the first push, starts the branch.
+		s.mu.Lock()
+		s.status = Status{CheckedAt: now, Empty: true}
+		s.raw = nil
+		s.mu.Unlock()
+		return s.Status()
+	}
 	if err != nil {
 		return fail(err)
 	}
+	s.refreshRequests(ctx)
 	s.mu.Lock()
 	last, clean := s.status.Commit, s.status.Error == "" && !hasProblems(s.status.Files)
 	s.mu.Unlock()
@@ -248,9 +328,10 @@ func (s *Service) Sync(ctx context.Context) Status {
 		s.mu.Unlock()
 		return s.Status()
 	}
-	files, err := s.read(ctx, auth)
-	if errors.Is(err, errNoFolder) && s.hadFilesIn(ctx, cleanPath(s.Path)) {
-		// Systems were read from this folder before, so it is not a typo: its last file is gone.
+	files, lay, err := s.read(ctx, auth)
+	if errors.Is(err, errNoFolder) && s.folderMayBeEmpty(ctx, lay.systems) {
+		// Either the folder's last file is gone, or nothing was ever read from this repository
+		// and the folder is yet to be made. A typo is told apart below.
 		files, err = nil, nil
 	}
 	if err != nil {
@@ -312,6 +393,7 @@ func (s *Service) Sync(ctx context.Context) Status {
 	s.mu.Lock()
 	s.status = Status{Commit: head, CheckedAt: now, SyncedAt: now, Files: out, Removed: removed}
 	s.raw = raw
+	s.lay = lay
 	s.mu.Unlock()
 	st := s.Status()
 	s.report(ctx, st)
@@ -333,10 +415,16 @@ func (s *Service) firstTime(commit string, f FileStatus) bool {
 	return true
 }
 
-func (s *Service) hadFilesIn(ctx context.Context, root string) bool {
+// folderMayBeEmpty tells an empty folder from a mistyped one. A typo shows as systems that came
+// from this repository but from another folder: then the missing folder is an error, and
+// nothing is deleted. With no systems from this repository at all there is nothing to lose.
+func (s *Service) folderMayBeEmpty(ctx context.Context, root string) bool {
 	paths, err := s.Target.GitPaths(ctx, s.repoKey())
 	if err != nil {
 		return false
+	}
+	if len(paths) == 0 {
+		return true
 	}
 	for _, p := range paths {
 		if strings.HasPrefix(p, root+"/") {
@@ -379,6 +467,9 @@ func (s *Service) auth(ctx context.Context) (transport.AuthMethod, error) {
 func (s *Service) remoteHead(ctx context.Context, auth transport.AuthMethod) (string, error) {
 	remote := git.NewRemote(memory.NewStorage(), &gitconfig.RemoteConfig{Name: "origin", URLs: []string{s.URL}})
 	refs, err := remote.ListContext(ctx, &git.ListOptions{Auth: auth})
+	if errors.Is(err, transport.ErrEmptyRemoteRepository) {
+		return "", errEmptyRepo
+	}
 	if err != nil {
 		return "", s.gitErr("list branches", err)
 	}
@@ -397,41 +488,47 @@ type file struct {
 }
 
 // read clones the tip of the branch into memory and returns the description files under Path.
-func (s *Service) read(ctx context.Context, auth transport.AuthMethod) ([]file, error) {
+func (s *Service) read(ctx context.Context, auth transport.AuthMethod) ([]file, layout, error) {
 	fs := memfs.New()
 	_, err := git.CloneContext(ctx, memory.NewStorage(), fs, &git.CloneOptions{
 		URL: s.URL, Auth: auth, ReferenceName: plumbing.NewBranchReferenceName(s.branch()),
 		SingleBranch: true, Depth: 1, Tags: git.NoTags,
 	})
 	if err != nil {
-		return nil, s.gitErr("clone", err)
+		return nil, layout{}, s.gitErr("clone", err)
 	}
-	root := cleanPath(s.Path)
-	if root != "" {
-		if st, err := fs.Stat(root); err != nil || !st.IsDir() {
-			return nil, fmt.Errorf("%w: %q on branch %s", errNoFolder, root, s.branch())
+	lay, err := s.layoutOf(fs)
+	if err != nil {
+		return nil, lay, err
+	}
+	if lay.systems != "" {
+		if st, err := fs.Stat(lay.systems); err != nil || !st.IsDir() {
+			return nil, lay, fmt.Errorf("%w: %q on branch %s", errNoFolder, lay.systems, s.branch())
 		}
 	}
 	var out []file
-	if err := walk(fs, root, &out); err != nil {
-		return nil, err
+	if err := walk(fs, lay.systems, lay, &out); err != nil {
+		return nil, lay, err
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].path < out[j].path })
-	return out, nil
+	return out, lay, nil
 }
 
-func walk(fs billy.Filesystem, dir string, out *[]file) error {
+func walk(fs billy.Filesystem, dir string, lay layout, out *[]file) error {
 	entries, err := fs.ReadDir(dir)
 	if err != nil {
 		return fmt.Errorf("read folder %q: %w", dir, err)
 	}
 	for _, e := range entries {
 		p := path.Join(dir, e.Name())
+		if lay.skip(p) {
+			continue
+		}
 		if e.IsDir() {
 			if strings.HasPrefix(e.Name(), ".") {
 				continue
 			}
-			if err := walk(fs, p, out); err != nil {
+			if err := walk(fs, p, lay, out); err != nil {
 				return err
 			}
 			continue

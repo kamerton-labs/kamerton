@@ -114,11 +114,10 @@ func (c *Cluster) Create(ctx context.Context, raw []byte) (*Snapshot, descriptio
 		if !apierrors.IsNotFound(err) {
 			return nil, res, err
 		}
-		p, err := c.Git.Propose(ctx, GitChange{System: doc.Name, Content: raw, New: true})
-		if err != nil {
-			return nil, res, fmt.Errorf("write the new system to git: %w", err)
+		if err := c.Git.Stage(ctx, noteFrom(ctx, GitChange{System: doc.Name, Content: raw, New: true})); err != nil {
+			return nil, res, fmt.Errorf("save the new system: %w", err)
 		}
-		return nil, res, &ProposedError{Proposal: *p}
+		return nil, res, ErrStaged
 	}
 	obj := &v1alpha1.SystemDescription{}
 	obj.Name, obj.Namespace = doc.Name, ns

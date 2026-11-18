@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/url"
+	"path"
 	"sync"
 	"time"
 
@@ -19,6 +21,8 @@ import (
 	"github.com/kamerton-labs/kamerton/internal/description"
 	"github.com/kamerton-labs/kamerton/internal/descstore"
 	"github.com/kamerton-labs/kamerton/internal/generator"
+	"github.com/kamerton-labs/kamerton/internal/gitsync"
+	"github.com/kamerton-labs/kamerton/internal/rulediff"
 	"github.com/kamerton-labs/kamerton/internal/rules"
 	"github.com/kamerton-labs/kamerton/internal/stack"
 )
@@ -130,8 +134,16 @@ func (s *Server) listSystems(w http.ResponseWriter, r *http.Request) {
 		"mode": s.opts.Descriptions.Mode(), "writable": s.opts.Descriptions.Mode() != descstore.ModeNone,
 		"systems": out, "alertsConfigured": configured, "starter": starterDescription, "stacks": nsets,
 	}
-	if s.opts.Git != nil {
-		resp["git"] = s.opts.Git.Status()
+	if s.git() != nil {
+		st := s.git().Status()
+		resp["git"] = st
+		if list, err := s.git().Changes(ctx); err == nil {
+			saved := make([]map[string]string, 0, len(list))
+			for _, c := range list {
+				saved = append(saved, map[string]string{"system": c.System, "kind": c.Kind})
+			}
+			resp["gitChanges"] = saved
+		}
 	}
 	if aerr != nil {
 		resp["alertsError"] = aerr.Error()
@@ -269,13 +281,23 @@ func (s *Server) getSystem(w http.ResponseWriter, r *http.Request) {
 		resp["git"] = from
 		// Read-only unless Kamerton may write to the repository; then a save is a proposal there.
 		resp["writable"] = false
-		if g := s.opts.Git; g != nil {
+		if g := s.git(); g != nil {
 			if mode := g.WriteMode(); mode != "" {
 				resp["writable"], resp["gitWrite"] = true, mode
 			}
 			// The file as people wrote it, comments included, so a save changes only what was edited.
 			if raw, ok := g.Raw(from.Path); ok && snap.SD != nil {
 				resp["yaml"] = string(raw)
+			}
+			if u := g.FileURL(from.Path); u != "" {
+				resp["gitFileURL"] = u
+			}
+			if c, ok := g.Saved(r.Context(), snap.Name()); ok {
+				// The saved, not pushed version is what the person goes on editing.
+				resp["gitSaved"] = c.Kind
+				if c.Content != nil {
+					resp["yaml"] = string(c.Content)
+				}
 			}
 		}
 	}
@@ -295,7 +317,7 @@ func (s *Server) createSystem(w http.ResponseWriter, r *http.Request) {
 	if !s.allowSave(ctx, w, body, nil) {
 		return
 	}
-	snap, res, err := s.opts.Descriptions.Create(ctx, body)
+	snap, res, err := s.opts.Descriptions.Create(s.gitNote(ctx, r), body)
 	if err != nil {
 		writeStoreErr(w, err)
 		return
@@ -316,7 +338,7 @@ func (s *Server) putSystem(w http.ResponseWriter, r *http.Request) {
 	if !s.allowSave(ctx, w, body, stored) {
 		return
 	}
-	snap, res, err := s.opts.Descriptions.Save(ctx, r.PathValue("id"), body)
+	snap, res, err := s.opts.Descriptions.Save(s.gitNote(ctx, r), r.PathValue("id"), body)
 	if err != nil {
 		writeStoreErr(w, err)
 		return
@@ -325,19 +347,284 @@ func (s *Server) putSystem(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"saved": true, "id": snap.ID, "source": snap.Source, "mode": s.opts.Descriptions.Mode(), "warnings": append(res.Warnings, s.stackWarnings(ctx, stackOf(snap))...)})
 }
 
+// git returns the repository in use, or nil.
+func (s *Server) git() *gitsync.Service {
+	if r := s.opts.GitRunner; r != nil {
+		return r.Current(context.Background())
+	}
+	return s.opts.Git
+}
+
+type gitSettingsBody struct {
+	gitsync.Settings
+	// Token is write-only: it goes to the Secret and is never returned.
+	Token string `json:"token"`
+}
+
+func (s *Server) gitSettings(w http.ResponseWriter, r *http.Request) {
+	if s.opts.GitRunner == nil {
+		v := gitsync.View{}
+		if g := s.opts.Git; g != nil {
+			v = gitsync.View{Locked: true, Connected: true, Settings: gitsync.Settings{URL: g.Repo(), Write: g.WriteMode()}}
+		}
+		writeJSON(w, http.StatusOK, v)
+		return
+	}
+	writeJSON(w, http.StatusOK, s.opts.GitRunner.View(r.Context()))
+}
+
+func (s *Server) readGitSettings(w http.ResponseWriter, r *http.Request) (*gitSettingsBody, bool) {
+	if s.opts.GitRunner == nil {
+		writeError(w, http.StatusConflict, "git_unavailable", "a repository can be connected only in a cluster")
+		return nil, false
+	}
+	body, ok := readBody(w, r)
+	if !ok {
+		return nil, false
+	}
+	var in gitSettingsBody
+	if err := json.Unmarshal(body, &in); err != nil {
+		writeError(w, http.StatusBadRequest, "bad_request", "the request body is not JSON")
+		return nil, false
+	}
+	return &in, true
+}
+
+// testGitSettings reads the repository with the given settings; nothing is stored or changed.
+func (s *Server) testGitSettings(w http.ResponseWriter, r *http.Request) {
+	in, ok := s.readGitSettings(w, r)
+	if !ok {
+		return
+	}
+	writeJSON(w, http.StatusOK, s.opts.GitRunner.Try(r.Context(), in.Settings, in.Token))
+}
+
+func (s *Server) putGitSettings(w http.ResponseWriter, r *http.Request) {
+	in, ok := s.readGitSettings(w, r)
+	if !ok {
+		return
+	}
+	// A repository that cannot be read is not connected: the mistake shows now, not a minute later.
+	if c := s.opts.GitRunner.Try(r.Context(), in.Settings, in.Token); !c.OK {
+		writeError(w, http.StatusUnprocessableEntity, "git_unreachable", c.Error)
+		return
+	}
+	if err := s.opts.GitRunner.Connect(r.Context(), in.Settings, in.Token); err != nil {
+		writeError(w, http.StatusConflict, "git_connect_failed", err.Error())
+		return
+	}
+	s.log.Info("git: settings changed from the UI")
+	writeJSON(w, http.StatusOK, s.opts.GitRunner.View(r.Context()))
+}
+
+func (s *Server) deleteGitSettings(w http.ResponseWriter, r *http.Request) {
+	if s.opts.GitRunner == nil {
+		writeError(w, http.StatusConflict, "git_unavailable", "a repository can be connected only in a cluster")
+		return
+	}
+	if err := s.opts.GitRunner.Disconnect(r.Context()); err != nil {
+		writeError(w, http.StatusConflict, "git_disconnect_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, s.opts.GitRunner.View(r.Context()))
+}
+
+// gitNote carries the commit message a person wrote (header X-Kamerton-Message, percent-encoded)
+// and their login into a save that may end up in the repository.
+func (s *Server) gitNote(ctx context.Context, r *http.Request) context.Context {
+	msg, err := url.PathUnescape(r.Header.Get("X-Kamerton-Message"))
+	if err != nil || len(msg) > 2000 {
+		msg = ""
+	}
+	author := ""
+	if a := s.opts.Auth; a != nil {
+		author, _ = a.session(r)
+	}
+	return descstore.WithGitNote(ctx, msg, author)
+}
+
+// gitSync looks at the repository now instead of waiting for the next tick.
+func (s *Server) gitSync(w http.ResponseWriter, r *http.Request) {
+	if s.git() == nil {
+		writeError(w, http.StatusConflict, "git_off", "system descriptions are not read from git")
+		return
+	}
+	writeJSON(w, http.StatusOK, s.git().Sync(r.Context()))
+}
+
+// gitPreview says what a description would change if it were written to the repository: where
+// it goes and which rules differ from what is there now. Nothing is written.
+func (s *Server) gitPreview(w http.ResponseWriter, r *http.Request) {
+	body, ok := readBody(w, r)
+	if !ok {
+		return
+	}
+	g := s.git()
+	if g == nil || g.WriteMode() == "" {
+		writeError(w, http.StatusConflict, "git_off", "writing to git is off")
+		return
+	}
+	res := description.Validate(body)
+	if !res.Valid || res.Document == nil {
+		writeInvalid(w, res)
+		return
+	}
+	after := res.Document
+	st := g.Status()
+	out := map[string]any{"system": after.Name, "mode": g.WriteMode(), "branch": st.Branch, "repo": st.Repo, "repoURL": st.RepoURL}
+	var before *v1alpha1.SystemDescription
+	file := path.Join(st.Path, after.Name+".yaml")
+	if stored := s.storedByName(r.Context(), after); stored != nil && stored.SD != nil {
+		before = stored.SD
+		if from := descstore.FromGit(stored.SD); from != nil {
+			file = from.Path
+			// Compare with the file, not the cluster: the two differ while a file has an error.
+			if raw, ok := g.Raw(from.Path); ok {
+				if doc := description.Validate(raw).Document; doc != nil {
+					before = doc
+				}
+			}
+		} else {
+			// A system made by hand: its description moves to git unchanged.
+			out["move"] = true
+		}
+	}
+	out["file"], out["new"] = file, before == nil
+	d, err := rulediff.Compare(before, after)
+	if err != nil {
+		writeError(w, http.StatusUnprocessableEntity, "generation_failed", err.Error())
+		return
+	}
+	out["diff"] = d
+	writeJSON(w, http.StatusOK, out)
+}
+
+// gitChange is a saved change with what it does to the rules.
+type gitChange struct {
+	System  string           `json:"system"`
+	Kind    string           `json:"kind"`
+	Path    string           `json:"path,omitempty"`
+	SavedAt time.Time        `json:"savedAt"`
+	Author  string           `json:"author,omitempty"`
+	Diff    *rulediff.Result `json:"diff,omitempty"`
+	Error   string           `json:"error,omitempty"`
+}
+
+// gitChanges lists the changes saved in the UI and not pushed, each with its effect on the rules.
+func (s *Server) gitChanges(w http.ResponseWriter, r *http.Request) {
+	g := s.git()
+	if g == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"changes": []gitChange{}})
+		return
+	}
+	list, err := g.Changes(r.Context())
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "changes_unavailable", err.Error())
+		return
+	}
+	out := make([]gitChange, 0, len(list))
+	for _, c := range list {
+		one := gitChange{System: c.System, Kind: c.Kind, Path: c.Path, SavedAt: c.SavedAt, Author: c.Author}
+		if c.Kind != gitsync.KindDelete {
+			after := description.Validate(c.Content).Document
+			if after == nil {
+				one.Error = "the saved description has errors"
+			} else {
+				var before *v1alpha1.SystemDescription
+				if c.Kind == gitsync.KindChange {
+					if raw, ok := g.Raw(c.Path); ok {
+						before = description.Validate(raw).Document
+					}
+					if before == nil {
+						if stored := s.storedByName(r.Context(), after); stored != nil {
+							before = stored.SD
+						}
+					}
+				}
+				if d, err := rulediff.Compare(before, after); err == nil {
+					one.Diff = &d
+				} else {
+					one.Error = err.Error()
+				}
+			}
+		}
+		out = append(out, one)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"changes": out})
+}
+
+func (s *Server) gitDiscard(w http.ResponseWriter, r *http.Request) {
+	if s.git() == nil {
+		writeError(w, http.StatusConflict, "git_off", "system descriptions are not read from git")
+		return
+	}
+	if err := s.git().Discard(r.Context(), r.PathValue("system")); err != nil {
+		writeError(w, http.StatusBadGateway, "discard_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"discarded": true})
+}
+
+// gitPush writes the saved changes to the repository in one commit.
+func (s *Server) gitPush(w http.ResponseWriter, r *http.Request) {
+	g := s.git()
+	if g == nil || g.WriteMode() == "" {
+		writeError(w, http.StatusConflict, "git_off", "writing to git is off")
+		return
+	}
+	var in struct {
+		Message string   `json:"message"`
+		Systems []string `json:"systems"`
+	}
+	body, ok := readBody(w, r)
+	if !ok {
+		return
+	}
+	if len(body) > 0 {
+		if err := json.Unmarshal(body, &in); err != nil {
+			writeError(w, http.StatusBadRequest, "bad_request", "the request body is not JSON")
+			return
+		}
+	}
+	author := ""
+	if a := s.opts.Auth; a != nil {
+		author, _ = a.session(r)
+	}
+	p, err := g.Push(r.Context(), in.Systems, in.Message, author)
+	if err != nil {
+		writeError(w, http.StatusConflict, "push_failed", err.Error())
+		return
+	}
+	s.log.Info("git: pushed from the UI", "branch", p.Branch, "commit", p.Commit)
+	writeJSON(w, http.StatusOK, map[string]any{"proposal": p})
+}
+
+func (s *Server) gitCommits(w http.ResponseWriter, r *http.Request) {
+	if s.git() == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"commits": []gitsync.Commit{}})
+		return
+	}
+	list, err := s.git().Commits(r.Context(), 30)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "commits_unavailable", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"commits": list})
+}
+
 // moveSystemToGit puts a system made by hand under the repository: its description becomes a
 // file there, and the file takes the system over once it is merged.
 func (s *Server) moveSystemToGit(w http.ResponseWriter, r *http.Request) {
 	mover, ok := s.opts.Descriptions.(interface {
-		MoveToGit(ctx context.Context, id string) (*descstore.GitProposal, error)
+		MoveToGit(ctx context.Context, id string) error
 	})
-	if !ok || s.opts.Git == nil || s.opts.Git.WriteMode() == "" {
+	if !ok || s.git() == nil || s.git().WriteMode() == "" {
 		writeError(w, http.StatusConflict, "git_off", "writing to git is off: set git.url and git.write")
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
 	defer cancel()
-	p, err := mover.MoveToGit(ctx, r.PathValue("id"))
+	err := mover.MoveToGit(s.gitNote(ctx, r), r.PathValue("id"))
 	if errors.Is(err, descstore.ErrNoDescription) {
 		writeError(w, http.StatusNotFound, "not_found", "no such system")
 		return
@@ -346,14 +633,13 @@ func (s *Server) moveSystemToGit(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "move_failed", err.Error())
 		return
 	}
-	s.log.Info("system moved to git", "system", r.PathValue("id"), "branch", p.Branch)
-	writeJSON(w, http.StatusAccepted, map[string]any{"proposed": true, "proposal": p})
+	writeJSON(w, http.StatusAccepted, map[string]any{"staged": true})
 }
 
 func (s *Server) deleteSystem(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
-	if err := s.opts.Descriptions.Delete(ctx, r.PathValue("id")); err != nil {
+	if err := s.opts.Descriptions.Delete(s.gitNote(ctx, r), r.PathValue("id")); err != nil {
 		writeStoreErr(w, err)
 		return
 	}

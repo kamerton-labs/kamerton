@@ -43,6 +43,28 @@ type GitChange struct {
 	Content []byte
 	// New: the system has no file yet; the writer picks the path and refuses to overwrite.
 	New bool
+	// Move: a system made by hand whose description goes to the repository as it is.
+	Move bool
+	// Message is the commit message a person wrote; empty: Kamerton words it. Author is who
+	// made the change in the UI, when login is on.
+	Message, Author string
+}
+
+type gitNoteKey struct{}
+
+type gitNote struct{ message, author string }
+
+// WithGitNote attaches a commit message and the name of the person to a save that may end up
+// in the repository.
+func WithGitNote(ctx context.Context, message, author string) context.Context {
+	return context.WithValue(ctx, gitNoteKey{}, gitNote{message: message, author: author})
+}
+
+func noteFrom(ctx context.Context, c GitChange) GitChange {
+	if n, ok := ctx.Value(gitNoteKey{}).(gitNote); ok {
+		c.Message, c.Author = n.message, n.author
+	}
+	return c
 }
 
 // GitProposal says where a change went.
@@ -63,7 +85,12 @@ type GitWriter interface {
 	// RepoKey identifies the repository and branch, as in GitSource.Repo.
 	RepoKey() string
 	Propose(ctx context.Context, c GitChange) (*GitProposal, error)
+	// Stage saves the change for a later push; nothing is written to the repository.
+	Stage(ctx context.Context, c GitChange) error
 }
+
+// ErrStaged is not a failure: the change of a system kept in git was saved and waits for a push.
+var ErrStaged = errors.New("saved; not pushed yet")
 
 // ProposedError is not a failure: the change of a system kept in git was written to the
 // repository and is not in the cluster yet.
@@ -79,21 +106,22 @@ func (e *ProposedError) Error() string {
 	return "the change was pushed to branch " + e.Proposal.Branch + "; it applies after that branch is merged"
 }
 
-// MoveToGit writes a system made by hand to the repository as a new file and lets that file
-// take the system over once it is on the followed branch. Until then the system works as before.
-func (c *Cluster) MoveToGit(ctx context.Context, id string) (*GitProposal, error) {
+// MoveToGit saves a system made by hand as a change to push: a new file with its description.
+// Once that file is on the followed branch it takes the system over; until then the system
+// works as before.
+func (c *Cluster) MoveToGit(ctx context.Context, id string) error {
 	if c.Git == nil || !c.Git.WriteEnabled() {
-		return nil, errors.New("writing to git is off (git.write)")
+		return errors.New("writing to git is off (git.write)")
 	}
 	cur, err := c.Get(ctx, id)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	if cur.SD == nil {
-		return nil, errors.New("the stored description has errors; fix it first")
+		return errors.New("the stored description has errors; fix it first")
 	}
 	if FromGit(cur.SD) != nil {
-		return nil, errors.New("this system already comes from git")
+		return errors.New("this system already comes from git")
 	}
 	key := types.NamespacedName{Namespace: cur.SD.Namespace, Name: cur.SD.Name}
 	mark := func(repo string) error {
@@ -113,14 +141,13 @@ func (c *Cluster) MoveToGit(ctx context.Context, id string) (*GitProposal, error
 	}
 	// The file is the description as it was before the mark, so the mark is not in it.
 	if err := mark(c.Git.RepoKey()); err != nil {
-		return nil, err
+		return err
 	}
-	p, err := c.Git.Propose(ctx, GitChange{System: cur.SD.Name, Content: cur.Raw, New: true})
-	if err != nil {
+	if err := c.Git.Stage(ctx, noteFrom(ctx, GitChange{System: cur.SD.Name, Content: cur.Raw, New: true, Move: true})); err != nil {
 		_ = mark("")
-		return nil, fmt.Errorf("write the system to git: %w", err)
+		return fmt.Errorf("save the change: %w", err)
 	}
-	return p, nil
+	return nil
 }
 
 // propose sends a change of a git system to the repository, or refuses when it is read-only.
@@ -129,11 +156,10 @@ func (c *Cluster) propose(ctx context.Context, sd *v1alpha1.SystemDescription, c
 	if c.Git == nil || !c.Git.WriteEnabled() {
 		return ErrFromGit
 	}
-	p, err := c.Git.Propose(ctx, GitChange{System: sd.Name, Path: from.Path, Content: content})
-	if err != nil {
-		return fmt.Errorf("write the change to git: %w", err)
+	if err := c.Git.Stage(ctx, noteFrom(ctx, GitChange{System: sd.Name, Path: from.Path, Content: content})); err != nil {
+		return fmt.Errorf("save the change: %w", err)
 	}
-	return &ProposedError{Proposal: *p}
+	return ErrStaged
 }
 
 // GitSource says where a system's file is.
@@ -259,6 +285,33 @@ func (c *Cluster) GitPaths(ctx context.Context, repo string) ([]string, error) {
 		}
 	}
 	return out, nil
+}
+
+// ReleaseGit makes the systems of a repository ordinary again: they stay as they are, lose the
+// marks of their source and become editable in the UI. Used when a repository is disconnected.
+func (c *Cluster) ReleaseGit(ctx context.Context, repo string) error {
+	var list v1alpha1.SystemDescriptionList
+	var opts []client.ListOption
+	if c.WatchNamespace != "" {
+		opts = append(opts, client.InNamespace(c.WatchNamespace))
+	}
+	if err := c.Client.List(ctx, &list, opts...); err != nil {
+		return err
+	}
+	for i := range list.Items {
+		sd := &list.Items[i]
+		from := FromGit(sd)
+		if (from == nil || from.Repo != repo) && sd.Annotations[AnnotationGitAdopt] != repo {
+			continue
+		}
+		for _, k := range []string{AnnotationGitRepo, AnnotationGitPath, AnnotationGitCommit, AnnotationGitAdopt} {
+			delete(sd.Annotations, k)
+		}
+		if err := c.Client.Update(ctx, sd); err != nil {
+			return fmt.Errorf("update SystemDescription %s/%s: %w", sd.Namespace, sd.Name, err)
+		}
+	}
+	return nil
 }
 
 // GitKey is the key PruneGit expects for the system of a file.

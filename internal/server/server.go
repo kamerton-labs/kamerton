@@ -58,8 +58,10 @@ type Options struct {
 	NewPrometheus        func(url string) (prometheus.Querier, error)
 	NewAlertmanager      func(url string) alertmanager.Reader
 	Generator            generator.Options
-	// Git reads system descriptions from a repository; nil: off.
-	Git *gitsync.Service
+	// Git reads system descriptions from a repository; nil: off. GitRunner, when set, holds the
+	// repository instead and lets the UI connect, change and disconnect it.
+	Git       *gitsync.Service
+	GitRunner *gitsync.Runner
 	// TailMute silences the consequences of an incident for a while after its cause is gone;
 	// the server tells it which Alertmanager a system uses. Nil: off.
 	TailMute *tailmute.Service
@@ -210,6 +212,16 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/systems/{id}", s.getSystem)
 	mux.HandleFunc("PUT /api/v1/systems/{id}", s.putSystem)
 	mux.HandleFunc("POST /api/v1/systems/{id}/git", s.moveSystemToGit)
+	mux.HandleFunc("POST /api/v1/git/sync", s.gitSync)
+	mux.HandleFunc("POST /api/v1/git/preview", s.gitPreview)
+	mux.HandleFunc("GET /api/v1/git/changes", s.gitChanges)
+	mux.HandleFunc("DELETE /api/v1/git/changes/{system}", s.gitDiscard)
+	mux.HandleFunc("POST /api/v1/git/push", s.gitPush)
+	mux.HandleFunc("GET /api/v1/git/commits", s.gitCommits)
+	mux.HandleFunc("GET /api/v1/git/settings", s.gitSettings)
+	mux.HandleFunc("PUT /api/v1/git/settings", s.putGitSettings)
+	mux.HandleFunc("POST /api/v1/git/settings/test", s.testGitSettings)
+	mux.HandleFunc("DELETE /api/v1/git/settings", s.deleteGitSettings)
 	mux.HandleFunc("DELETE /api/v1/systems/{id}", s.deleteSystem)
 	mux.HandleFunc("POST /api/v1/systems/{id}/validate", s.validateSystem)
 	mux.HandleFunc("POST /api/v1/systems/{id}/rules/preview", s.previewSystemRules)
@@ -737,6 +749,9 @@ func writeStoreErr(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusConflict, "conflict", err.Error())
 	case errors.Is(err, descstore.ErrExists):
 		writeError(w, http.StatusConflict, "exists", err.Error())
+	case errors.Is(err, descstore.ErrStaged):
+		// Accepted and kept: the change waits for a push; nothing in the repository or the cluster changed.
+		writeJSON(w, http.StatusAccepted, map[string]any{"staged": true})
 	case errors.As(err, &proposed):
 		// Accepted, not applied: the change is in the repository and waits for a merge or the next read.
 		writeJSON(w, http.StatusAccepted, map[string]any{"proposed": true, "message": proposed.Error(), "proposal": proposed.Proposal})

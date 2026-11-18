@@ -22,10 +22,8 @@ import (
 	"github.com/go-logr/logr"
 	"golang.org/x/sync/errgroup"
 	corev1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/types"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
@@ -170,35 +168,41 @@ func serve(args []string) error {
 		} else {
 			opts.DiscoveryUnavailable = "Discovery is turned off in this installation (Helm: stacks.discovery.enabled=false, flag --stack-discovery=false). Enter the addresses by hand."
 		}
-		var gitWriter *gitsync.Service
+		// The repository with descriptions: set by the installation (then fixed), or connected,
+		// changed and disconnected in the UI while Kamerton runs.
+		every, err := time.ParseDuration(cfg.GitInterval)
+		if err != nil || every < 10*time.Second {
+			every = gitsync.DefaultInterval
+		}
+		target := &descstore.Cluster{Client: uncached, Namespace: ns, WatchNamespace: cfg.WatchNamespace, Name: cfg.DescriptionName}
+		runner := &gitsync.Runner{
+			Base: gitsync.Service{
+				Target: target, Generate: generateForGit, GeneratedPath: cfg.GitGeneratedPath,
+				// Changes saved in the UI wait here for a push and survive a restart.
+				Pending: &gitsync.ConfigMapPending{Client: uncached, Namespace: ns, Name: "kamerton-git-changes"},
+				Logger:  log.With("component", "git"),
+			},
+			Store:    &gitsync.ConfigMapSettings{Client: uncached, Namespace: ns, Name: "kamerton-git-settings"},
+			Tokens:   &telegram.SecretTokenStore{Client: uncached, Namespace: ns, Name: cfg.GitSecretName, Key: "token", Component: "git"},
+			Interval: every, Release: target.ReleaseGit, Logger: log.With("component", "git"),
+		}
 		if cfg.GitURL != "" {
-			cluster := &descstore.Cluster{Client: uncached, Namespace: ns, WatchNamespace: cfg.WatchNamespace, Name: cfg.DescriptionName}
-			every, err := time.ParseDuration(cfg.GitInterval)
-			if err != nil || every < 10*time.Second {
-				every = gitsync.DefaultInterval
+			runner.Locked = &gitsync.Settings{
+				URL: cfg.GitURL, Branch: cfg.GitBranch, Path: cfg.GitPath, Write: cfg.GitWrite,
+				Provider: cfg.GitProvider, APIURL: cfg.GitAPIURL, CommitStatus: cfg.GitCommitStatus,
 			}
-			opts.Git = &gitsync.Service{
-				URL: cfg.GitURL, Branch: cfg.GitBranch, Path: cfg.GitPath, Target: cluster, Interval: every,
-				Token: secretValue(uncached, ns, cfg.GitSecretName, "token"),
-				Write: gitsync.ParseWrite(cfg.GitWrite), Provider: cfg.GitProvider, APIURL: cfg.GitAPIURL,
-				CommitStatus: cfg.GitCommitStatus, GeneratedPath: cfg.GitGeneratedPath, Generate: generateForGit,
-				Logger: log.With("component", "git"),
-			}
-			gitWriter = opts.Git
-			// Leader-only: one replica writes descriptions.
-			if err := m.Add(opts.Git); err != nil {
-				return err
-			}
-			log.Info("system descriptions are read from git", "repo", opts.Git.Repo(), "branch", cfg.GitBranch, "path", cfg.GitPath, "every", every.String(), "write", opts.Git.WriteMode())
+		}
+		opts.GitRunner = runner
+		// Leader-only: one replica writes descriptions.
+		if err := m.Add(runner); err != nil {
+			return err
 		}
 		opts.SecretMissing = func(ctx context.Context, namespace string, ref v1alpha1.SecretKeyRef) bool {
 			return controller.SecretMissing(ctx, uncached, namespace, ref)
 		}
 		store := &descstore.Cluster{Client: uncached, Namespace: ns, WatchNamespace: cfg.WatchNamespace, Name: cfg.DescriptionName}
-		if gitWriter != nil {
-			// Saves of systems kept in git go to the repository.
-			store.Git = gitWriter
-		}
+		// Saves of systems kept in git go to the repository in use, if any.
+		store.Git = runner
 		opts.Descriptions = store
 		if cfg.DescriptionFile != "" {
 			log.Warn("--description is ignored in cluster mode; the description is read from SystemDescription resources", "file", cfg.DescriptionFile)
@@ -554,22 +558,6 @@ func parseTailMute(v string) (time.Duration, error) {
 		return 0, fmt.Errorf("--tail-mute: %w", err)
 	}
 	return d, nil
-}
-
-// secretValue reads one key of a Secret on every call; a missing Secret or key is an empty
-// value, not an error.
-func secretValue(c client.Client, ns, name, key string) func(ctx context.Context) (string, error) {
-	return func(ctx context.Context) (string, error) {
-		var s corev1.Secret
-		err := c.Get(ctx, types.NamespacedName{Namespace: ns, Name: name}, &s)
-		if apierrors.IsNotFound(err) {
-			return "", nil
-		}
-		if err != nil {
-			return "", err
-		}
-		return string(s.Data[key]), nil
-	}
 }
 
 // generatedFiles lays out what a description generates, the same for `kamerton generate -o` and
