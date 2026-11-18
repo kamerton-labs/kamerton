@@ -621,11 +621,21 @@ func TestRepositoryIsConnectedChangedAndDisconnectedWhileRunning(t *testing.T) {
 		t.Fatal("nothing is connected at first")
 	}
 	// Trying a repository changes nothing and says what is wrong, or what is there.
-	if c := r.Try(ctx, Settings{URL: h.url(), Path: "systems"}, "wrong"); c.OK || c.Error == "" {
+	if c := r.Try(ctx, Settings{URL: h.url(), Path: "systems"}, "wrong"); c.OK || c.Error == "" || c.Problem != ProblemAuth {
 		t.Errorf("a wrong token: %+v", c)
 	}
-	if c := r.Try(ctx, Settings{URL: "ftp://x"}, ""); c.OK {
+	if c := r.Try(ctx, Settings{URL: "ftp://x"}, ""); c.OK || c.Problem != ProblemAddress {
 		t.Errorf("a bad address: %+v", c)
+	}
+	// What went wrong is named, so the UI can say it in words.
+	if c := r.Try(ctx, Settings{URL: h.url(), Branch: "nope"}, "tok"); c.OK || c.Problem != ProblemNoBranch {
+		t.Errorf("a missing branch: %+v", c)
+	}
+	if c := r.Try(ctx, Settings{URL: "http://127.0.0.1:1/obs.git"}, ""); c.OK || c.Problem != ProblemUnreachable {
+		t.Errorf("a host that does not answer: %+v", c)
+	}
+	if c := r.Try(ctx, Settings{URL: "https://git.example.invalid/obs.git"}, ""); c.OK || c.Problem != ProblemNoHost {
+		t.Errorf("a host that does not resolve: %+v", c)
 	}
 	if c := r.Try(ctx, Settings{URL: h.url(), Path: "systems"}, "tok"); !c.OK || c.Files != 1 {
 		t.Errorf("a good repository: %+v", c)

@@ -164,6 +164,8 @@ export interface GitSettingsView extends GitSettings {
 
 export interface GitCheck {
   ok: boolean
+  /** What is wrong when ok is false: address, no_host, unreachable, timeout, tls, auth, not_found, no_branch. */
+  problem?: string
   empty?: boolean
   error?: string
   files: number

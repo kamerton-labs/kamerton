@@ -219,6 +219,8 @@ func (r *Runner) View(ctx context.Context) View {
 // Check is the outcome of trying a repository before connecting it.
 type Check struct {
 	OK bool `json:"ok"`
+	// Problem names what is wrong when OK is false (see Problem); Error has the details.
+	Problem string `json:"problem,omitempty"`
 	// Empty: the repository has no commits; the first system starts it.
 	Empty bool   `json:"empty,omitempty"`
 	Error string `json:"error,omitempty"`
@@ -237,7 +239,7 @@ type Check struct {
 // empty token means the stored one.
 func (r *Runner) Try(ctx context.Context, set Settings, token string) Check {
 	if err := validSettings(&set); err != nil {
-		return Check{Error: err.Error()}
+		return Check{Error: err.Error(), Problem: ProblemAddress}
 	}
 	s := r.build(set)
 	s.Target = nil
@@ -254,11 +256,11 @@ func (r *Runner) Try(ctx context.Context, set Settings, token string) Check {
 	if _, err := s.remoteHead(ctx, auth); errors.Is(err, errEmptyRepo) {
 		return Check{OK: true, Empty: true, CanPush: canPush}
 	} else if err != nil {
-		return Check{Error: err.Error()}
+		return Check{Error: err.Error(), Problem: Problem(err)}
 	}
 	files, lay, err := s.read(ctx, auth)
 	if err != nil && !errors.Is(err, errNoFolder) {
-		return Check{Error: err.Error()}
+		return Check{Error: err.Error(), Problem: Problem(err)}
 	}
 	return Check{OK: true, Files: len(files), HasProject: lay.manifest, Project: lay.name, CanPush: canPush}
 }

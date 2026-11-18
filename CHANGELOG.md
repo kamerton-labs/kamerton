@@ -104,6 +104,9 @@ All notable changes to Kamerton are listed here. The format follows
     refuses with 422. An empty repository cannot be opened (409 `git_empty`), a project
     cannot be created over another (409), and a create that fails leaves nothing connected
     or on disk.
+  - What is wrong with a repository is said in words: no such server, no answer, a
+    certificate that is not trusted, no access, no such repository or branch (`problem` in
+    the check), with the message of git under it.
 - Git in the sidebar: the project with its branch and folder at the top, and
   a "Project" page with the changes to push, the repository, open pull
   requests, commits and description files. Wording follows git: Commit,

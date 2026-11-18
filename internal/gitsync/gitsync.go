@@ -60,6 +60,9 @@ type Target interface {
 // errEmptyRepo: the repository has no commits yet, which is how every repository starts.
 var errEmptyRepo = errors.New("the repository is empty")
 
+// errNoBranch: the repository has commits, but not on the followed branch.
+var errNoBranch = errors.New("branch not found")
+
 // errNoFolder: the folder is not on the branch. A typo and a folder whose last file was
 // deleted look the same in git.
 var errNoFolder = errors.New("folder not found")
@@ -481,7 +484,7 @@ func (s *Service) remoteHead(ctx context.Context, auth transport.AuthMethod) (st
 			return r.Hash().String(), nil
 		}
 	}
-	return "", fmt.Errorf("branch %q not found in %s", s.branch(), s.Repo())
+	return "", fmt.Errorf("%w: %q in %s", errNoBranch, s.branch(), s.Repo())
 }
 
 type file struct {
@@ -594,12 +597,22 @@ func cleanPath(p string) string {
 func (s *Service) gitErr(what string, err error) error {
 	switch {
 	case errors.Is(err, transport.ErrAuthenticationRequired), errors.Is(err, transport.ErrAuthorizationFailed):
-		return fmt.Errorf("%s %s: access denied; check the token in the Secret", what, s.Repo())
+		return &repoErr{fmt.Sprintf("%s %s: access denied; check the token in the Secret", what, s.Repo()), err}
 	case errors.Is(err, transport.ErrRepositoryNotFound):
-		return fmt.Errorf("%s %s: repository not found (a private repository looks the same without a token)", what, s.Repo())
+		return &repoErr{fmt.Sprintf("%s %s: repository not found (a private repository looks the same without a token)", what, s.Repo()), err}
 	}
-	return fmt.Errorf("%s %s: %s", what, s.Repo(), strings.ReplaceAll(err.Error(), s.URL, s.Repo()))
+	return &repoErr{fmt.Sprintf("%s %s: %s", what, s.Repo(), strings.ReplaceAll(err.Error(), s.URL, s.Repo())), err}
 }
+
+// repoErr is a message about a repository that keeps the error behind it, so Problem can
+// still tell what went wrong.
+type repoErr struct {
+	msg string
+	err error
+}
+
+func (e *repoErr) Error() string { return e.msg }
+func (e *repoErr) Unwrap() error { return e.err }
 
 func short(commit string) string {
 	if len(commit) > 8 {

@@ -5,6 +5,7 @@ import { useState, type FormEvent, type ReactNode } from 'react'
 import { ChevronRight, FolderGit2, FolderOpen, FolderPlus, Loader2 } from 'lucide-react'
 import { useNavigate } from 'react-router'
 import { Field } from '@/components/common'
+import RepoProblem from '@/components/RepoProblem'
 import LangSwitch from '@/components/LangSwitch'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -237,7 +238,7 @@ function Clone({ info, onDone }: { info: ProjectInfo; onDone: (to?: string) => v
         {check && (
           <div className="space-y-1 text-sm" data-testid="clone-check">
             {!check.ok ? (
-              <p className="text-destructive">{check.error}</p>
+              <RepoProblem check={check} />
             ) : (
               <p>
                 {check.empty

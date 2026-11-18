@@ -5,6 +5,7 @@ import { useState, type FormEvent } from 'react'
 import { ChevronRight, Loader2 } from 'lucide-react'
 import { useConfirm } from '@/components/ConfirmDialog'
 import { Field } from '@/components/common'
+import RepoProblem from '@/components/RepoProblem'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -142,7 +143,7 @@ export default function GitSettingsForm({ view, onDone }: { view: GitSettingsVie
       {check && (
         <div className="space-y-1 text-sm" data-testid="git-check">
           {!check.ok ? (
-            <p className="text-destructive">{check.error}</p>
+            <RepoProblem check={check} />
           ) : (
             <p>
               {check.empty
