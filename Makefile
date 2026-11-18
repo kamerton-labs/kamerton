@@ -5,7 +5,7 @@
 export GOTOOLCHAIN := local
 
 BIN        ?= bin/kamerton
-VERSION    ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo 0.2.3)
+VERSION    ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo 0.2.4)
 COMMIT     ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 LDFLAGS    := -s -w -X github.com/kamerton-labs/kamerton/internal/version.Version=$(VERSION) -X github.com/kamerton-labs/kamerton/internal/version.Commit=$(COMMIT)
 IMAGE      ?= ghcr.io/kamerton-labs/kamerton:$(VERSION)

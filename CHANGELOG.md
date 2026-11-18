@@ -6,6 +6,8 @@ All notable changes to Kamerton are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.2.4] - 2026-11-18
+
 ### Fixed
 
 - Upgrading to 0.2.3 with `helm upgrade --reuse-values` left the new
