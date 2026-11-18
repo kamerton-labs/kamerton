@@ -11,7 +11,7 @@ Kamerton is installed in namespace {{ .Release.Namespace }}.
    tokens. Turn it on before exposing the UI:
      kubectl -n {{ .Release.Namespace }} create secret generic kamerton-auth \
        --from-literal=username=admin --from-literal=password='<strong password>'
-     helm upgrade {{ .Release.Name }} <chart> -n {{ .Release.Namespace }} --reuse-values --set auth.existingSecret=kamerton-auth
+     helm upgrade {{ .Release.Name }} <chart> -n {{ .Release.Namespace }} --reset-then-reuse-values --set auth.existingSecret=kamerton-auth
 {{- end }}
 
 2. Describe a system: "Add system" in the UI, or apply a description:

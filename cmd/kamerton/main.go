@@ -275,9 +275,9 @@ func serve(args []string) error {
 		opts.DiscoveryUnavailable = "Discovery of installed programs works only in a cluster: Kamerton runs without the Kubernetes controller and cannot ask the cluster for its services. Enter the addresses by hand."
 	}
 	server.LogAuthMode(log, opts.Auth)
-	tail, err := time.ParseDuration(cfg.TailMute)
-	if err != nil && cfg.TailMute != "0" {
-		return fmt.Errorf("--tail-mute: %w", err)
+	tail, err := parseTailMute(cfg.TailMute)
+	if err != nil {
+		return err
 	}
 	if tail > 0 {
 		opts.TailMute = &tailmute.Service{Grace: tail, Logger: log.With("component", "tailmute")}
@@ -523,4 +523,20 @@ func generate(args []string) error {
 	}
 	fmt.Printf("wrote %d rules, %d dashboards, %d runbooks to %s\n", b.RuleCount, len(b.Dashboards), len(b.Runbooks), *outDir)
 	return nil
+}
+
+// parseTailMute: an empty value means the default, not a crash. A chart upgraded with
+// --reuse-values passes an empty string for a setting the old values did not have.
+func parseTailMute(v string) (time.Duration, error) {
+	switch strings.TrimSpace(v) {
+	case "":
+		return tailmute.DefaultGrace, nil
+	case "0":
+		return 0, nil
+	}
+	d, err := time.ParseDuration(strings.TrimSpace(v))
+	if err != nil {
+		return 0, fmt.Errorf("--tail-mute: %w", err)
+	}
+	return d, nil
 }

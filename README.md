@@ -105,7 +105,7 @@ UI beyond a port-forward:
 ```sh
 kubectl -n kamerton create secret generic kamerton-auth \
   --from-literal=username=admin --from-literal=password='<strong password>'
-helm upgrade kamerton ./deploy/helm/kamerton -n kamerton --reuse-values \
+helm upgrade kamerton ./deploy/helm/kamerton -n kamerton --reset-then-reuse-values \
   --set auth.existingSecret=kamerton-auth
 ```
 
@@ -278,7 +278,7 @@ can install [OpenTelemetry eBPF Instrumentation](https://opentelemetry.io/docs/z
 default:
 
 ```sh
-helm upgrade kamerton ./deploy/helm/kamerton -n kamerton --reuse-values \
+helm upgrade kamerton ./deploy/helm/kamerton -n kamerton --reset-then-reuse-values \
   --set autoInstrument.enabled=true
 ```
 

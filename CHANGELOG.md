@@ -6,6 +6,15 @@ All notable changes to Kamerton are listed here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- Upgrading to 0.2.3 with `helm upgrade --reuse-values` left the new
+  setting `incidents.tailMute` empty, and the new pod exited with
+  "--tail-mute: invalid duration" (the old pod kept serving). An empty value
+  now means the default, in the chart and in the core. The documentation
+  and the chart notes now use `--reset-then-reuse-values`, which keeps your
+  own values and takes the defaults of new settings from the new chart.
+
 ## [0.2.3] - 2026-11-18
 
 ### Added
