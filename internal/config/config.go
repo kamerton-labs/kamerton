@@ -54,6 +54,9 @@ type Config struct {
 	WebhookSecretName      string
 	// GitURL, when set, makes a git repository the source of system descriptions.
 	GitURL, GitBranch, GitPath, GitSecretName, GitInterval string
+	// GitWrite: what a save in the UI does to a system from git (empty, pullRequest or commit).
+	GitWrite, GitProvider, GitAPIURL, GitGeneratedPath string
+	GitCommitStatus                                    bool
 	// TailMute: how long the consequences of an incident stay silenced after its cause is gone.
 	TailMute           string
 	WorkloadEvidence   bool
@@ -100,6 +103,11 @@ func (c *Config) Register(fs *flag.FlagSet) {
 	str(&c.GitPath, "git-path", "", "folder in the repository to read; empty: the whole repository")
 	str(&c.GitSecretName, "git-secret-name", "kamerton-git", "Secret (in Kamerton's namespace) with an access token under key token, for a private repository; a missing Secret means no token")
 	str(&c.GitInterval, "git-interval", "1m", "how often to look at the branch")
+	str(&c.GitWrite, "git-write", "", "what a save in the UI does to a system from git: empty refuses it, pullRequest pushes a branch and opens a pull or merge request, commit commits to the followed branch; needs a token with write access")
+	str(&c.GitProvider, "git-provider", "", "hosting service of the repository, github or gitlab, for pull requests and commit statuses; worked out from the URL for github.com and gitlab hosts")
+	str(&c.GitAPIURL, "git-api-url", "", "API root of a self-hosted GitHub or GitLab")
+	str(&c.GitGeneratedPath, "git-generated-path", "", "folder in the repository where a change written by Kamerton also carries the generated rules, dashboards and runbooks; empty: only the description")
+	boolean(&c.GitCommitStatus, "git-commit-status", false, "mark every read commit on GitHub or GitLab as applied or not; needs a token that may set commit statuses")
 	str(&c.TailMute, "tail-mute", "10m", "keep the consequences of an incident silenced in Alertmanager this long after its cause is gone (they look back over a window and would arrive as new alerts); 0 turns it off")
 	boolean(&c.WorkloadEvidence, "workload-evidence", true, "let follow-up messages read pods, ReplicaSets, StatefulSets and events of the root service (cluster mode)")
 	str(&c.GrafanaExternalURL, "grafana-external-url", "", "Grafana as people open it, for links to failing traces in follow-up messages; empty: no link")

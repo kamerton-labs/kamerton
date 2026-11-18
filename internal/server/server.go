@@ -724,6 +724,7 @@ func writeInvalid(w http.ResponseWriter, res description.Result) {
 
 func writeStoreErr(w http.ResponseWriter, err error) {
 	var inv *descstore.InvalidError
+	var proposed *descstore.ProposedError
 	switch {
 	case errors.As(err, &inv):
 		writeInvalid(w, inv.Result)
@@ -735,6 +736,9 @@ func writeStoreErr(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusConflict, "conflict", err.Error())
 	case errors.Is(err, descstore.ErrExists):
 		writeError(w, http.StatusConflict, "exists", err.Error())
+	case errors.As(err, &proposed):
+		// Accepted, not applied: the change is in the repository and waits for a merge or the next read.
+		writeJSON(w, http.StatusAccepted, map[string]any{"proposed": true, "message": proposed.Error(), "proposal": proposed.Proposal})
 	case errors.Is(err, descstore.ErrFromGit):
 		writeError(w, http.StatusConflict, "from_git", err.Error())
 	case errors.Is(err, descstore.ErrRename):

@@ -266,7 +266,18 @@ func (s *Server) getSystem(w http.ResponseWriter, r *http.Request) {
 		"stack": map[string]any{"id": c.Set.ID, "name": c.Set.Name, "unknown": c.Unknown, "grafanaURL": c.Set.URL(stack.KindGrafana)},
 	}
 	if from := descstore.FromGit(snap.SD); from != nil {
-		resp["writable"], resp["git"] = false, from
+		resp["git"] = from
+		// Read-only unless Kamerton may write to the repository; then a save is a proposal there.
+		resp["writable"] = false
+		if g := s.opts.Git; g != nil {
+			if mode := g.WriteMode(); mode != "" {
+				resp["writable"], resp["gitWrite"] = true, mode
+			}
+			// The file as people wrote it, comments included, so a save changes only what was edited.
+			if raw, ok := g.Raw(from.Path); ok && snap.SD != nil {
+				resp["yaml"] = string(raw)
+			}
+		}
 	}
 	if snap.Invalid != nil {
 		resp["errors"], resp["warnings"] = snap.Invalid.Errors, snap.Invalid.Warnings

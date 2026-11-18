@@ -22,6 +22,26 @@ All notable changes to Kamerton are listed here. The format follows
   deletes nothing. A private repository needs a read-only token in the
   Secret `kamerton-git`, key `token`. `GET /api/v1/systems` carries the state
   of the last read in `git` and each system's file and commit.
+- Writing to git. With `git.write: pullRequest` a save of a system from git
+  in the UI is pushed to a new branch `kamerton/<system>-<commit>` and, on
+  GitHub and GitLab (also self-hosted, `git.provider` and `git.apiURL`),
+  opened as a pull or merge request; the API answers 202 with the request's
+  address and the change reaches the cluster after the merge. With
+  `git.write: commit` the save is committed straight to the followed branch.
+  Deleting such a system removes its file the same way. The UI then edits
+  the file as it is in the repository, comments included. Changes Kamerton
+  makes to a description by itself (a chat added on the Channels screen) are
+  still refused for a system from git.
+- `git.generatedPath`: a change written by Kamerton also carries the rules,
+  dashboards and runbooks generated from the description, in
+  `<generatedPath>/<system>/`, laid out like `kamerton generate -o`, so the
+  review shows what changes.
+- `git.commitStatus`: every read commit is marked on GitHub or GitLab as
+  applied or not, with the file and the error.
+- `kamerton diff -f new.yaml --against old.yaml` prints which rules a change
+  of a description changes: threshold, duration and severity in words, rules
+  added and removed. `--exit-code` exits with 2 when the rules differ. For
+  a check in CI.
 
 ## [0.2.4] - 2026-11-18
 
