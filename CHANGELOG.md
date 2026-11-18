@@ -6,6 +6,13 @@ All notable changes to Kamerton are listed here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- The UI says when a system sends alerts to a channel nobody has connected:
+  a note on the system's card and a notice on the Channels screen naming the
+  system and the channel. `GET /api/v1/systems` lists such receivers in
+  `channelsOff`.
+
 ## [0.2.1] - 2026-11-18
 
 ### Fixed

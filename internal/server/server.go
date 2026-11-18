@@ -56,7 +56,10 @@ type Options struct {
 	NewPrometheus        func(url string) (prometheus.Querier, error)
 	NewAlertmanager      func(url string) alertmanager.Reader
 	Generator            generator.Options
-	Logger               *slog.Logger
+	// SecretMissing reports a receiver's Secret that does not exist, so the UI can say which
+	// channels of a system are off. Nil: not checked.
+	SecretMissing func(ctx context.Context, namespace string, ref v1alpha1.SecretKeyRef) bool
+	Logger        *slog.Logger
 	// Descriptions defaults to an in-memory store that cannot be saved.
 	Descriptions descstore.Store
 	// Telegram is nil when Telegram setup is unavailable (no cluster).

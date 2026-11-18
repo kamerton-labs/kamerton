@@ -76,18 +76,24 @@ export default function Orientation({ onAddSystem }: { onAddSystem: () => void }
     })
 
   const receivers = list.reduce((n, s) => n + s.receivers, 0)
+  // Receivers whose channel nobody has connected deliver nothing, so they do not count.
+  const off = list.reduce((n, s) => n + (s.channelsOff?.length ?? 0), 0)
+  const live = receivers - off
   const tgStatus = tg.data?.available ? tg.data.status : undefined
   const routedChats = tgStatus?.chats.filter((c) => c.usedIn.length > 0).length ?? 0
+  const delivering = live > 0 || routedChats > 0
   steps.push({
     title: t('orient.channel'),
-    state: receivers > 0 || routedChats > 0 ? 'done' : 'todo',
+    state: delivering ? 'done' : off > 0 ? 'problem' : 'todo',
     text:
       routedChats > 0
         ? tn('orient.chats', routedChats)
-        : receivers > 0
-          ? tn('orient.receivers', receivers)
-          : t('orient.channelNone'),
-    link: { to: '/channels', label: receivers > 0 || routedChats > 0 ? t('orient.open') : t('orient.connectTelegram') },
+        : live > 0
+          ? tn('orient.receivers', live)
+          : off > 0
+            ? t('orient.channelsOff')
+            : t('orient.channelNone'),
+    link: { to: '/channels', label: delivering ? t('orient.open') : t('orient.connectTelegram') },
   })
 
   const allDone = steps.every((s) => s.state === 'done')

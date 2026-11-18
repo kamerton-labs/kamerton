@@ -121,7 +121,7 @@ func (r *SystemDescriptionReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	opts := r.Options
 	if r.Secrets != nil {
 		opts.SecretMissing = func(ref v1alpha1.SecretKeyRef) bool {
-			return r.secretMissing(ctx, sd.Namespace, ref)
+			return SecretMissing(ctx, r.Secrets, sd.Namespace, ref)
 		}
 	}
 	bundle, err := generator.Generate(&sd, opts)
@@ -187,11 +187,11 @@ func (r *SystemDescriptionReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	return res, err
 }
 
-// secretMissing is true only when the Secret or its key is known to be absent: a Secret Kamerton
+// SecretMissing is true only when the Secret or its key is known to be absent: a Secret Kamerton
 // may not read stays in the configuration.
-func (r *SystemDescriptionReconciler) secretMissing(ctx context.Context, ns string, ref v1alpha1.SecretKeyRef) bool {
+func SecretMissing(ctx context.Context, r client.Reader, ns string, ref v1alpha1.SecretKeyRef) bool {
 	var s corev1.Secret
-	err := r.Secrets.Get(ctx, types.NamespacedName{Namespace: ns, Name: ref.Name}, &s)
+	err := r.Get(ctx, types.NamespacedName{Namespace: ns, Name: ref.Name}, &s)
 	if apierrors.IsNotFound(err) {
 		return true
 	}

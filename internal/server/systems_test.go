@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -408,5 +409,41 @@ func TestSystemsClusterMode(t *testing.T) {
 	}
 	if code, _ := do(t, "DELETE", api+"/systems/shop", ""); code != http.StatusNotFound {
 		t.Errorf("second delete: %d", code)
+	}
+}
+
+func TestSystemsListNamesChannelsWithoutSecret(t *testing.T) {
+	example, err := os.ReadFile("../../testdata/otel-demo/system.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "otel-demo.yaml"), example, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := descstore.NewFile(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Only the bot token is absent.
+	missing := func(_ context.Context, _ string, ref v1alpha1.SecretKeyRef) bool {
+		return ref.Name == "kamerton-telegram"
+	}
+	srv := httptest.NewServer(New(Options{Descriptions: store, SecretMissing: missing}).Handler())
+	defer srv.Close()
+
+	var list struct {
+		Systems []struct {
+			ChannelsOff []channelOff `json:"channelsOff"`
+		} `json:"systems"`
+	}
+	_, body := get(t, srv.URL+"/api/v1/systems")
+	decode(t, body, &list)
+	if len(list.Systems) != 1 {
+		t.Fatalf("list: %s", body)
+	}
+	want := []channelOff{{Receiver: "oncall-telegram", Channel: "telegram"}}
+	if got := list.Systems[0].ChannelsOff; !reflect.DeepEqual(got, want) {
+		t.Errorf("channelsOff = %+v, want %+v", got, want)
 	}
 }

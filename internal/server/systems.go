@@ -13,6 +13,7 @@ import (
 
 	"github.com/prometheus/common/model"
 
+	"github.com/kamerton-labs/kamerton/api/v1alpha1"
 	"github.com/kamerton-labs/kamerton/internal/clients/alertmanager"
 	"github.com/kamerton-labs/kamerton/internal/clients/prometheus"
 	"github.com/kamerton-labs/kamerton/internal/description"
@@ -32,8 +33,10 @@ type systemSummary struct {
 	Services    int    `json:"services"`
 	Rules       int    `json:"rules"`
 	Receivers   int    `json:"receivers"`
-	Valid       bool   `json:"valid"`
-	Problem     string `json:"problem,omitempty"`
+	// ChannelsOff lists receivers whose Secret is missing: their channel gets nothing yet.
+	ChannelsOff []channelOff `json:"channelsOff,omitempty"`
+	Valid       bool         `json:"valid"`
+	Problem     string       `json:"problem,omitempty"`
 	// Alerts is nil when Alertmanager is not configured or unreachable.
 	Alerts *alertCounts `json:"alerts"`
 	// State: ok, warning, firing, invalid or unknown (no alert data).
@@ -43,6 +46,12 @@ type systemSummary struct {
 	Stack        string `json:"stack"`
 	StackName    string `json:"stackName"`
 	StackUnknown string `json:"stackUnknown,omitempty"`
+}
+
+type channelOff struct {
+	Receiver string `json:"receiver"`
+	// Channel: telegram or email.
+	Channel string `json:"channel"`
 }
 
 type alertCounts struct {
@@ -80,8 +89,15 @@ func (s *Server) listSystems(w http.ResponseWriter, r *http.Request) {
 		if n := sd.Spec.Notifications; n != nil {
 			sum.Receivers = len(n.Receivers)
 		}
-		if b, err := generator.Generate(sd, s.opts.Generator); err == nil {
+		gen := s.opts.Generator
+		if check := s.opts.SecretMissing; check != nil {
+			gen.SecretMissing = func(ref v1alpha1.SecretKeyRef) bool { return check(ctx, sd.Namespace, ref) }
+		}
+		if b, err := generator.Generate(sd, gen); err == nil {
 			sum.Rules = b.RuleCount
+			for _, m := range b.MissingSecrets {
+				sum.ChannelsOff = append(sum.ChannelsOff, channelOff{Receiver: m.Receiver, Channel: m.Channel})
+			}
 		} else {
 			sum.Problem = err.Error()
 		}

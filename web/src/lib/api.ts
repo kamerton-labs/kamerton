@@ -71,6 +71,8 @@ export interface SystemSummary {
   services: number
   rules: number
   receivers: number
+  /** Receivers whose Secret is missing: nothing reaches their channel yet. */
+  channelsOff?: { receiver: string; channel: 'telegram' | 'email' }[]
   valid: boolean
   problem?: string
   alerts: { critical: number; warning: number } | null
