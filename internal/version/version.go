@@ -4,8 +4,8 @@
 // Package version exposes build information set with -ldflags.
 package version
 
-// Set at build time: -ldflags "-X github.com/kamerton-labs/kamerton/internal/version.Version=v0.2.1".
+// Set at build time: -ldflags "-X github.com/kamerton-labs/kamerton/internal/version.Version=v0.2.2".
 var (
-	Version = "0.2.1"
+	Version = "0.2.2"
 	Commit  = "unknown"
 )

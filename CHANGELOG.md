@@ -6,6 +6,8 @@ All notable changes to Kamerton are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-11-18
+
 ### Added
 
 - The UI says when a system sends alerts to a channel nobody has connected:
