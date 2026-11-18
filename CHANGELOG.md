@@ -84,15 +84,25 @@ All notable changes to Kamerton are listed here. The format follows
   opens to show, for every description file it touched, what happened to
   the rules and the same line-by-line diff
   (`GET /api/v1/git/commits/{hash}`). The commit list loads more on demand.
-- Creating a project. The form has two modes: "Open" a project that is
-  already in the repository, and "Create" one. Create writes the project
-  file, a README and a `.gitignore` into the chosen folder
-  (`observability` by default) of any repository, empty or not, and leaves
-  everything else there alone. It goes straight to the followed branch, so
-  systems can be pushed at once; only a branch that refuses a push gets a
-  pull request, and then systems wait for its merge. A new project has an
-  empty `systems` folder. "Test" says whether the folder already holds a
-  project.
+- Projects and a first screen. Kamerton starts with a project, a name and a place, and until
+  one is open shows only the first screen, without the sidebar, the way an editor starts:
+  "New project" or "Clone from git" (`GET/POST /api/v1/project`).
+  - On a machine a project is a folder: `~/kamerton/<name>` by default, with the project
+    file, a README, a `.gitignore` and a `systems` folder, optionally `git init` and a first
+    commit. A clone goes into a folder as an ordinary working copy; the token is used for the
+    clone and not kept. Projects opened before are listed and any project folder can be
+    opened (`/api/v1/project/open`); the project opened last opens on start, and "Close
+    project" goes back to the first screen. `--description` also takes a project folder.
+  - In a cluster the place is the cluster: the name is kept in the ConfigMap
+    `kamerton-project`, and git can be connected at once or later. An installation that
+    already has systems is a project and never sees the first screen.
+  - Cloning reads the repository first (`/api/v1/project/check`) and then opens the project
+    there or starts one in it with the first commit, named as given; the folder in the
+    repository (the root by default) and the push mode are under "More". Starting a project
+    and push need a token with write access: the check says so (`canPush`) and the server
+    refuses with 422. An empty repository cannot be opened (409 `git_empty`), a project
+    cannot be created over another (409), and a create that fails leaves nothing connected
+    or on disk.
 - Git in the sidebar: the project with its branch and folder at the top, and
   a "Project" page with the changes to push, the repository, open pull
   requests, commits and description files. Wording follows git: Commit,

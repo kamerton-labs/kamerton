@@ -4,6 +4,7 @@
 package gitsync
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/url"
@@ -108,27 +109,47 @@ func orDefault(v, def string) string {
 }
 
 // starterFiles are what Kamerton puts into an empty repository with the first system, so the
-// next person who opens it knows what is where.
-func (s *Service) starterFiles() map[string][]byte {
-	name := "observability"
-	if u, err := url.Parse(s.URL); err == nil {
-		if base := strings.TrimSuffix(path.Base(strings.Trim(u.Path, "/")), ".git"); base != "" && base != "." {
-			name = base
+// next person who opens it knows what is where. name is the project's name; empty means the
+// repository's.
+func (s *Service) starterFiles(name string) map[string][]byte {
+	if name = strings.TrimSpace(name); name == "" {
+		name = RepoName(s.URL)
+	}
+	return StarterFiles(name, cleanPath(s.Path), true)
+}
+
+// RepoName is the last part of a repository's address without .git: what a project in it is
+// called when nobody named it.
+func RepoName(address string) string {
+	if u, err := url.Parse(address); err == nil {
+		if base := strings.TrimSuffix(path.Base(strings.Trim(u.Path, "/")), ".git"); base != "" && base != "." && base != "/" {
+			return base
 		}
 	}
-	root := cleanPath(s.Path)
+	return "observability"
+}
+
+// StarterFiles are the files of a new project under root: the project file, a README, a
+// .gitignore and the folder of systems. inGit says whether the project is followed from a
+// repository, which the README explains.
+func StarterFiles(name, root string, inGit bool) map[string][]byte {
+	quoted, _ := json.Marshal(name) // a JSON string is a YAML string, whatever the name holds
+	how := "Kamerton reads the systems from this folder; a change made here is picked up at once."
+	if inGit {
+		how = "Kamerton follows the default branch: a merged change is in the cluster within a minute."
+	}
 	return map[string][]byte{
-		path.Join(root, ProjectFile): []byte(`# A Kamerton project: the systems this repository describes and where things are.
-# Connect it to a Kamerton installation with its address; the layout is read from here.
+		path.Join(root, ProjectFile): []byte(`# A Kamerton project: the systems it describes and where things are.
+# Open it in Kamerton by its folder or its repository; the layout is read from here.
 apiVersion: kamerton.dev/v1alpha1
 kind: Project
 metadata:
-  name: ` + safeRef(name) + `
+  name: ` + string(quoted) + `
 spec:
   # One system per file. Subfolders are fine, for example one per team.
   systems: systems
   # Rules, dashboards and runbooks generated from the systems. Written by Kamerton with every
-  # change it makes; do not edit by hand. Set to "" to keep them out of the repository.
+  # change it makes; do not edit by hand. Set to "" to keep them out of the project.
   generated: generated
   # Folders and files Kamerton does not read.
   ignore:
@@ -145,7 +166,7 @@ System descriptions for [Kamerton](https://github.com/kamerton-labs/kamerton).
 | ` + "`generated/`" + ` | The rules, dashboards and runbooks the systems produce | Kamerton; do not edit by hand |
 | ` + "`drafts/`" + ` | Anything not meant to run yet | People; Kamerton does not read it |
 
-Kamerton follows the default branch: a merged change is in the cluster within a minute.
+` + how + `
 
 Check a file before you commit it, and see which rules a change affects:
 
@@ -162,6 +183,9 @@ kept in the cluster.
 		path.Join(root, ".gitignore"): []byte(`# Local output of "kamerton generate -o out/".
 out/
 .before.yaml
+
+# Kept by a local Kamerton next to the systems: addresses of Prometheus and Alertmanager.
+.kamerton-stacks.json
 
 # Secrets never belong in this repository.
 .env

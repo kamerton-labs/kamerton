@@ -1,7 +1,7 @@
 // Copyright 2026 The Kamerton Authors
 // SPDX-License-Identifier: AGPL-3.0-only
 
-import { Link } from 'react-router'
+import { Link, useNavigate } from 'react-router'
 import { useState } from 'react'
 import { ArrowUp, ExternalLink, GitPullRequest, Loader2, Pencil, RefreshCw } from 'lucide-react'
 import { Page, StateDot } from '@/components/common'
@@ -13,7 +13,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useT } from '@/i18n'
-import { useGitChanges, useGitCommit, useGitCommits, useGitDiscard, useGitPush, useGitSettings, useGitSync, useSystems, type GitProposal, type GitSettingsView, type GitStatus } from '@/lib/api'
+import { useCloseProject, useGitChanges, useGitCommit, useGitCommits, useGitDiscard, useGitPush, useGitSettings, useGitSync, useProject, useSystems, type GitProposal, type GitSettingsView, type GitStatus, type ProjectInfo } from '@/lib/api'
 import { timeAgo } from '@/lib/format'
 import { gitProblems, projectName } from '@/lib/git'
 
@@ -44,6 +44,7 @@ function Section({ title, children, testid, actions }: { title: string; children
 export default function GitPage() {
   const systems = useSystems()
   const settings = useGitSettings()
+  const project = useProject()
   const { t } = useT()
   const git = systems.data?.git
   if (systems.isLoading)
@@ -54,21 +55,46 @@ export default function GitPage() {
     )
   if (!git)
     return (
-      <Page title={t('proj.title')} description={t('proj.off')}>
-        <section className="max-w-2xl rounded-xl border bg-card p-4" data-testid="git-off">
-          <h2 className="mb-1 text-sm font-medium">Git</h2>
-          <p className="mb-4 text-sm text-muted-foreground">{t('gitp.off.lead')}</p>
-          {!settings.data ? (
-            <Skeleton className="h-40" />
-          ) : settings.data.available && !settings.data.locked ? (
-            <GitSettingsForm view={settings.data} />
-          ) : (
-            <p className="text-sm text-muted-foreground">{t('gitp.off.unavailable')}</p>
-          )}
-        </section>
+      <Page title={project.data?.name || t('proj.title')} description={t('proj.off')}>
+        {project.data?.where === 'local' ? (
+          <LocalProject info={project.data} />
+        ) : (
+          <section className="max-w-2xl rounded-xl border bg-card p-4" data-testid="git-off">
+            <h2 className="mb-1 text-sm font-medium">Git</h2>
+            <p className="mb-4 text-sm text-muted-foreground">{t('gitp.off.lead')}</p>
+            {!settings.data ? (
+              <Skeleton className="h-40" />
+            ) : settings.data.available && !settings.data.locked ? (
+              <GitSettingsForm view={settings.data} />
+            ) : (
+              <p className="text-sm text-muted-foreground">{t('gitp.off.unavailable')}</p>
+            )}
+          </section>
+        )}
       </Page>
     )
   return <Connected git={git} settings={settings.data} ids={new Map((systems.data?.systems ?? []).map((s) => [s.name, s.id]))} />
+}
+
+/** A project kept in a folder on this machine: where it is, and the way back to the first screen. */
+function LocalProject({ info }: { info: ProjectInfo }) {
+  const { t } = useT()
+  const close = useCloseProject()
+  const navigate = useNavigate()
+  return (
+    <section className="max-w-2xl rounded-xl border bg-card p-4" data-testid="local-project">
+      <Row label={t('gitp.folder')}>
+        <span className="font-mono text-xs">{info.path}</span>
+      </Row>
+      <Row label="Git">{t(info.git ? 'gitp.localGit' : 'gitp.localNoGit')}</Row>
+      <div className="mt-3 flex flex-wrap items-center gap-3">
+        <Button variant="outline" size="sm" disabled={close.isPending} onClick={() => close.mutate(undefined, { onSuccess: () => void navigate('/', { replace: true }) })} data-testid="project-close">
+          {t('gitp.close')}
+        </Button>
+        <span className="text-xs text-muted-foreground">{t('gitp.closeHint')}</span>
+      </div>
+    </section>
+  )
 }
 
 function Connected({ git, settings, ids }: { git: GitStatus; settings?: GitSettingsView; ids: Map<string, string> }) {

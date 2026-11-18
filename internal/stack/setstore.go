@@ -206,3 +206,32 @@ func (c *ConfigMapStateStore) Update(ctx context.Context, mutate func(*State) er
 	})
 	return result, err
 }
+
+// SwitchStateStore keeps the sets of the project that is open; a local Kamerton keeps them next
+// to the project's systems and switches with the project.
+type SwitchStateStore struct {
+	mu  sync.RWMutex
+	cur StateStore
+}
+
+// Set uses st from now on; nil keeps the sets in memory.
+func (s *SwitchStateStore) Set(st StateStore) {
+	s.mu.Lock()
+	s.cur = st
+	s.mu.Unlock()
+}
+
+func (s *SwitchStateStore) current() StateStore {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.cur == nil {
+		s.cur = &MemoryStateStore{}
+	}
+	return s.cur
+}
+
+func (s *SwitchStateStore) Get(ctx context.Context) (*State, error) { return s.current().Get(ctx) }
+
+func (s *SwitchStateStore) Update(ctx context.Context, mutate func(*State) error) (*State, error) {
+	return s.current().Update(ctx, mutate)
+}

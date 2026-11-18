@@ -711,8 +711,11 @@ stack status, or set the addresses on the status page. Without them those
 features say "not configured" instead of showing data. Locally, sets of
 programs are kept in `.kamerton-stacks.json` next to the descriptions
 (`--stacks-file` to choose); finding installed programs needs a cluster.
-`--description` takes one or more comma-separated files or a directory (new
-systems are created there).
+`--description` takes a project folder, or one or more comma-separated files
+or a directory (new systems are created there). Without it Kamerton opens the
+project opened last, or the UI starts on its first screen: a new project in a
+folder (`~/kamerton/<name>` by default), a clone from git, or a project opened
+before.
 
 CLI helpers:
 

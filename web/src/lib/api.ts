@@ -170,6 +170,8 @@ export interface GitCheck {
   /** The folder holds a project file; without one a project can be created there. */
   hasProject?: boolean
   project?: string
+  /** A token to push with is there (typed or stored), or the address needs none. */
+  canPush?: boolean
 }
 
 const gitInvalidate = (qc: ReturnType<typeof useQueryClient>) => {
@@ -178,6 +180,67 @@ const gitInvalidate = (qc: ReturnType<typeof useQueryClient>) => {
   void qc.invalidateQueries({ queryKey: ['system'] })
 }
 
+/** The project: what the first screen and the sidebar show. Mirrors internal/project.Info. */
+export interface ProjectInfo {
+  /** A project is open; without one only the first screen is shown. */
+  exists: boolean
+  name?: string
+  where: 'local' | 'cluster' | ''
+  /** The project's folder on this machine (local). */
+  path?: string
+  /** Where the systems are kept (cluster). */
+  namespace?: string
+  /** Where new projects go unless another folder is named (local). */
+  defaultRoot?: string
+  recent?: { name: string; path: string }[]
+  canClone: boolean
+  /** The folder is a git working copy (local). */
+  git?: boolean
+}
+
+export interface CloneRequest {
+  url: string
+  branch?: string
+  /** The project's folder inside the repository; empty: its root. */
+  folder?: string
+  token?: string
+  /** Where the clone goes (local). */
+  path?: string
+  /** Name of the project when the repository has none yet. */
+  name?: string
+}
+
+export const useProject = () => useQuery({ queryKey: ['project'], queryFn: () => request<ProjectInfo>('/project') })
+
+// Another project means other systems, sets and repository: everything is read again.
+const projectChanged = (qc: ReturnType<typeof useQueryClient>) => void qc.invalidateQueries()
+
+export const useNewProject = () => {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (v: { name: string; path?: string; git?: boolean }) => postJSON<ProjectInfo>('/project', v),
+    onSuccess: () => projectChanged(qc),
+  })
+}
+
+export const useOpenProject = () => {
+  const qc = useQueryClient()
+  return useMutation({ mutationFn: (path: string) => postJSON<ProjectInfo>('/project/open', { path }), onSuccess: () => projectChanged(qc) })
+}
+
+export const useCloneProject = () => {
+  const qc = useQueryClient()
+  return useMutation({ mutationFn: (v: CloneRequest) => postJSON<ProjectInfo>('/project/clone', v), onSuccess: () => projectChanged(qc) })
+}
+
+export const useCloseProject = () => {
+  const qc = useQueryClient()
+  return useMutation({ mutationFn: () => postJSON<ProjectInfo>('/project/close', {}), onSuccess: () => projectChanged(qc) })
+}
+
+/** Reads a repository before a project is taken from it; nothing is stored. */
+export const checkProjectRepo = (v: CloneRequest) => postJSON<GitCheck>('/project/check', v)
+
 export const useGitSettings = () => useQuery({ queryKey: ['git', 'settings'], queryFn: () => request<GitSettingsView>('/git/settings') })
 
 export const testGitSettings = (v: GitSettings & { token?: string }) => postJSON<GitCheck>('/git/settings/test', v)
@@ -185,7 +248,7 @@ export const testGitSettings = (v: GitSettings & { token?: string }) => postJSON
 export const useSaveGitSettings = () => {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: (v: GitSettings & { token?: string; create?: boolean }) =>
+    mutationFn: (v: GitSettings & { token?: string; create?: boolean; name?: string }) =>
       request<{ settings: GitSettingsView; proposal?: GitProposal }>('/git/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(v) }),
     onSuccess: () => gitInvalidate(qc),
   })

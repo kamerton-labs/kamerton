@@ -46,6 +46,7 @@ import (
 	"github.com/kamerton-labs/kamerton/internal/gitsync"
 	"github.com/kamerton-labs/kamerton/internal/history"
 	"github.com/kamerton-labs/kamerton/internal/noise"
+	"github.com/kamerton-labs/kamerton/internal/project"
 	"github.com/kamerton-labs/kamerton/internal/schema"
 	"github.com/kamerton-labs/kamerton/internal/server"
 	"github.com/kamerton-labs/kamerton/internal/stack"
@@ -193,6 +194,10 @@ func serve(args []string) error {
 			}
 		}
 		opts.GitRunner = runner
+		opts.Projects = &project.Cluster{
+			Names: &project.ConfigMapName{Client: uncached, Namespace: ns, Name: "kamerton-project"},
+			Git:   runner, Systems: target, Namespace: ns,
+		}
 		// Leader-only: one replica writes descriptions.
 		if err := m.Add(runner); err != nil {
 			return err
@@ -276,8 +281,24 @@ func serve(args []string) error {
 	} else {
 		opts.TelegramUnavailable = "Telegram setup from the UI is available only in a cluster: the core runs without the Kubernetes controller, so there is no safe place to keep the bot token."
 		opts.EmailUnavailable = "Email setup from the UI is available only in a cluster: the core runs without the Kubernetes controller, so there is no safe place to keep the SMTP password."
-		if cfg.DescriptionFile != "" {
-			store, err := descstore.NewFile(cfg.DescriptionFile)
+		// Locally the project is a folder: given at start, or created, opened or cloned on the
+		// first screen, and switched while Kamerton runs.
+		descriptions, stacks := &descstore.Switch{}, &stack.SwitchStateStore{}
+		local := project.NewLocal(descriptions, stacks, log.With("component", "project"))
+		local.StacksFile = cfg.StacksFile
+		sets.Store = stacks
+		opts.Descriptions = descriptions
+		opts.Projects = local
+		if cfg.StacksFile != "" {
+			stacks.Set(&stack.FileStateStore{Path: cfg.StacksFile})
+		}
+		switch spec := cfg.DescriptionFile; {
+		case spec != "" && project.IsProject(spec):
+			if _, err := local.Open(context.Background(), spec); err != nil {
+				return err
+			}
+		case spec != "":
+			store, err := descstore.NewFile(spec)
 			if err != nil {
 				return err
 			}
@@ -292,19 +313,20 @@ func serve(args []string) error {
 				}
 				log.Info("loaded description", "source", snap.Source, "system", snap.ID, "services", len(snap.SD.Spec.Services))
 			}
-			opts.Descriptions = store
-			path := cfg.StacksFile
-			if path == "" {
-				dir := store.Dir
-				if dir == "" && len(store.Paths) > 0 {
-					dir = filepath.Dir(store.Paths[0])
-				}
-				path = filepath.Join(dir, ".kamerton-stacks.json")
+			dir := store.Dir
+			if dir == "" && len(store.Paths) > 0 {
+				dir = filepath.Dir(store.Paths[0])
 			}
-			sets.Store = &stack.FileStateStore{Path: path}
-			log.Info("sets of programs are kept in a file", "path", path)
-		} else if cfg.StacksFile != "" {
-			sets.Store = &stack.FileStateStore{Path: cfg.StacksFile}
+			local.Adopt(store, dir)
+			if cfg.StacksFile == "" {
+				path := filepath.Join(dir, ".kamerton-stacks.json")
+				stacks.Set(&stack.FileStateStore{Path: path})
+				log.Info("sets of programs are kept in a file", "path", path)
+			}
+		default:
+			if !local.OpenLast(context.Background()) {
+				log.Info("no project is open: create, open or clone one in the UI", "folder", local.Root)
+			}
 		}
 		opts.FollowUpUnavailable = "Follow-up messages work only in a cluster: Kamerton runs without the Kubernetes controller, so Alertmanager has no webhook to call and there is no Secret for its token. Grouping alerts by cause still works wherever the generated AlertmanagerConfig is applied."
 		opts.DiscoveryUnavailable = "Discovery of installed programs works only in a cluster: Kamerton runs without the Kubernetes controller and cannot ask the cluster for its services. Enter the addresses by hand."

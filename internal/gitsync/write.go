@@ -100,7 +100,7 @@ func (s *Service) proposeAll(ctx context.Context, changes []descstore.GitChange,
 	}
 	if first {
 		// A new repository gets its project file, a README and a .gitignore with the first system.
-		for name, content := range s.starterFiles() {
+		for name, content := range s.starterFiles("") {
 			if err := util.WriteFile(fs, name, content, 0o644); err != nil {
 				return nil, fmt.Errorf("write %s: %w", name, err)
 			}
@@ -219,7 +219,7 @@ func (s *Service) proposeAll(ctx context.Context, changes []descstore.GitChange,
 // InitProject makes the configured folder a project: the project file, a README and a
 // .gitignore. In a repository with other content the folder is new, so nothing of what is
 // already there is touched. The folder must not hold a project yet.
-func (s *Service) InitProject(ctx context.Context, author string) (*descstore.GitProposal, error) {
+func (s *Service) InitProject(ctx context.Context, author, name string) (*descstore.GitProposal, error) {
 	if !s.WriteEnabled() {
 		return nil, errors.New("creating a project needs push to be on")
 	}
@@ -256,7 +256,7 @@ func (s *Service) InitProject(ctx context.Context, author string) (*descstore.Gi
 	if err != nil {
 		return nil, err
 	}
-	for name, content := range s.starterFiles() {
+	for name, content := range s.starterFiles(name) {
 		if _, err := fs.Stat(name); err == nil && path.Base(name) != ProjectFile {
 			// A README or .gitignore that is already there stays as it is.
 			continue

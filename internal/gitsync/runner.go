@@ -228,6 +228,9 @@ type Check struct {
 	// folder holds none, and then one can be created there.
 	HasProject bool   `json:"hasProject"`
 	Project    string `json:"project,omitempty"`
+	// CanPush: there is a token to push with (or the address needs none). Creating a project
+	// and push both need it; reading a public repository does not.
+	CanPush bool `json:"canPush"`
 }
 
 // Try reads the repository with the given settings and token without changing anything. An
@@ -247,8 +250,9 @@ func (r *Runner) Try(ctx context.Context, set Settings, token string) Check {
 	if err != nil {
 		return Check{Error: err.Error()}
 	}
+	canPush := auth != nil || !isHTTP(s.URL)
 	if _, err := s.remoteHead(ctx, auth); errors.Is(err, errEmptyRepo) {
-		return Check{OK: true, Empty: true}
+		return Check{OK: true, Empty: true, CanPush: canPush}
 	} else if err != nil {
 		return Check{Error: err.Error()}
 	}
@@ -256,15 +260,16 @@ func (r *Runner) Try(ctx context.Context, set Settings, token string) Check {
 	if err != nil && !errors.Is(err, errNoFolder) {
 		return Check{Error: err.Error()}
 	}
-	return Check{OK: true, Files: len(files), HasProject: lay.manifest, Project: lay.name}
+	return Check{OK: true, Files: len(files), HasProject: lay.manifest, Project: lay.name, CanPush: canPush}
 }
 
 // Create connects the repository and makes its folder a project. It returns where the
 // project's first commit went.
-func (r *Runner) Create(ctx context.Context, set Settings, token, author string) (*descstore.GitProposal, error) {
+func (r *Runner) Create(ctx context.Context, set Settings, token, author, name string) (*descstore.GitProposal, error) {
 	if ParseWrite(set.Write) == WriteOff {
 		return nil, errors.New("creating a project needs push: choose Pull request or the branch")
 	}
+	wasConnected := r.Current(ctx) != nil
 	if err := r.Connect(ctx, set, token); err != nil {
 		return nil, err
 	}
@@ -272,7 +277,15 @@ func (r *Runner) Create(ctx context.Context, set Settings, token, author string)
 	if s == nil {
 		return nil, errors.New("the repository was not connected")
 	}
-	return s.InitProject(ctx, author)
+	p, err := s.InitProject(ctx, author, name)
+	if err != nil && !wasConnected {
+		// No project, no connection: a half-made start would leave a repository that is
+		// followed but holds nothing, and the next try would have to open it instead.
+		if derr := r.Disconnect(context.WithoutCancel(ctx)); derr != nil {
+			r.log().Warn("git: the repository stays connected after a failed create", "error", derr)
+		}
+	}
+	return p, err
 }
 
 // Connect stores the settings and the token and switches to the repository at once.
