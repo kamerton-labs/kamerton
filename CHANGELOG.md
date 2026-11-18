@@ -59,6 +59,26 @@ All notable changes to Kamerton are listed here. The format follows
   the open pull or merge requests Kamerton made; a system shows its open
   request. `POST /api/v1/git/preview` returns what a description would
   change.
+- Saving is not pushing. A save of a system from git, a new system and a
+  removal are kept as changes to push (ConfigMap `kamerton-git-changes`);
+  the repository and the cluster stay as they are. "Git" in the sidebar
+  lists them, each with its effect on the rules, and one Push writes them
+  in one commit with one message (`GET /api/v1/git/changes`,
+  `POST /api/v1/git/push`, `DELETE /api/v1/git/changes/{system}`). A save
+  answers 202 `{"staged": true}`.
+- The list of commits of the followed branch, with the systems each one
+  touches and the applied one marked (`GET /api/v1/git/commits`).
+- The repository is connected, changed and disconnected in the UI: address,
+  branch, folder, token and push mode, with "Test" that reads the
+  repository before anything is stored (`/api/v1/git/settings`). The
+  settings are kept in the ConfigMap `kamerton-git-settings`, the token in
+  the Secret `kamerton-git`. Disconnecting deletes nothing: the systems
+  stay and become editable in the UI. A repository set with `git.url` is
+  shown and cannot be changed there.
+- Git in the sidebar: the project with its branch and folder at the top, and
+  a "Git" page with the changes to push, the repository, open pull
+  requests, commits and description files. Wording follows git: Commit,
+  Push, Pull.
 - `git.generatedPath`: a change written by Kamerton also carries the rules,
   dashboards and runbooks generated from the description, in
   `<generatedPath>/<system>/`, laid out like `kamerton generate -o`, so the

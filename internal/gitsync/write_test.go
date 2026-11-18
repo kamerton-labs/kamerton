@@ -577,3 +577,87 @@ func TestHostFromURL(t *testing.T) {
 		t.Errorf("self-hosted GitHub: %+v", h)
 	}
 }
+
+type memSettings struct{ s *Settings }
+
+func (m *memSettings) Load(context.Context) (*Settings, error) { return m.s, nil }
+func (m *memSettings) Save(_ context.Context, s *Settings) error {
+	m.s = s
+	return nil
+}
+
+type memToken struct{ v string }
+
+func (m *memToken) Get(context.Context) (string, error) { return m.v, nil }
+func (m *memToken) Set(_ context.Context, v string) error {
+	m.v = v
+	return nil
+}
+func (m *memToken) Delete(context.Context) error {
+	m.v = ""
+	return nil
+}
+
+func TestRepositoryIsConnectedChangedAndDisconnectedWhileRunning(t *testing.T) {
+	h := newHosted(t, "tok", map[string]string{"systems/shop.yaml": shop})
+	store, c := cluster(t)
+	tokens := &memToken{}
+	r := &Runner{Base: Service{Target: store}, Store: &memSettings{}, Tokens: tokens, Release: store.ReleaseGit}
+	store.Git = r
+	ctx := context.Background()
+
+	if r.Current(ctx) != nil || r.View(ctx).Connected || r.WriteEnabled() {
+		t.Fatal("nothing is connected at first")
+	}
+	// Trying a repository changes nothing and says what is wrong, or what is there.
+	if c := r.Try(ctx, Settings{URL: h.url(), Path: "systems"}, "wrong"); c.OK || c.Error == "" {
+		t.Errorf("a wrong token: %+v", c)
+	}
+	if c := r.Try(ctx, Settings{URL: "ftp://x"}, ""); c.OK {
+		t.Errorf("a bad address: %+v", c)
+	}
+	if c := r.Try(ctx, Settings{URL: h.url(), Path: "systems"}, "tok"); !c.OK || c.Files != 1 {
+		t.Errorf("a good repository: %+v", c)
+	}
+	if tokens.v != "" || r.Current(ctx) != nil {
+		t.Fatal("a try must not store anything")
+	}
+
+	if err := r.Connect(ctx, Settings{URL: h.url(), Path: "systems", Write: "commit"}, "tok"); err != nil {
+		t.Fatal(err)
+	}
+	s := r.Current(ctx)
+	s.Sync(ctx)
+	if v := r.View(ctx); !v.Connected || !v.HasToken || v.Write != WriteCommit || v.Locked || get(t, c, "shop") == nil {
+		t.Fatalf("after connecting: %+v", v)
+	}
+	if _, _, err := store.Save(ctx, "shop", []byte(strings.ReplaceAll(shop, "name: api", "name: gateway"))); !errors.Is(err, descstore.ErrStaged) {
+		t.Fatalf("a save goes through the connected repository: %v", err)
+	}
+
+	// Disconnecting deletes nothing: the system stays and becomes an ordinary, editable one.
+	if err := r.Disconnect(ctx); err != nil {
+		t.Fatal(err)
+	}
+	sd := get(t, c, "shop")
+	if sd == nil || descstore.FromGit(sd) != nil || tokens.v != "" || r.Current(ctx) != nil {
+		t.Fatalf("after disconnecting: %+v token=%q", sd, tokens.v)
+	}
+	if _, _, err := store.Save(ctx, "shop", []byte(shop)); err != nil {
+		t.Errorf("the released system must be editable: %v", err)
+	}
+}
+
+func TestRepositoryFromTheInstallationIsLocked(t *testing.T) {
+	r := &Runner{Locked: &Settings{URL: "https://example.com/team/obs.git", Write: "pullRequest"}, Store: &memSettings{}}
+	ctx := context.Background()
+	if v := r.View(ctx); !v.Locked || !v.Connected || v.URL != "https://example.com/team/obs.git" {
+		t.Fatalf("view: %+v", v)
+	}
+	if err := r.Connect(ctx, Settings{URL: "https://example.com/other.git"}, ""); err == nil {
+		t.Error("a locked repository cannot be changed from the UI")
+	}
+	if err := r.Disconnect(ctx); err == nil {
+		t.Error("a locked repository cannot be disconnected from the UI")
+	}
+}

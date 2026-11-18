@@ -3,14 +3,16 @@
 
 import { Link } from 'react-router'
 import { useState } from 'react'
-import { ArrowUp, ExternalLink, GitPullRequest, Loader2, RefreshCw } from 'lucide-react'
+import { ArrowUp, ExternalLink, GitPullRequest, Loader2, Pencil, RefreshCw } from 'lucide-react'
 import { Page, StateDot } from '@/components/common'
 import GitCommitDialog, { ChangeSummary } from '@/components/GitCommitDialog'
+import GitSettingsForm from '@/components/GitSettingsForm'
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useT } from '@/i18n'
-import { useGitChanges, useGitCommits, useGitDiscard, useGitPush, useGitSync, useSystems, type GitProposal, type GitStatus } from '@/lib/api'
+import { useGitChanges, useGitCommits, useGitDiscard, useGitPush, useGitSettings, useGitSync, useSystems, type GitProposal, type GitSettingsView, type GitStatus } from '@/lib/api'
 import { timeAgo } from '@/lib/format'
 import { gitProblems, projectName } from '@/lib/git'
 
@@ -37,6 +39,7 @@ function Section({ title, children, testid }: { title: string; children: React.R
 /** The project's repository: where descriptions come from, what is applied, what waits. */
 export default function GitPage() {
   const systems = useSystems()
+  const settings = useGitSettings()
   const { t } = useT()
   const git = systems.data?.git
   if (systems.isLoading)
@@ -47,20 +50,22 @@ export default function GitPage() {
     )
   if (!git)
     return (
-      <Page title={t('gitp.title')} description={t('gitp.off.lead')}>
-        <Section title={t('gitp.off.title')} testid="git-off">
-          <p className="text-sm text-muted-foreground">{t('gitp.off.text')}</p>
-          <pre className="mt-3 overflow-x-auto rounded-md bg-muted p-3 font-mono text-xs">{`helm upgrade kamerton ./deploy/helm/kamerton -n kamerton --reset-then-reuse-values \\
-  --set git.url=https://github.com/your-team/observability.git \\
-  --set git.write=pullRequest`}</pre>
-          <p className="mt-3 text-sm text-muted-foreground">{t('gitp.off.optional')}</p>
-        </Section>
+      <Page title="Git" description={t('gitp.off.lead')}>
+        <section className="max-w-2xl rounded-xl border bg-card p-4" data-testid="git-off">
+          {!settings.data ? (
+            <Skeleton className="h-40" />
+          ) : settings.data.available && !settings.data.locked ? (
+            <GitSettingsForm view={settings.data} />
+          ) : (
+            <p className="text-sm text-muted-foreground">{t('gitp.off.unavailable')}</p>
+          )}
+        </section>
       </Page>
     )
-  return <Connected git={git} ids={new Map((systems.data?.systems ?? []).map((s) => [s.name, s.id]))} />
+  return <Connected git={git} settings={settings.data} ids={new Map((systems.data?.systems ?? []).map((s) => [s.name, s.id]))} />
 }
 
-function Connected({ git, ids }: { git: GitStatus; ids: Map<string, string> }) {
+function Connected({ git, settings, ids }: { git: GitStatus; settings?: GitSettingsView; ids: Map<string, string> }) {
   const { t, tn } = useT()
   const sync = useGitSync()
   const problems = gitProblems(git)
@@ -69,6 +74,7 @@ function Connected({ git, ids }: { git: GitStatus; ids: Map<string, string> }) {
   const push = useGitPush()
   const discard = useGitDiscard()
   const [committing, setCommitting] = useState(false)
+  const [editing, setEditing] = useState(false)
   const [pushed, setPushed] = useState<GitProposal | null>(null)
   const saved = changes.data?.changes ?? []
   const target = t(git.write === 'pullRequest' && !git.empty ? 'gitc.where.propose' : 'gitc.where.commit', { branch: git.branch })
@@ -76,9 +82,16 @@ function Connected({ git, ids }: { git: GitStatus; ids: Map<string, string> }) {
     <Page
       title={projectName(git)}
       actions={
+        <>
+          {settings && !settings.locked && (
+            <Button variant="ghost" size="sm" onClick={() => setEditing(true)} data-testid="git-edit">
+              <Pencil /> {t('gitp.edit')}
+            </Button>
+          )}
         <Button variant="outline" size="sm" onClick={() => sync.mutate()} disabled={sync.isPending} data-testid="git-check-now">
           {sync.isPending ? <Loader2 className="animate-spin" /> : <RefreshCw />} {t(sync.isPending ? 'git.checking' : 'git.checkNow')}
         </Button>
+        </>
       }
     >
       {git.error && (
@@ -240,6 +253,17 @@ function Connected({ git, ids }: { git: GitStatus; ids: Map<string, string> }) {
         )}
         {problems > 0 && <p className="mt-2 text-xs text-muted-foreground">{t('gitp.files.kept')}</p>}
       </Section>
+      {editing && settings && (
+        <Dialog open onOpenChange={(v) => !v && setEditing(false)}>
+          <DialogContent className="max-h-[90svh] overflow-y-auto sm:max-w-xl">
+            <DialogHeader>
+              <DialogTitle>{t('gitp.repo')}</DialogTitle>
+              <DialogDescription className="sr-only">{t('gitp.edit')}</DialogDescription>
+            </DialogHeader>
+            <GitSettingsForm view={settings} onDone={() => setEditing(false)} />
+          </DialogContent>
+        </Dialog>
+      )}
       {committing && (
         <GitCommitDialog
           changes={saved}

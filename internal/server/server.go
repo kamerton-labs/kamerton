@@ -58,8 +58,10 @@ type Options struct {
 	NewPrometheus        func(url string) (prometheus.Querier, error)
 	NewAlertmanager      func(url string) alertmanager.Reader
 	Generator            generator.Options
-	// Git reads system descriptions from a repository; nil: off.
-	Git *gitsync.Service
+	// Git reads system descriptions from a repository; nil: off. GitRunner, when set, holds the
+	// repository instead and lets the UI connect, change and disconnect it.
+	Git       *gitsync.Service
+	GitRunner *gitsync.Runner
 	// TailMute silences the consequences of an incident for a while after its cause is gone;
 	// the server tells it which Alertmanager a system uses. Nil: off.
 	TailMute *tailmute.Service
@@ -216,6 +218,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("DELETE /api/v1/git/changes/{system}", s.gitDiscard)
 	mux.HandleFunc("POST /api/v1/git/push", s.gitPush)
 	mux.HandleFunc("GET /api/v1/git/commits", s.gitCommits)
+	mux.HandleFunc("GET /api/v1/git/settings", s.gitSettings)
+	mux.HandleFunc("PUT /api/v1/git/settings", s.putGitSettings)
+	mux.HandleFunc("POST /api/v1/git/settings/test", s.testGitSettings)
+	mux.HandleFunc("DELETE /api/v1/git/settings", s.deleteGitSettings)
 	mux.HandleFunc("DELETE /api/v1/systems/{id}", s.deleteSystem)
 	mux.HandleFunc("POST /api/v1/systems/{id}/validate", s.validateSystem)
 	mux.HandleFunc("POST /api/v1/systems/{id}/rules/preview", s.previewSystemRules)

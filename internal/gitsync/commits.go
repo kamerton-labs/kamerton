@@ -117,7 +117,7 @@ func touched(c *object.Commit, lay layout) []string {
 	seen := map[string]bool{}
 	for _, st := range stats {
 		p := st.Name
-		if lay.skip(p) || !(lay.systems == "" || strings.HasPrefix(p, lay.systems+"/")) {
+		if lay.skip(p) || (lay.systems != "" && !strings.HasPrefix(p, lay.systems+"/")) {
 			continue
 		}
 		if ext := path.Ext(p); ext == ".yaml" || ext == ".yml" {

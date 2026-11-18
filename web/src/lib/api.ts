@@ -140,6 +140,60 @@ export interface GitRequest {
   branch: string
 }
 
+/** The connection to the repository as the UI edits it; the token is write-only. */
+export interface GitSettings {
+  url: string
+  branch?: string
+  path?: string
+  write?: '' | 'pullRequest' | 'commit'
+  provider?: string
+  apiURL?: string
+  commitStatus?: boolean
+}
+
+export interface GitSettingsView extends GitSettings {
+  /** False where a repository cannot be connected from the UI (no cluster). */
+  available: boolean
+  /** Set by the installation: shown, not editable. */
+  locked: boolean
+  connected: boolean
+  hasToken: boolean
+}
+
+export interface GitCheck {
+  ok: boolean
+  empty?: boolean
+  error?: string
+  files: number
+}
+
+const gitInvalidate = (qc: ReturnType<typeof useQueryClient>) => {
+  void qc.invalidateQueries({ queryKey: ['git'] })
+  void qc.invalidateQueries({ queryKey: ['systems'] })
+  void qc.invalidateQueries({ queryKey: ['system'] })
+}
+
+export const useGitSettings = () => useQuery({ queryKey: ['git', 'settings'], queryFn: () => request<GitSettingsView>('/git/settings') })
+
+export const testGitSettings = (v: GitSettings & { token?: string }) => postJSON<GitCheck>('/git/settings/test', v)
+
+export const useSaveGitSettings = () => {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (v: GitSettings & { token?: string }) =>
+      request<GitSettingsView>('/git/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(v) }),
+    onSuccess: () => gitInvalidate(qc),
+  })
+}
+
+export const useDisconnectGit = () => {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: () => request<GitSettingsView>('/git/settings', { method: 'DELETE' }),
+    onSuccess: () => gitInvalidate(qc),
+  })
+}
+
 export type GitChangeKind = 'change' | 'new' | 'delete' | 'move'
 
 /** A change saved in the UI and not pushed, with what it does to the rules. */

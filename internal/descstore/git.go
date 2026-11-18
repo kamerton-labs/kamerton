@@ -287,6 +287,33 @@ func (c *Cluster) GitPaths(ctx context.Context, repo string) ([]string, error) {
 	return out, nil
 }
 
+// ReleaseGit makes the systems of a repository ordinary again: they stay as they are, lose the
+// marks of their source and become editable in the UI. Used when a repository is disconnected.
+func (c *Cluster) ReleaseGit(ctx context.Context, repo string) error {
+	var list v1alpha1.SystemDescriptionList
+	var opts []client.ListOption
+	if c.WatchNamespace != "" {
+		opts = append(opts, client.InNamespace(c.WatchNamespace))
+	}
+	if err := c.Client.List(ctx, &list, opts...); err != nil {
+		return err
+	}
+	for i := range list.Items {
+		sd := &list.Items[i]
+		from := FromGit(sd)
+		if (from == nil || from.Repo != repo) && sd.Annotations[AnnotationGitAdopt] != repo {
+			continue
+		}
+		for _, k := range []string{AnnotationGitRepo, AnnotationGitPath, AnnotationGitCommit, AnnotationGitAdopt} {
+			delete(sd.Annotations, k)
+		}
+		if err := c.Client.Update(ctx, sd); err != nil {
+			return fmt.Errorf("update SystemDescription %s/%s: %w", sd.Namespace, sd.Name, err)
+		}
+	}
+	return nil
+}
+
 // GitKey is the key PruneGit expects for the system of a file.
 func (c *Cluster) GitKey(doc *v1alpha1.SystemDescription) string {
 	ns := doc.Namespace

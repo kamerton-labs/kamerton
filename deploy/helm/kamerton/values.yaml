@@ -114,7 +114,10 @@ incidents:
 # it was and the error is shown; a deleted file deletes its system. Needs
 # controller.enabled.
 git:
-  # https URL of the repository, without credentials. Empty: off.
+  # https URL of the repository, without credentials. Empty: the repository is
+  # connected, changed and disconnected in the UI ("Git" in the sidebar) and
+  # kept in the ConfigMap kamerton-git-settings. Set: the repository is fixed
+  # by the installation, shown in the UI and not editable there.
   url: ""
   branch: main
   # Folder in the repository; empty reads the whole repository.

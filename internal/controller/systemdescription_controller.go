@@ -68,8 +68,8 @@ type SystemDescriptionReconciler struct {
 // Telegram and email setup and the follow-up webhook token (namespaced Role in the chart, Secret restricted by name):
 // +kubebuilder:rbac:groups="",namespace=kamerton,resources=secrets,resourceNames=kamerton-telegram;kamerton-smtp;kamerton-webhook,verbs=get;update;patch;delete
 // +kubebuilder:rbac:groups="",namespace=kamerton,resources=secrets,verbs=create
-// Access token of the git repository with descriptions (chart value git.url):
-// +kubebuilder:rbac:groups="",namespace=kamerton,resources=secrets,resourceNames=kamerton-git,verbs=get
+// Access token of the git repository with descriptions, entered in the UI:
+// +kubebuilder:rbac:groups="",namespace=kamerton,resources=secrets,resourceNames=kamerton-git,verbs=get;update;patch;delete
 // Discovery of programs already running in the cluster (read-only, chart value stacks.discovery.enabled):
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list
 // +kubebuilder:rbac:groups=monitoring.coreos.com,resources=prometheuses;alertmanagers,verbs=get;list

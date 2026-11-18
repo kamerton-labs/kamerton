@@ -134,10 +134,10 @@ func (s *Server) listSystems(w http.ResponseWriter, r *http.Request) {
 		"mode": s.opts.Descriptions.Mode(), "writable": s.opts.Descriptions.Mode() != descstore.ModeNone,
 		"systems": out, "alertsConfigured": configured, "starter": starterDescription, "stacks": nsets,
 	}
-	if s.opts.Git != nil {
-		st := s.opts.Git.Status()
+	if s.git() != nil {
+		st := s.git().Status()
 		resp["git"] = st
-		if list, err := s.opts.Git.Changes(ctx); err == nil {
+		if list, err := s.git().Changes(ctx); err == nil {
 			saved := make([]map[string]string, 0, len(list))
 			for _, c := range list {
 				saved = append(saved, map[string]string{"system": c.System, "kind": c.Kind})
@@ -281,7 +281,7 @@ func (s *Server) getSystem(w http.ResponseWriter, r *http.Request) {
 		resp["git"] = from
 		// Read-only unless Kamerton may write to the repository; then a save is a proposal there.
 		resp["writable"] = false
-		if g := s.opts.Git; g != nil {
+		if g := s.git(); g != nil {
 			if mode := g.WriteMode(); mode != "" {
 				resp["writable"], resp["gitWrite"] = true, mode
 			}
@@ -347,6 +347,88 @@ func (s *Server) putSystem(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"saved": true, "id": snap.ID, "source": snap.Source, "mode": s.opts.Descriptions.Mode(), "warnings": append(res.Warnings, s.stackWarnings(ctx, stackOf(snap))...)})
 }
 
+// git returns the repository in use, or nil.
+func (s *Server) git() *gitsync.Service {
+	if r := s.opts.GitRunner; r != nil {
+		return r.Current(context.Background())
+	}
+	return s.opts.Git
+}
+
+type gitSettingsBody struct {
+	gitsync.Settings
+	// Token is write-only: it goes to the Secret and is never returned.
+	Token string `json:"token"`
+}
+
+func (s *Server) gitSettings(w http.ResponseWriter, r *http.Request) {
+	if s.opts.GitRunner == nil {
+		v := gitsync.View{}
+		if g := s.opts.Git; g != nil {
+			v = gitsync.View{Locked: true, Connected: true, Settings: gitsync.Settings{URL: g.Repo(), Write: g.WriteMode()}}
+		}
+		writeJSON(w, http.StatusOK, v)
+		return
+	}
+	writeJSON(w, http.StatusOK, s.opts.GitRunner.View(r.Context()))
+}
+
+func (s *Server) readGitSettings(w http.ResponseWriter, r *http.Request) (*gitSettingsBody, bool) {
+	if s.opts.GitRunner == nil {
+		writeError(w, http.StatusConflict, "git_unavailable", "a repository can be connected only in a cluster")
+		return nil, false
+	}
+	body, ok := readBody(w, r)
+	if !ok {
+		return nil, false
+	}
+	var in gitSettingsBody
+	if err := json.Unmarshal(body, &in); err != nil {
+		writeError(w, http.StatusBadRequest, "bad_request", "the request body is not JSON")
+		return nil, false
+	}
+	return &in, true
+}
+
+// testGitSettings reads the repository with the given settings; nothing is stored or changed.
+func (s *Server) testGitSettings(w http.ResponseWriter, r *http.Request) {
+	in, ok := s.readGitSettings(w, r)
+	if !ok {
+		return
+	}
+	writeJSON(w, http.StatusOK, s.opts.GitRunner.Try(r.Context(), in.Settings, in.Token))
+}
+
+func (s *Server) putGitSettings(w http.ResponseWriter, r *http.Request) {
+	in, ok := s.readGitSettings(w, r)
+	if !ok {
+		return
+	}
+	// A repository that cannot be read is not connected: the mistake shows now, not a minute later.
+	if c := s.opts.GitRunner.Try(r.Context(), in.Settings, in.Token); !c.OK {
+		writeError(w, http.StatusUnprocessableEntity, "git_unreachable", c.Error)
+		return
+	}
+	if err := s.opts.GitRunner.Connect(r.Context(), in.Settings, in.Token); err != nil {
+		writeError(w, http.StatusConflict, "git_connect_failed", err.Error())
+		return
+	}
+	s.log.Info("git: settings changed from the UI")
+	writeJSON(w, http.StatusOK, s.opts.GitRunner.View(r.Context()))
+}
+
+func (s *Server) deleteGitSettings(w http.ResponseWriter, r *http.Request) {
+	if s.opts.GitRunner == nil {
+		writeError(w, http.StatusConflict, "git_unavailable", "a repository can be connected only in a cluster")
+		return
+	}
+	if err := s.opts.GitRunner.Disconnect(r.Context()); err != nil {
+		writeError(w, http.StatusConflict, "git_disconnect_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, s.opts.GitRunner.View(r.Context()))
+}
+
 // gitNote carries the commit message a person wrote (header X-Kamerton-Message, percent-encoded)
 // and their login into a save that may end up in the repository.
 func (s *Server) gitNote(ctx context.Context, r *http.Request) context.Context {
@@ -363,11 +445,11 @@ func (s *Server) gitNote(ctx context.Context, r *http.Request) context.Context {
 
 // gitSync looks at the repository now instead of waiting for the next tick.
 func (s *Server) gitSync(w http.ResponseWriter, r *http.Request) {
-	if s.opts.Git == nil {
+	if s.git() == nil {
 		writeError(w, http.StatusConflict, "git_off", "system descriptions are not read from git")
 		return
 	}
-	writeJSON(w, http.StatusOK, s.opts.Git.Sync(r.Context()))
+	writeJSON(w, http.StatusOK, s.git().Sync(r.Context()))
 }
 
 // gitPreview says what a description would change if it were written to the repository: where
@@ -377,7 +459,7 @@ func (s *Server) gitPreview(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	g := s.opts.Git
+	g := s.git()
 	if g == nil || g.WriteMode() == "" {
 		writeError(w, http.StatusConflict, "git_off", "writing to git is off")
 		return
@@ -430,7 +512,7 @@ type gitChange struct {
 
 // gitChanges lists the changes saved in the UI and not pushed, each with its effect on the rules.
 func (s *Server) gitChanges(w http.ResponseWriter, r *http.Request) {
-	g := s.opts.Git
+	g := s.git()
 	if g == nil {
 		writeJSON(w, http.StatusOK, map[string]any{"changes": []gitChange{}})
 		return
@@ -472,11 +554,11 @@ func (s *Server) gitChanges(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) gitDiscard(w http.ResponseWriter, r *http.Request) {
-	if s.opts.Git == nil {
+	if s.git() == nil {
 		writeError(w, http.StatusConflict, "git_off", "system descriptions are not read from git")
 		return
 	}
-	if err := s.opts.Git.Discard(r.Context(), r.PathValue("system")); err != nil {
+	if err := s.git().Discard(r.Context(), r.PathValue("system")); err != nil {
 		writeError(w, http.StatusBadGateway, "discard_failed", err.Error())
 		return
 	}
@@ -485,7 +567,7 @@ func (s *Server) gitDiscard(w http.ResponseWriter, r *http.Request) {
 
 // gitPush writes the saved changes to the repository in one commit.
 func (s *Server) gitPush(w http.ResponseWriter, r *http.Request) {
-	g := s.opts.Git
+	g := s.git()
 	if g == nil || g.WriteMode() == "" {
 		writeError(w, http.StatusConflict, "git_off", "writing to git is off")
 		return
@@ -518,11 +600,11 @@ func (s *Server) gitPush(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) gitCommits(w http.ResponseWriter, r *http.Request) {
-	if s.opts.Git == nil {
+	if s.git() == nil {
 		writeJSON(w, http.StatusOK, map[string]any{"commits": []gitsync.Commit{}})
 		return
 	}
-	list, err := s.opts.Git.Commits(r.Context(), 30)
+	list, err := s.git().Commits(r.Context(), 30)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, "commits_unavailable", err.Error())
 		return
@@ -536,7 +618,7 @@ func (s *Server) moveSystemToGit(w http.ResponseWriter, r *http.Request) {
 	mover, ok := s.opts.Descriptions.(interface {
 		MoveToGit(ctx context.Context, id string) error
 	})
-	if !ok || s.opts.Git == nil || s.opts.Git.WriteMode() == "" {
+	if !ok || s.git() == nil || s.git().WriteMode() == "" {
 		writeError(w, http.StatusConflict, "git_off", "writing to git is off: set git.url and git.write")
 		return
 	}
