@@ -325,6 +325,31 @@ func (s *Server) putSystem(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"saved": true, "id": snap.ID, "source": snap.Source, "mode": s.opts.Descriptions.Mode(), "warnings": append(res.Warnings, s.stackWarnings(ctx, stackOf(snap))...)})
 }
 
+// moveSystemToGit puts a system made by hand under the repository: its description becomes a
+// file there, and the file takes the system over once it is merged.
+func (s *Server) moveSystemToGit(w http.ResponseWriter, r *http.Request) {
+	mover, ok := s.opts.Descriptions.(interface {
+		MoveToGit(ctx context.Context, id string) (*descstore.GitProposal, error)
+	})
+	if !ok || s.opts.Git == nil || s.opts.Git.WriteMode() == "" {
+		writeError(w, http.StatusConflict, "git_off", "writing to git is off: set git.url and git.write")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
+	defer cancel()
+	p, err := mover.MoveToGit(ctx, r.PathValue("id"))
+	if errors.Is(err, descstore.ErrNoDescription) {
+		writeError(w, http.StatusNotFound, "not_found", "no such system")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusConflict, "move_failed", err.Error())
+		return
+	}
+	s.log.Info("system moved to git", "system", r.PathValue("id"), "branch", p.Branch)
+	writeJSON(w, http.StatusAccepted, map[string]any{"proposed": true, "proposal": p})
+}
+
 func (s *Server) deleteSystem(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()

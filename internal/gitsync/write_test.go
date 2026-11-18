@@ -18,6 +18,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/kamerton-labs/kamerton/api/v1alpha1"
 	"github.com/kamerton-labs/kamerton/internal/descstore"
 )
 
@@ -239,6 +240,77 @@ func TestSaveFromUICommitsStraightToTheBranch(t *testing.T) {
 	s.Sync(context.Background())
 	if get(t, c, "shop") != nil {
 		t.Error("the system is still there")
+	}
+}
+
+func TestNewSystemBecomesANewFile(t *testing.T) {
+	h := newHosted(t, "tok", map[string]string{"systems/shop.yaml": shop})
+	store, c := cluster(t)
+	s := &Service{URL: h.url(), Path: "systems", Target: store, Token: token("tok"), Write: WriteCommit}
+	store.Git = s
+	s.Sync(context.Background())
+
+	billing := strings.ReplaceAll(shop, "name: shop", "name: billing")
+	_, _, err := store.Create(context.Background(), []byte(billing))
+	var proposed *descstore.ProposedError
+	if !errors.As(err, &proposed) || !proposed.Proposal.Direct {
+		t.Fatalf("Create = %v, want a proposal", err)
+	}
+	if got := h.git(h.bare, "show", "main:systems/billing.yaml"); got != strings.TrimSpace(billing) {
+		t.Errorf("new file:\n%s", got)
+	}
+	if msg := h.git(h.bare, "log", "-1", "--format=%s", "main"); msg != "Add system billing" {
+		t.Errorf("commit message = %q", msg)
+	}
+	s.Sync(context.Background())
+	sd := get(t, c, "billing")
+	if sd == nil || descstore.FromGit(sd) == nil || descstore.FromGit(sd).Path != "systems/billing.yaml" {
+		t.Fatalf("the new system did not come back from git: %+v", sd)
+	}
+
+	// A name that is taken, in the cluster or in the repository, is refused.
+	if _, _, err := store.Create(context.Background(), []byte(shop)); !errors.Is(err, descstore.ErrExists) {
+		t.Errorf("Create of an existing system = %v, want ErrExists", err)
+	}
+}
+
+func TestMoveToGitTakesASystemOverInPlace(t *testing.T) {
+	h := newHosted(t, "tok", map[string]string{"systems/shop.yaml": shop})
+	legacy := &v1alpha1.SystemDescription{}
+	legacy.Name, legacy.Namespace = "legacy", "kamerton"
+	legacy.Spec.Services = []v1alpha1.Service{{Name: "made-by-hand", Type: v1alpha1.ServiceTypeHTTP, Critical: true}}
+	store, c := cluster(t, legacy)
+	s := &Service{URL: h.url(), Path: "systems", Target: store, Token: token("tok"), Write: WritePullRequest}
+	store.Git = s
+	s.Sync(context.Background())
+
+	p, err := store.MoveToGit(context.Background(), "legacy")
+	if err != nil || p.Direct || !strings.HasPrefix(p.Branch, "kamerton/legacy-") {
+		t.Fatalf("MoveToGit = %+v, %v", p, err)
+	}
+	if got := h.git(h.bare, "show", p.Branch+":systems/legacy.yaml"); !strings.Contains(got, "made-by-hand") || strings.Contains(got, "git-adopt") {
+		t.Errorf("file on the branch:\n%s", got)
+	}
+	// Until the merge the system works as before and still belongs to nobody in git.
+	s.Sync(context.Background())
+	if sd := get(t, c, "legacy"); sd == nil || descstore.FromGit(sd) != nil {
+		t.Fatalf("before the merge: %+v", sd)
+	}
+
+	h.git(h.bare, "update-ref", "refs/heads/main", p.Commit)
+	st := s.Sync(context.Background())
+	if states(st)["systems/legacy.yaml"] != StateApplied {
+		t.Fatalf("after the merge: %+v", st)
+	}
+	sd := get(t, c, "legacy")
+	if from := descstore.FromGit(sd); from == nil || from.Path != "systems/legacy.yaml" || sd.Annotations[descstore.AnnotationGitAdopt] != "" {
+		t.Errorf("taken over: %+v annotations=%v", from, sd.Annotations)
+	}
+	if sd.Spec.Services[0].Name != "made-by-hand" {
+		t.Errorf("the description changed on the way: %+v", sd.Spec.Services)
+	}
+	if _, err := store.MoveToGit(context.Background(), "legacy"); err == nil {
+		t.Error("moving a system that is already in git must be refused")
 	}
 }
 

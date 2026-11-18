@@ -46,6 +46,9 @@ func ParseWrite(v string) string {
 	return WriteOff
 }
 
+// RepoKey implements descstore.GitWriter.
+func (s *Service) RepoKey() string { return s.repoKey() }
+
 // WriteEnabled implements descstore.GitWriter.
 func (s *Service) WriteEnabled() bool { return s.Write == WritePullRequest || s.Write == WriteCommit }
 
@@ -77,10 +80,17 @@ func (s *Service) Propose(ctx context.Context, c descstore.GitChange) (*descstor
 		return nil, err
 	}
 	file := cleanPath(c.Path)
+	what := "Change"
+	if c.New {
+		what = "Add"
+		file = path.Join(cleanPath(s.Path), safeRef(c.System)+".yaml")
+		if _, err := fs.Stat(file); err == nil {
+			return nil, fmt.Errorf("the repository already has %s; a system with this name may be waiting there with an error", file)
+		}
+	}
 	if file == "" {
 		return nil, errors.New("the system has no file path")
 	}
-	what := "Change"
 	if c.Content == nil {
 		what = "Remove"
 		if _, err := wt.Remove(file); err != nil {

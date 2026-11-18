@@ -6,7 +6,7 @@
 
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { ArrowLeft, Check, FileCode2, ListChecks, Loader2, MoreHorizontal, Trash2, Workflow } from 'lucide-react'
+import { ArrowLeft, Check, FileCode2, GitBranch, ListChecks, Loader2, MoreHorizontal, Trash2, Workflow } from 'lucide-react'
 import { Link, useBlocker, useNavigate, useParams, useSearchParams } from 'react-router'
 import { cn } from 'cn'
 import SystemCanvas from '@/components/canvas/SystemCanvas'
@@ -17,7 +17,7 @@ import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Skeleton } from '@/components/ui/skeleton'
-import { ApiError, useAlerts, useDeleteSystem, useRuleStates, useSaveSystem, useStacks, useSystem, useSystems, useTelegram, useEmail, validateSystem, type GitProposal, type Issue, type SystemResponse } from '@/lib/api'
+import { ApiError, useAlerts, useDeleteSystem, useMoveToGit, useRuleStates, useSaveSystem, useStacks, useSystem, useSystems, useTelegram, useEmail, validateSystem, type GitProposal, type Issue, type SystemResponse } from '@/lib/api'
 import { t as tCurrent, useT } from '@/i18n'
 import { EditorContext, useDebounced, type EditorState } from '@/lib/editor'
 import { systemStateText } from '@/lib/format'
@@ -85,6 +85,9 @@ function Editor({ data }: { data: SystemResponse }) {
   const tg = useTelegram(id, 15_000)
   const em = useEmail()
   const systems = useSystems()
+  const move = useMoveToGit()
+  // Writing to git is on for the installation; a system made by hand can be moved there.
+  const gitWriteOn = !!systems.data?.git?.write
   const summary = systems.data?.systems.find((s) => s.id === id)
   // The shell's alert counter keeps this query alive, so reading it here sends no extra request.
   const incidents = systemIncidents(useAlerts().data, id)
@@ -218,6 +221,18 @@ function Editor({ data }: { data: SystemResponse }) {
                 <div className="font-mono text-xs break-all">{data.source}</div>
               </DropdownMenuLabel>
               <DropdownMenuSeparator />
+              {gitWriteOn && !data.git && (
+                <DropdownMenuItem
+                  data-testid="move-to-git"
+                  disabled={dirty || move.isPending}
+                  onSelect={async () => {
+                    const ok = await confirm({ title: t('system.moveToGit.title', { name: data.name }), description: t('system.moveToGit.text') })
+                    if (ok) move.mutate(id, { onSuccess: (res) => setProposal(res.proposal) })
+                  }}
+                >
+                  <GitBranch /> {t('system.moveToGit')}
+                </DropdownMenuItem>
+              )}
               <DropdownMenuItem
                 variant="destructive"
                 disabled={!data.writable}
@@ -240,7 +255,7 @@ function Editor({ data }: { data: SystemResponse }) {
         </div>
       </div>
 
-      {(syntaxError || issues.length > 0 || saveError || !data.writable || data.git || del.isError || missingStack) && (
+      {(syntaxError || issues.length > 0 || saveError || !data.writable || data.git || proposal || del.isError || move.isError || missingStack) && (
         <div className="space-y-2 border-b bg-muted/20 px-3 py-2 md:px-4">
           {syntaxError && (
             <p className="text-sm text-destructive">
@@ -290,6 +305,7 @@ function Editor({ data }: { data: SystemResponse }) {
             !data.writable && <p className="text-sm text-muted-foreground">{t('system.readOnly')}</p>
           )}
           {del.isError && <p className="text-sm text-destructive">{t('system.deleteError', { error: del.error.message })}</p>}
+          {move.isError && <p className="text-sm text-destructive">{t('system.moveToGit.error', { error: move.error.message })}</p>}
           {missingStack && (
             <p className="text-sm text-warn" data-testid="stack-missing">
               {rich('system.stackMissing', {
