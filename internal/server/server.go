@@ -622,7 +622,15 @@ type incidentView struct {
 	// AftermathOf is set when this incident is the tail of the record
 	// HistoryID names: no record or follow-up of its own.
 	AftermathOf string            `json:"aftermathOf,omitempty"`
+	Aftermath   *aftermathView    `json:"aftermath,omitempty"`
 	Previous    *history.Previous `json:"previous,omitempty"`
+}
+
+// aftermathView names the finished incident a tail belongs to, so the UI does not show the tail
+// as a new failure.
+type aftermathView struct {
+	Roots   []string  `json:"roots"`
+	EndedAt time.Time `json:"endedAt,omitzero"`
 }
 
 func triageAlert(a alertmanager.Alert) triage.Alert {

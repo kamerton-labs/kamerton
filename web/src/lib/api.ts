@@ -542,6 +542,8 @@ export interface Incident {
   previous?: PreviousIncident
   /** ID of this incident's record in the history, for a note while it is fresh. */
   historyId?: string
+  /** Set when these alerts are the tail of an incident that already ended, not a new failure. */
+  aftermath?: { roots: string[]; endedAt?: string }
 }
 
 export interface PreviousIncident {

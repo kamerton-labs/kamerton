@@ -67,6 +67,9 @@ func (s *Server) attachHistory(ctx context.Context, list []*descstore.Snapshot, 
 		} else if p := s.history.AftermathOf(st, v.System, v.Incident); p != nil {
 			// The tail of an earlier incident has no record of its own.
 			v.HistoryID, v.AftermathOf = p.ID, p.ID
+			if !p.Open {
+				v.Aftermath = &aftermathView{Roots: p.Roots, EndedAt: p.EndedAt}
+			}
 		}
 		v.Previous = s.history.RecallFrom(st, v.System, v.Incident)
 	}

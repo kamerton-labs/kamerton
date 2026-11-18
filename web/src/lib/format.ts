@@ -23,6 +23,11 @@ export function sinceText(iso: string): string {
 
 /** State of a system in a few words (the system list and the system header); incidents name their causes. */
 export function systemStateText(s: Pick<SystemSummary, 'state' | 'alerts'>, incidents: Incident[] = []): string {
+  const tail = incidents.filter((i) => i.aftermath)
+  incidents = incidents.filter((i) => !i.aftermath)
+  if (incidents.length === 0 && tail.length > 0 && (s.state === 'firing' || s.state === 'warning')) {
+    return t('incident.stateAftermath', { roots: [...new Set(tail.flatMap((i) => i.aftermath!.roots))].slice(0, 2).join(', ') })
+  }
   if (incidents.length > 0 && (s.state === 'firing' || s.state === 'warning')) {
     const roots = [...new Set(incidents.flatMap((i) => (i.roots.length ? i.roots : [t('incident.systemRoot')])))]
     return tn('incident.state', incidents.length, { roots: roots.slice(0, 2).join(', ') + (roots.length > 2 ? ` +${roots.length - 2}` : '') })

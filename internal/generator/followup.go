@@ -91,6 +91,8 @@ type Rollout struct {
 	// OldImage and NewImage are image tags (or short digests); OldImage is
 	// empty when unknown.
 	OldImage, NewImage string
+	// First: the workload has had no other version, so this is its installation, not a change.
+	First bool
 }
 
 type Restart struct {
@@ -137,14 +139,14 @@ type FollowUpMessage struct {
 }
 
 type followUpWords struct {
-	header, causeIs, cause, since, alsoAffected string
-	changed                                     string // service, window
-	rollout, restarted, restartedTimes          string
-	exitCode, crashLoop, notReady, warning      string
-	scaledFrom, scaledTo, at, noPods            string
-	mostErrors                                  string // operation, count, window
-	log, quoteOpen, quoteClose, traces          string
-	minutes, and                                string
+	header, causeIs, cause, since, alsoAffected      string
+	changed                                          string // service, window
+	rollout, firstRollout, restarted, restartedTimes string
+	exitCode, crashLoop, notReady, warning           string
+	scaledFrom, scaledTo, at, noPods                 string
+	mostErrors                                       string // operation, count, window
+	log, quoteOpen, quoteClose, traces               string
+	minutes, and                                     string
 	// likely takes the dependency, the root and the observations; explains
 	// the services and their start time.
 	alert, likely, pending, explains string
@@ -155,7 +157,7 @@ var followUpTexts = map[string]followUpWords{
 		header: "Probable cause", causeIs: "probable cause is", cause: "Probable cause:", since: "since",
 		alsoAffected: "Also affected:",
 		changed:      "What changed in %s in the last %s:",
-		rollout:      "new version at %s", restarted: "container %s restarted", restartedTimes: "container %s restarted %d times",
+		rollout:      "new version at %s", firstRollout: "first deployed at %s", restarted: "container %s restarted", restartedTimes: "container %s restarted %d times",
 		exitCode: "exit code %d", crashLoop: "keeps crashing (CrashLoopBackOff)", notReady: "%d of %d pods not ready",
 		scaledFrom: "%s scaled from %d to %d replicas", scaledTo: "%s scaled to %d replicas", at: "at %s", noPods: "no pods exist",
 		warning:    "warning %s: %s",
@@ -171,7 +173,7 @@ var followUpTexts = map[string]followUpWords{
 		header: "Вероятная причина", causeIs: "вероятная причина в", cause: "Вероятная причина:", since: "с",
 		alsoAffected: "Также затронуты:",
 		changed:      "Что изменилось в %s за последние %s:",
-		rollout:      "новая версия в %s", restarted: "контейнер %s перезапустился", restartedTimes: "контейнер %s перезапускался, раз: %d",
+		rollout:      "новая версия в %s", firstRollout: "первая установка в %s", restarted: "контейнер %s перезапустился", restartedTimes: "контейнер %s перезапускался, раз: %d",
 		exitCode: "код выхода %d", crashLoop: "падает снова и снова (CrashLoopBackOff)", notReady: "не готовы подов: %d из %d",
 		scaledFrom: "число реплик %s изменено с %d до %d", scaledTo: "число реплик %s изменено до %d", at: "в %s", noPods: "подов нет",
 		warning:    "предупреждение %s: %s",
@@ -418,7 +420,11 @@ func Summarize(f *FollowUp, lang, timeZone string, collected time.Time) Evidence
 func changeParts(c WorkloadChanges, w followUpWords, at func(time.Time) string, esc func(string) string) []string {
 	var parts []string
 	for _, r := range c.Rollouts {
-		p := fmt.Sprintf(w.rollout, at(r.At))
+		words := w.rollout
+		if r.First {
+			words = w.firstRollout
+		}
+		p := fmt.Sprintf(words, at(r.At))
 		switch {
 		case r.OldImage != "" && r.NewImage != "":
 			p += " (" + esc(r.OldImage) + " -> " + esc(r.NewImage) + ")"
