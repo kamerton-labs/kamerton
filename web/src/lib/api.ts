@@ -245,6 +245,37 @@ export const useRenameProject = () => {
   })
 }
 
+/** A local project's folder as a git working copy. Mirrors internal/project.GitState. */
+export interface ProjectGit {
+  available: boolean
+  branch?: string
+  upstream?: string
+  ahead: number
+  behind: number
+  changes: { path: string; status: string }[]
+  why?: string
+}
+
+export const useProjectGit = (enabled: boolean) =>
+  useQuery({ queryKey: ['project', 'git'], queryFn: () => request<ProjectGit>('/project/git'), enabled, refetchInterval: 15_000 })
+
+// Pulled or pushed: the systems may have changed, and the working copy has.
+const gitDone = (qc: ReturnType<typeof useQueryClient>) => {
+  void qc.invalidateQueries({ queryKey: ['project', 'git'] })
+  void qc.invalidateQueries({ queryKey: ['systems'] })
+  void qc.invalidateQueries({ queryKey: ['system'] })
+}
+
+export const useProjectPull = () => {
+  const qc = useQueryClient()
+  return useMutation({ mutationFn: () => postJSON<ProjectGit>('/project/git/pull', {}), onSettled: () => gitDone(qc) })
+}
+
+export const useProjectPush = () => {
+  const qc = useQueryClient()
+  return useMutation({ mutationFn: (message: string) => postJSON<ProjectGit>('/project/git/push', { message }), onSettled: () => gitDone(qc) })
+}
+
 export const useCloseProject = () => {
   const qc = useQueryClient()
   return useMutation({ mutationFn: () => postJSON<ProjectInfo>('/project/close', {}), onSuccess: () => projectChanged(qc) })

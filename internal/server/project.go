@@ -161,3 +161,49 @@ func (s *Server) cloneProject(w http.ResponseWriter, r *http.Request) {
 	s.log.Info("project cloned", "name", in.Name, "path", in.Path)
 	writeJSON(w, http.StatusCreated, in)
 }
+
+func (s *Server) projectGit(w http.ResponseWriter, r *http.Request) {
+	if l := s.local(w); l != nil {
+		writeJSON(w, http.StatusOK, l.GitState(r.Context()))
+	}
+}
+
+// writeGitResult answers with the state of the working copy, and the error of git when the
+// step failed, so the UI shows both.
+func writeGitResult(w http.ResponseWriter, st project.GitState, err error) {
+	if err != nil {
+		code := http.StatusUnprocessableEntity
+		var ue *project.UserError
+		if !errors.As(err, &ue) && !errors.Is(err, project.ErrNotOpen) {
+			code = http.StatusInternalServerError
+		}
+		writeJSON(w, code, map[string]any{"error": err.Error(), "code": "git_failed", "state": st})
+		return
+	}
+	writeJSON(w, http.StatusOK, st)
+}
+
+func (s *Server) projectPull(w http.ResponseWriter, r *http.Request) {
+	if l := s.local(w); l != nil {
+		st, err := l.Pull(r.Context())
+		writeGitResult(w, st, err)
+	}
+}
+
+func (s *Server) projectPush(w http.ResponseWriter, r *http.Request) {
+	l := s.local(w)
+	if l == nil {
+		return
+	}
+	var req struct {
+		Message string `json:"message"`
+	}
+	if !readProjectBody(w, r, &req) {
+		return
+	}
+	st, err := l.Push(r.Context(), req.Message)
+	if err == nil {
+		s.log.Info("project pushed", "branch", st.Branch)
+	}
+	writeGitResult(w, st, err)
+}

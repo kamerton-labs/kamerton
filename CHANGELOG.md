@@ -105,6 +105,11 @@ All notable changes to Kamerton are listed here. The format follows
     refuses with 422. An empty repository cannot be opened (409 `git_empty`), a project
     cannot be created over another (409), and a create that fails leaves nothing connected
     or on disk.
+  - A local project in a git working copy is pulled and pushed from its page with the
+    person's own git and its access to the repository (`/api/v1/project/git`, `…/pull`,
+    `…/push`): what is not committed and not pushed is listed, Commit & Push commits only the
+    project's folder, Pull only follows on. Without `user.email` set Kamerton does not commit,
+    so git cannot put an address made up from the host name into the history.
   - A project is renamed on its page (`PATCH /api/v1/project`): locally the name in
     `kamerton.yaml` changes and nothing else in the file; in a cluster the kept name. With a
     repository connected the name is its project file's and is changed there.

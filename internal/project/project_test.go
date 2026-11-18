@@ -373,3 +373,98 @@ func TestRenameInTheCluster(t *testing.T) {
 		t.Errorf("with git: %v, name %q", err, names.v)
 	}
 }
+
+func TestPullAndPushALocalProjectWithTheirOwnGit(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is not installed")
+	}
+	for k, v := range map[string]string{"GIT_AUTHOR_NAME": "anna", "GIT_AUTHOR_EMAIL": "anna@example.com", "GIT_COMMITTER_NAME": "anna", "GIT_COMMITTER_EMAIL": "anna@example.com"} {
+		t.Setenv(k, v)
+	}
+	root := t.TempDir()
+	run := func(dir string, args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	bare := filepath.Join(root, "obs.git")
+	run(root, "init", "-q", "--bare", "-b", "main", bare)
+	seed := filepath.Join(root, "seed")
+	run(root, "clone", "-q", bare, seed)
+	for name, content := range gitsyncStarter("obs") {
+		full := filepath.Join(seed, filepath.FromSlash(name))
+		_ = os.MkdirAll(filepath.Dir(full), 0o755)
+		if err := os.WriteFile(full, content, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	run(seed, "add", "-A")
+	run(seed, "commit", "-q", "-m", "start")
+	run(seed, "push", "-q", "origin", "main")
+	work := filepath.Join(root, "work")
+	run(root, "clone", "-q", bare, work)
+
+	l := newLocal(t)
+	ctx := context.Background()
+	if st := l.GitState(ctx); st.Available {
+		t.Error("nothing is open")
+	}
+	if _, err := l.Open(ctx, work); err != nil {
+		t.Fatal(err)
+	}
+	if st := l.GitState(ctx); !st.Available || st.Branch != "main" || st.Upstream != "origin/main" || len(st.Changes) != 0 {
+		t.Fatalf("a clean clone: %+v", st)
+	}
+	// A system saved in the UI is a change of the working copy, committed and pushed from it.
+	if _, _, err := l.Descriptions.Create(ctx, []byte(shop)); err != nil {
+		t.Fatal(err)
+	}
+	st := l.GitState(ctx)
+	if len(st.Changes) != 1 || st.Changes[0].Path != "systems/shop.yaml" || st.Changes[0].Status != "??" {
+		t.Fatalf("after a save: %+v", st)
+	}
+	if _, err := l.Push(ctx, ""); err == nil {
+		t.Error("an empty message must be refused")
+	}
+	// Without a name of its own git would make one up from the host: refused.
+	t.Setenv("GIT_AUTHOR_EMAIL", "")
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	if _, err := l.Push(ctx, "Add shop"); err == nil || !strings.Contains(err.Error(), "user.email") {
+		t.Errorf("no identity: %v", err)
+	}
+	t.Setenv("GIT_AUTHOR_EMAIL", "anna@example.com")
+	if st, err := l.Push(ctx, "Add shop"); err != nil || len(st.Changes) != 0 || st.Ahead != 0 {
+		t.Fatalf("Push = %+v, %v", st, err)
+	}
+	if out, _ := exec.Command("git", "-C", bare, "log", "-1", "--format=%s %an").Output(); strings.TrimSpace(string(out)) != "Add shop anna" {
+		t.Errorf("the repository's last commit: %q", out)
+	}
+	// Someone else pushes; Pull brings it here, and the system shows.
+	run(seed, "pull", "-q")
+	if err := os.WriteFile(filepath.Join(seed, "systems", "billing.yaml"), []byte(strings.ReplaceAll(shop, "name: shop", "name: billing")), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	run(seed, "add", "-A")
+	run(seed, "commit", "-q", "-m", "Add billing")
+	run(seed, "push", "-q")
+	if _, err := l.Pull(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if list, _ := l.Descriptions.List(ctx); len(list) != 2 {
+		t.Errorf("systems after the pull: %d", len(list))
+	}
+	// A folder that is not a working copy has no git to speak of.
+	if _, err := l.New(ctx, NewRequest{Name: "plain", Path: filepath.Join(root, "plain")}, ""); err != nil {
+		t.Fatal(err)
+	}
+	if st := l.GitState(ctx); st.Available || st.Why == "" {
+		t.Errorf("not a working copy: %+v", st)
+	}
+}
+
+func gitsyncStarter(name string) map[string][]byte { return gitsync.StarterFiles(name, "", true) }

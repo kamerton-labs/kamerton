@@ -13,7 +13,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useT } from '@/i18n'
-import { useCloseProject, useRenameProject, useGitChanges, useGitCommit, useGitCommits, useGitDiscard, useGitPush, useGitSettings, useGitSync, useProject, useSystems, type GitProposal, type GitSettingsView, type GitStatus, type ProjectInfo } from '@/lib/api'
+import { useCloseProject, useProjectGit, useProjectPull, useProjectPush, useRenameProject, useGitChanges, useGitCommit, useGitCommits, useGitDiscard, useGitPush, useGitSettings, useGitSync, useProject, useSystems, type GitProposal, type GitSettingsView, type GitStatus, type ProjectInfo } from '@/lib/api'
 import { timeAgo } from '@/lib/format'
 import { gitProblems, projectName } from '@/lib/git'
 
@@ -84,6 +84,70 @@ export default function GitPage() {
   return <Connected git={git} settings={settings.data} ids={new Map((systems.data?.systems ?? []).map((s) => [s.name, s.id]))} />
 }
 
+/**
+ * The project's folder as a git working copy: what is not committed, what is not pushed, and
+ * Pull and Commit & Push done with the person's own git and its access to the repository.
+ */
+function LocalGit() {
+  const { t, tn } = useT()
+  const st = useProjectGit(true)
+  const pull = useProjectPull()
+  const push = useProjectPush()
+  const [message, setMessage] = useState('')
+  const g = st.data
+  if (!g) return <Row label="Git">{st.isLoading ? <Skeleton className="h-5 w-40" /> : t('gitp.localNoGit')}</Row>
+  if (!g.available) return <Row label="Git">{g.why}</Row>
+  const changed = g.changes.length
+  const canPush = changed > 0 || g.ahead > 0 || !g.upstream
+  const busy = pull.isPending || push.isPending
+  const failure = pull.error ?? push.error
+  const doPush = () => push.mutate(message.trim(), { onSuccess: () => setMessage('') })
+  return (
+    <>
+      <Row label={t('gitp.branch')}>
+        <span className="font-mono text-xs">{g.branch}</span>
+        {g.upstream && <span className="text-muted-foreground"> → <span className="font-mono text-xs">{g.upstream}</span></span>}
+        {g.ahead > 0 && <span className="ml-2 text-xs text-warn">{tn('gitp.local.ahead', g.ahead)}</span>}
+        {g.behind > 0 && <span className="ml-2 text-xs text-warn">{tn('gitp.local.behind', g.behind)}</span>}
+        {!g.upstream && <span className="ml-2 text-xs text-muted-foreground">{t('gitp.local.noUpstream')}</span>}
+      </Row>
+      <Row label={t('gitp.local.changes')}>
+        {changed === 0 ? (
+          <span className="text-muted-foreground">{t('gitp.local.clean')}</span>
+        ) : (
+          <ul className="space-y-0.5" data-testid="local-changes">
+            {g.changes.map((c) => (
+              <li key={c.path} className="flex gap-2 font-mono text-xs">
+                <span className="w-5 shrink-0 text-muted-foreground">{c.status}</span>
+                <span className="[overflow-wrap:anywhere]">{c.path}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </Row>
+      <form
+        className="mt-2 flex flex-wrap gap-2"
+        onSubmit={(e) => {
+          e.preventDefault()
+          if (!busy && canPush && (changed === 0 || message.trim())) doPush()
+        }}
+      >
+        {changed > 0 && (
+          <Input className="h-8 min-w-0 flex-1" value={message} onChange={(e) => (setMessage(e.target.value), push.reset())} placeholder={t('gitp.local.message')} maxLength={200} aria-label={t('gitc.message')} data-testid="local-commit-message" />
+        )}
+        <Button type="submit" size="sm" disabled={busy || !canPush || (changed > 0 && !message.trim())} data-testid="local-push">
+          {push.isPending ? <Loader2 className="animate-spin" /> : <ArrowUp />} {changed > 0 ? 'Commit & Push' : 'Push'}
+        </Button>
+        <Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => pull.mutate()} data-testid="local-pull">
+          {pull.isPending ? <Loader2 className="animate-spin" /> : <RefreshCw />} Pull
+        </Button>
+      </form>
+      {failure && <p className="mt-2 text-xs text-destructive [overflow-wrap:anywhere]">{failure.message}</p>}
+      <p className="mt-2 text-xs text-muted-foreground">{t('gitp.localGit')}</p>
+    </>
+  )
+}
+
 /** The project's name, renamed in place. */
 function NameRow({ name }: { name: string }) {
   const { t } = useT()
@@ -137,7 +201,7 @@ function LocalProject({ info }: { info: ProjectInfo }) {
       <Row label={t('gitp.folder')}>
         <span className="font-mono text-xs">{info.path}</span>
       </Row>
-      <Row label="Git">{t(info.git ? 'gitp.localGit' : 'gitp.localNoGit')}</Row>
+      {info.git ? <LocalGit /> : <Row label="Git">{t('gitp.localNoGit')}</Row>}
       <div className="mt-3 flex flex-wrap items-center gap-3">
         <Button variant="outline" size="sm" disabled={close.isPending} onClick={() => close.mutate(undefined, { onSuccess: () => void navigate('/', { replace: true }) })} data-testid="project-close">
           {t('gitp.close')}
