@@ -118,6 +118,13 @@ export interface GitStatus {
   write?: 'pullRequest' | 'commit'
   files: { path: string; system?: string; state: 'applied' | 'unchanged' | 'invalid' | 'conflict' | 'failed'; error?: string }[]
   removed?: string[]
+  /** Name from the project file (kamerton.yaml); hasProjectFile is false for a repository laid out by the installation's settings. */
+  project?: string
+  hasProjectFile?: boolean
+  systemsPath?: string
+  generatedPath?: string
+  /** The repository has no commits yet. */
+  empty?: boolean
   /** Open pull or merge requests Kamerton made, when the hosting service is known. */
   requests?: GitRequest[]
   repoURL?: string

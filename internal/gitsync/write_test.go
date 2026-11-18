@@ -339,7 +339,12 @@ func TestMoveToGitTakesASystemOverInPlace(t *testing.T) {
 func TestStartingFromAnEmptyRepository(t *testing.T) {
 	h := newHosted(t, "tok", nil)
 	store, c := cluster(t)
-	s := &Service{URL: h.url(), Path: "systems", Target: store, Token: token("tok"), Write: WritePullRequest}
+	s := &Service{
+		URL: h.url(), Target: store, Token: token("tok"), Write: WritePullRequest,
+		Generate: func(raw []byte) (map[string][]byte, error) {
+			return map[string][]byte{"rules/shop.rules.yaml": []byte("# rules\n")}, nil
+		},
+	}
 	store.Git = s
 
 	// An empty repository is a state, not an error.
@@ -358,9 +363,69 @@ func TestStartingFromAnEmptyRepository(t *testing.T) {
 	if got := h.git(h.bare, "show", "main:systems/shop.yaml"); got != strings.TrimSpace(shop) {
 		t.Errorf("first file:\n%s", got)
 	}
+	// The new repository describes itself: a project file, a README and a .gitignore.
+	tree := h.git(h.bare, "ls-tree", "-r", "--name-only", "main")
+	for _, want := range []string{"kamerton.yaml", "README.md", ".gitignore", "systems/shop.yaml", "generated/shop/rules/shop.rules.yaml"} {
+		if !strings.Contains(tree, want) {
+			t.Errorf("the first commit lacks %s:\n%s", want, tree)
+		}
+	}
+	if manifest := h.git(h.bare, "show", "main:kamerton.yaml"); !strings.Contains(manifest, "kind: Project") || !strings.Contains(manifest, "name: obs") {
+		t.Errorf("project file:\n%s", manifest)
+	}
 	st = s.Sync(context.Background())
 	if st.Empty || st.Error != "" || get(t, c, "shop") == nil {
 		t.Fatalf("after the first commit: %+v", st)
+	}
+	if !st.HasProjectFile || st.Project != "obs" || st.SystemsPath != "systems" || st.GeneratedPath != "generated" {
+		t.Errorf("layout from the project file: %+v", st)
+	}
+	if from := descstore.FromGit(get(t, c, "shop")); from.Path != "systems/shop.yaml" {
+		t.Errorf("path = %q", from.Path)
+	}
+}
+
+func TestProjectFileSetsTheLayout(t *testing.T) {
+	billing := strings.ReplaceAll(shop, "name: shop", "name: billing")
+	draft := strings.ReplaceAll(shop, "name: shop", "name: draft")
+	h := newHosted(t, "tok", map[string]string{
+		"obs/kamerton.yaml":                    "apiVersion: kamerton.dev/v1alpha1\nkind: Project\nmetadata:\n  name: payments\nspec:\n  systems: descriptions\n  generated: \"\"\n  ignore: [descriptions/drafts]\n",
+		"obs/descriptions/shop.yaml":           shop,
+		"obs/descriptions/team-a/billing.yaml": billing,
+		"obs/descriptions/drafts/draft.yaml":   draft,
+		"elsewhere/outside.yaml":               strings.ReplaceAll(shop, "name: shop", "name: outside"),
+	})
+	store, c := cluster(t)
+	s := &Service{
+		URL: h.url(), Path: "obs", Target: store, Token: token("tok"), Write: WriteCommit, GeneratedPath: "from-settings",
+		Generate: func([]byte) (map[string][]byte, error) { return map[string][]byte{"rules.yaml": []byte("x")}, nil },
+	}
+	store.Git = s
+	st := s.Sync(context.Background())
+	if st.Error != "" || st.Project != "payments" || st.SystemsPath != "obs/descriptions" || st.GeneratedPath != "" || len(st.Files) != 2 {
+		t.Fatalf("status: %+v", st)
+	}
+	if get(t, c, "shop") == nil || get(t, c, "billing") == nil || get(t, c, "draft") != nil || get(t, c, "outside") != nil {
+		t.Error("systems must come from the project's folder, subfolders included, without the ignored ones")
+	}
+	// A new system goes where the project file says, and no generated files are written: the
+	// project file turned them off, whatever the installation's settings say.
+	warehouse := strings.ReplaceAll(shop, "name: shop", "name: warehouse")
+	if _, _, err := store.Create(context.Background(), []byte(warehouse)); err == nil {
+		t.Fatal("Create must answer with a proposal")
+	}
+	tree := h.git(h.bare, "ls-tree", "-r", "--name-only", "main")
+	if !strings.Contains(tree, "obs/descriptions/warehouse.yaml") || strings.Contains(tree, "from-settings") || strings.Contains(tree, "rules.yaml") {
+		t.Errorf("tree after a new system:\n%s", tree)
+	}
+}
+
+func TestBrokenProjectFileChangesNothing(t *testing.T) {
+	h := newHosted(t, "tok", map[string]string{"kamerton.yaml": "kind: Project\nspec:\n  sistems: x\n", "systems/shop.yaml": shop})
+	store, c := cluster(t)
+	s := &Service{URL: h.url(), Target: store, Token: token("tok")}
+	if st := s.Sync(context.Background()); !strings.Contains(st.Error, "kamerton.yaml") || get(t, c, "shop") != nil {
+		t.Fatalf("a mistyped field in the project file must be an error: %+v", st)
 	}
 }
 

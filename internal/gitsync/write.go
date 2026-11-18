@@ -90,11 +90,26 @@ func (s *Service) Propose(ctx context.Context, c descstore.GitChange) (*descstor
 	if err != nil {
 		return nil, err
 	}
+	if first {
+		// A new repository gets its project file, a README and a .gitignore with the first system.
+		for name, content := range s.starterFiles() {
+			if err := util.WriteFile(fs, name, content, 0o644); err != nil {
+				return nil, fmt.Errorf("write %s: %w", name, err)
+			}
+			if _, err := wt.Add(name); err != nil {
+				return nil, err
+			}
+		}
+	}
+	lay, err := s.layoutOf(fs)
+	if err != nil {
+		return nil, err
+	}
 	file := cleanPath(c.Path)
 	what := "Change"
 	if c.New {
 		what = "Add"
-		file = path.Join(cleanPath(s.Path), safeRef(c.System)+".yaml")
+		file = path.Join(lay.systems, safeRef(c.System)+".yaml")
 		if _, err := fs.Stat(file); err == nil {
 			return nil, fmt.Errorf("the repository already has %s; a system with this name may be waiting there with an error", file)
 		}
@@ -115,7 +130,7 @@ func (s *Service) Propose(ctx context.Context, c descstore.GitChange) (*descstor
 			return nil, err
 		}
 	}
-	if err := s.writeGenerated(fs, wt, c); err != nil {
+	if err := s.writeGenerated(fs, wt, c, lay.generated); err != nil {
 		return nil, err
 	}
 	if st, err := wt.Status(); err != nil {
@@ -170,8 +185,7 @@ func (s *Service) Propose(ctx context.Context, c descstore.GitChange) (*descstor
 
 // writeGenerated replaces <GeneratedPath>/<system>/ with what the description generates, so the
 // review shows which rules change.
-func (s *Service) writeGenerated(fs billy.Filesystem, wt *git.Worktree, c descstore.GitChange) error {
-	root := cleanPath(s.GeneratedPath)
+func (s *Service) writeGenerated(fs billy.Filesystem, wt *git.Worktree, c descstore.GitChange, root string) error {
 	if root == "" || s.Generate == nil {
 		return nil
 	}

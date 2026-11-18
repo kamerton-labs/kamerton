@@ -14,11 +14,11 @@ export default function GitStatus({ git }: { git: Status }) {
   const sync = useGitSync()
   const problems = git.files.filter((f) => f.state !== 'applied' && f.state !== 'unchanged')
   const bad = !!git.error || problems.length > 0
-  const where = git.repo + (git.path ? ` · ${git.path}` : '')
+  const where = git.repo + (git.systemsPath ? ` · ${git.systemsPath}` : git.path ? ` · ${git.path}` : '')
   return (
     <Alert variant={bad ? 'destructive' : 'default'} data-testid="git-status">
       <GitBranch />
-      <AlertTitle>{t('git.title', { branch: git.branch })}</AlertTitle>
+      <AlertTitle>{git.project ? t('git.titleProject', { project: git.project, branch: git.branch }) : t('git.title', { branch: git.branch })}</AlertTitle>
       <AlertDescription>
         <div className="space-y-1.5">
         <p className="[overflow-wrap:anywhere]">
@@ -48,7 +48,7 @@ export default function GitStatus({ git }: { git: Status }) {
             </Button>
           </p>
         ) : (
-          !git.error && <p>{t('git.waiting')}</p>
+          !git.error && <p data-testid="git-empty">{t(git.empty ? (git.write ? 'git.emptyWrite' : 'git.empty') : 'git.waiting')}</p>
         )}
         {git.error && <p data-testid="git-error">{t('git.error', { error: git.error })}</p>}
         {problems.length > 0 && (

@@ -97,6 +97,8 @@ type Service struct {
 	reported string
 	// requests are the open requests seen at the last look.
 	requests []Request
+	// lay is the layout seen at the last read.
+	lay layout
 }
 
 // webBase is the repository's address for a browser; empty when the URL is not http(s).
@@ -199,6 +201,12 @@ type Status struct {
 	CheckedAt time.Time `json:"checkedAt,omitzero"`
 	SyncedAt  time.Time `json:"syncedAt,omitzero"`
 	Error     string    `json:"error,omitempty"`
+	// Project is the name in the project file; HasProjectFile is false for a repository laid
+	// out by the installation's settings. SystemsPath and GeneratedPath are where files are.
+	Project        string `json:"project,omitempty"`
+	HasProjectFile bool   `json:"hasProjectFile"`
+	SystemsPath    string `json:"systemsPath,omitempty"`
+	GeneratedPath  string `json:"generatedPath,omitempty"`
 	// Empty: the repository has no commits yet.
 	Empty bool `json:"empty,omitempty"`
 	// Write: pullRequest, commit or empty when the repository is only read.
@@ -240,6 +248,7 @@ func (s *Service) Status() Status {
 	st := s.status
 	st.Repo, st.Branch, st.Path = s.Repo(), s.branch(), cleanPath(s.Path)
 	st.Write = s.WriteMode()
+	st.Project, st.SystemsPath, st.GeneratedPath, st.HasProjectFile = s.lay.name, s.lay.systems, s.lay.generated, s.lay.manifest
 	st.Requests = s.requests
 	if base := s.webBase(); base != "" {
 		st.RepoURL = base
@@ -314,8 +323,8 @@ func (s *Service) Sync(ctx context.Context) Status {
 		s.mu.Unlock()
 		return s.Status()
 	}
-	files, err := s.read(ctx, auth)
-	if errors.Is(err, errNoFolder) && s.folderMayBeEmpty(ctx, cleanPath(s.Path)) {
+	files, lay, err := s.read(ctx, auth)
+	if errors.Is(err, errNoFolder) && s.folderMayBeEmpty(ctx, lay.systems) {
 		// Either the folder's last file is gone, or nothing was ever read from this repository
 		// and the folder is yet to be made. A typo is told apart below.
 		files, err = nil, nil
@@ -379,6 +388,7 @@ func (s *Service) Sync(ctx context.Context) Status {
 	s.mu.Lock()
 	s.status = Status{Commit: head, CheckedAt: now, SyncedAt: now, Files: out, Removed: removed}
 	s.raw = raw
+	s.lay = lay
 	s.mu.Unlock()
 	st := s.Status()
 	s.report(ctx, st)
@@ -473,41 +483,47 @@ type file struct {
 }
 
 // read clones the tip of the branch into memory and returns the description files under Path.
-func (s *Service) read(ctx context.Context, auth transport.AuthMethod) ([]file, error) {
+func (s *Service) read(ctx context.Context, auth transport.AuthMethod) ([]file, layout, error) {
 	fs := memfs.New()
 	_, err := git.CloneContext(ctx, memory.NewStorage(), fs, &git.CloneOptions{
 		URL: s.URL, Auth: auth, ReferenceName: plumbing.NewBranchReferenceName(s.branch()),
 		SingleBranch: true, Depth: 1, Tags: git.NoTags,
 	})
 	if err != nil {
-		return nil, s.gitErr("clone", err)
+		return nil, layout{}, s.gitErr("clone", err)
 	}
-	root := cleanPath(s.Path)
-	if root != "" {
-		if st, err := fs.Stat(root); err != nil || !st.IsDir() {
-			return nil, fmt.Errorf("%w: %q on branch %s", errNoFolder, root, s.branch())
+	lay, err := s.layoutOf(fs)
+	if err != nil {
+		return nil, lay, err
+	}
+	if lay.systems != "" {
+		if st, err := fs.Stat(lay.systems); err != nil || !st.IsDir() {
+			return nil, lay, fmt.Errorf("%w: %q on branch %s", errNoFolder, lay.systems, s.branch())
 		}
 	}
 	var out []file
-	if err := walk(fs, root, &out); err != nil {
-		return nil, err
+	if err := walk(fs, lay.systems, lay, &out); err != nil {
+		return nil, lay, err
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].path < out[j].path })
-	return out, nil
+	return out, lay, nil
 }
 
-func walk(fs billy.Filesystem, dir string, out *[]file) error {
+func walk(fs billy.Filesystem, dir string, lay layout, out *[]file) error {
 	entries, err := fs.ReadDir(dir)
 	if err != nil {
 		return fmt.Errorf("read folder %q: %w", dir, err)
 	}
 	for _, e := range entries {
 		p := path.Join(dir, e.Name())
+		if lay.skip(p) {
+			continue
+		}
 		if e.IsDir() {
 			if strings.HasPrefix(e.Name(), ".") {
 				continue
 			}
-			if err := walk(fs, p, out); err != nil {
+			if err := walk(fs, p, lay, out); err != nil {
 				return err
 			}
 			continue
