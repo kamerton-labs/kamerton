@@ -165,6 +165,9 @@ export interface GitCheck {
   empty?: boolean
   error?: string
   files: number
+  /** The folder holds a project file; without one a project can be created there. */
+  hasProject?: boolean
+  project?: string
 }
 
 const gitInvalidate = (qc: ReturnType<typeof useQueryClient>) => {
@@ -180,8 +183,8 @@ export const testGitSettings = (v: GitSettings & { token?: string }) => postJSON
 export const useSaveGitSettings = () => {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: (v: GitSettings & { token?: string }) =>
-      request<GitSettingsView>('/git/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(v) }),
+    mutationFn: (v: GitSettings & { token?: string; create?: boolean }) =>
+      request<{ settings: GitSettingsView; proposal?: GitProposal }>('/git/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(v) }),
     onSuccess: () => gitInvalidate(qc),
   })
 }

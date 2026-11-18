@@ -75,6 +75,12 @@ All notable changes to Kamerton are listed here. The format follows
   the Secret `kamerton-git`. Disconnecting deletes nothing: the systems
   stay and become editable in the UI. A repository set with `git.url` is
   shown and cannot be changed there.
+- Creating a project. The form has two modes: "Open" a project that is
+  already in the repository, and "Create" one. Create writes the project
+  file, a README and a `.gitignore` into the chosen folder
+  (`observability` by default) of any repository, empty or not, and leaves
+  everything else there alone; with pull requests on it arrives as one.
+  "Test" says whether the folder already holds a project.
 - Git in the sidebar: the project with its branch and folder at the top, and
   a "Git" page with the changes to push, the repository, open pull
   requests, commits and description files. Wording follows git: Commit,

@@ -84,7 +84,7 @@ function Connected({ git, settings, ids }: { git: GitStatus; settings?: GitSetti
       actions={
         <>
           {settings && !settings.locked && (
-            <Button variant="ghost" size="sm" onClick={() => setEditing(true)} data-testid="git-edit">
+            <Button variant="outline" size="sm" onClick={() => setEditing(true)} data-testid="git-edit">
               <Pencil /> {t('gitp.edit')}
             </Button>
           )}

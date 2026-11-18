@@ -21,10 +21,29 @@ export default function GitSettingsForm({ view, onDone }: { view: GitSettingsVie
   const [branch, setBranch] = useState(view.branch || 'main')
   const [path, setPath] = useState(view.path ?? '')
   const [write, setWrite] = useState<string>(view.write || 'off')
+  const pick = (m: 'open' | 'create') => {
+    setMode(m)
+    setCheck(null)
+    // A new project goes into its own folder and needs push.
+    if (m === 'create') {
+      if (!path) setPath('observability')
+      if (write === 'off') setWrite('pullRequest')
+    }
+  }
   const [token, setToken] = useState('')
+  // Two ways in: open a project that is already in the repository, or create one there.
+  const [mode, setMode] = useState<'open' | 'create'>('open')
+  const creating = mode === 'create' && !view.connected
   const [check, setCheck] = useState<GitCheck | null>(null)
   const [testing, setTesting] = useState(false)
-  const body = () => ({ url: url.trim(), branch: branch.trim(), path: path.trim(), write: (write === 'off' ? '' : write) as '' | 'pullRequest' | 'commit', token: token.trim() || undefined })
+  const body = () => ({
+    url: url.trim(),
+    branch: branch.trim(),
+    path: path.trim(),
+    write: (write === 'off' ? '' : write) as '' | 'pullRequest' | 'commit',
+    token: token.trim() || undefined,
+    create: creating || undefined,
+  })
   const test = () => {
     setTesting(true)
     setCheck(null)
@@ -35,6 +54,22 @@ export default function GitSettingsForm({ view, onDone }: { view: GitSettingsVie
   }
   return (
     <div className="space-y-4" data-testid="git-settings">
+      {!view.connected && (
+        <div className="inline-flex rounded-md border p-0.5 text-sm" role="tablist" data-testid="git-mode">
+          {(['open', 'create'] as const).map((m) => (
+            <button
+              key={m}
+              type="button"
+              role="tab"
+              aria-selected={mode === m}
+              onClick={() => pick(m)}
+              className={mode === m ? 'rounded bg-muted px-3 py-1 font-medium' : 'rounded px-3 py-1 text-muted-foreground'}
+            >
+              {t(m === 'open' ? 'gits.mode.open' : 'gits.mode.create')}
+            </button>
+          ))}
+        </div>
+      )}
       <Field label={t('gits.url')} htmlFor="git-url">
         <Input id="git-url" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://github.com/your-team/observability.git" autoComplete="off" />
       </Field>
@@ -42,7 +77,7 @@ export default function GitSettingsForm({ view, onDone }: { view: GitSettingsVie
         <Field label="Branch" htmlFor="git-branch">
           <Input id="git-branch" value={branch} onChange={(e) => setBranch(e.target.value)} placeholder="main" />
         </Field>
-        <Field label={t('gits.path')} htmlFor="git-path" hint={t('gits.pathHint')}>
+        <Field label={t('gits.path')} htmlFor="git-path" hint={t(creating ? 'gits.pathHintCreate' : 'gits.pathHint')}>
           <Input id="git-path" value={path} onChange={(e) => setPath(e.target.value)} placeholder="/" />
         </Field>
       </div>
@@ -56,7 +91,7 @@ export default function GitSettingsForm({ view, onDone }: { view: GitSettingsVie
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="off">{t('gits.write.off')}</SelectItem>
+              {!creating && <SelectItem value="off">{t('gits.write.off')}</SelectItem>}
               <SelectItem value="pullRequest">Pull request</SelectItem>
               <SelectItem value="commit">{t('gits.write.commit')}</SelectItem>
             </SelectContent>
@@ -65,14 +100,22 @@ export default function GitSettingsForm({ view, onDone }: { view: GitSettingsVie
       </div>
       {check && (
         <p className={check.ok ? 'text-sm text-ok' : 'text-sm text-destructive'} data-testid="git-check">
-          {check.ok ? (check.empty ? t('gits.check.empty') : tn('gits.check.ok', check.files)) : check.error}
+          {!check.ok
+            ? check.error
+            : check.empty
+              ? t('gits.check.empty')
+              : check.hasProject
+                ? t('gits.check.project', { project: check.project ?? '' }) + ' ' + tn('gits.check.files', check.files)
+                : creating
+                  ? t('gits.check.canCreate')
+                  : tn('gits.check.ok', check.files) + ' ' + t('gits.check.noProject')}
         </p>
       )}
       {save.isError && <p className="text-sm text-destructive">{save.error.message}</p>}
       <div className="flex flex-wrap items-center gap-2">
         <Button onClick={() => save.mutate(body(), { onSuccess: onDone })} disabled={!url.trim() || save.isPending} data-testid="git-connect">
           {save.isPending && <Loader2 className="animate-spin" />}
-          {t(view.connected ? 'system.save' : 'gits.connect')}
+          {t(view.connected ? 'system.save' : creating ? 'gits.create' : 'gits.connect')}
         </Button>
         <Button variant="outline" onClick={test} disabled={!url.trim() || testing}>
           {testing && <Loader2 className="animate-spin" />}

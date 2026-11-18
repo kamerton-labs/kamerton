@@ -205,6 +205,97 @@ func (s *Service) proposeAll(ctx context.Context, changes []descstore.GitChange,
 	return out, nil
 }
 
+// InitProject makes the configured folder a project: the project file, a README and a
+// .gitignore. In a repository with other content the folder is new, so nothing of what is
+// already there is touched. The folder must not hold a project yet.
+func (s *Service) InitProject(ctx context.Context, author string) (*descstore.GitProposal, error) {
+	if !s.WriteEnabled() {
+		return nil, errors.New("creating a project needs push to be on")
+	}
+	ctx, cancel := context.WithTimeout(ctx, 90*time.Second)
+	defer cancel()
+	auth, err := s.auth(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if auth == nil && isHTTP(s.URL) {
+		return nil, errors.New("creating a project needs an access token with write access")
+	}
+	fs := memfs.New()
+	repo, err := git.CloneContext(ctx, memory.NewStorage(), fs, &git.CloneOptions{
+		URL: s.URL, Auth: auth, ReferenceName: plumbing.NewBranchReferenceName(s.branch()),
+		SingleBranch: true, Depth: 1, Tags: git.NoTags,
+	})
+	first := errors.Is(err, transport.ErrEmptyRemoteRepository)
+	if first {
+		fs = memfs.New()
+		repo, err = git.InitWithOptions(memory.NewStorage(), fs, git.InitOptions{DefaultBranch: plumbing.NewBranchReferenceName(s.branch())})
+		if err == nil {
+			_, err = repo.CreateRemote(&gitconfig.RemoteConfig{Name: "origin", URLs: []string{s.URL}})
+		}
+	}
+	if err != nil {
+		return nil, s.gitErr("clone", err)
+	}
+	root := cleanPath(s.Path)
+	if _, err := fs.Stat(path.Join(root, ProjectFile)); err == nil {
+		return nil, fmt.Errorf("%s already holds a project; open it instead", orDefault(root, "the repository"))
+	}
+	wt, err := repo.Worktree()
+	if err != nil {
+		return nil, err
+	}
+	for name, content := range s.starterFiles() {
+		if _, err := fs.Stat(name); err == nil && path.Base(name) != ProjectFile {
+			// A README or .gitignore that is already there stays as it is.
+			continue
+		}
+		if err := util.WriteFile(fs, name, content, 0o644); err != nil {
+			return nil, fmt.Errorf("write %s: %w", name, err)
+		}
+		if _, err := wt.Add(name); err != nil {
+			return nil, err
+		}
+	}
+	title := "Start a Kamerton project"
+	if root != "" {
+		title += " in " + root
+	}
+	note := "Made in the Kamerton UI."
+	if author != "" {
+		note = "Made in the Kamerton UI by " + oneLine(author) + "."
+	}
+	hash, err := wt.Commit(title+"\n\n"+note+"\n", &git.CommitOptions{
+		Author: &object.Signature{Name: "Kamerton", Email: "kamerton@noreply.invalid", When: s.now()},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("commit: %w", err)
+	}
+	out := &descstore.GitProposal{Branch: s.branch(), Direct: s.Write == WriteCommit || first, Commit: hash.String()}
+	if !out.Direct {
+		out.Branch = branchPrefix + "project-" + short(hash.String())
+	}
+	spec := gitconfig.RefSpec(fmt.Sprintf("refs/heads/%s:refs/heads/%s", s.branch(), out.Branch))
+	if err := repo.PushContext(ctx, &git.PushOptions{RemoteName: "origin", Auth: auth, RefSpecs: []gitconfig.RefSpec{spec}}); err != nil {
+		return nil, s.gitErr("push", err)
+	}
+	s.log().Info("git: project created", "folder", root, "branch", out.Branch, "commit", short(out.Commit))
+	if out.Direct {
+		go s.Sync(context.WithoutCancel(ctx))
+		return out, nil
+	}
+	if host := s.host(); host != nil {
+		tok, _ := s.Token(ctx)
+		url, err := host.openRequest(ctx, strings.TrimSpace(tok), out.Branch, s.branch(), title, note+" Systems appear here after the merge.")
+		if err != nil {
+			s.log().Warn("git: branch pushed, but the request was not opened", "branch", out.Branch, "error", err)
+		}
+		out.URL = url
+		s.refreshRequests(ctx)
+	}
+	return out, nil
+}
+
 // writeGenerated replaces <GeneratedPath>/<system>/ with what the description generates, so the
 // review shows which rules change.
 func (s *Service) writeGenerated(fs billy.Filesystem, wt *git.Worktree, c descstore.GitChange, root string) error {

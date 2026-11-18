@@ -359,6 +359,8 @@ type gitSettingsBody struct {
 	gitsync.Settings
 	// Token is write-only: it goes to the Secret and is never returned.
 	Token string `json:"token"`
+	// Create makes the folder a new project instead of opening one.
+	Create bool `json:"create"`
 }
 
 func (s *Server) gitSettings(w http.ResponseWriter, r *http.Request) {
@@ -409,12 +411,26 @@ func (s *Server) putGitSettings(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnprocessableEntity, "git_unreachable", c.Error)
 		return
 	}
+	if in.Create {
+		author := ""
+		if a := s.opts.Auth; a != nil {
+			author, _ = a.session(r)
+		}
+		p, err := s.opts.GitRunner.Create(r.Context(), in.Settings, in.Token, author)
+		if err != nil {
+			writeError(w, http.StatusConflict, "git_create_failed", err.Error())
+			return
+		}
+		s.log.Info("git: project created from the UI", "branch", p.Branch)
+		writeJSON(w, http.StatusOK, map[string]any{"settings": s.opts.GitRunner.View(r.Context()), "proposal": p})
+		return
+	}
 	if err := s.opts.GitRunner.Connect(r.Context(), in.Settings, in.Token); err != nil {
 		writeError(w, http.StatusConflict, "git_connect_failed", err.Error())
 		return
 	}
 	s.log.Info("git: settings changed from the UI")
-	writeJSON(w, http.StatusOK, s.opts.GitRunner.View(r.Context()))
+	writeJSON(w, http.StatusOK, map[string]any{"settings": s.opts.GitRunner.View(r.Context())})
 }
 
 func (s *Server) deleteGitSettings(w http.ResponseWriter, r *http.Request) {

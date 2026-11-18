@@ -224,6 +224,10 @@ type Check struct {
 	Error string `json:"error,omitempty"`
 	// Files is how many description files were found.
 	Files int `json:"files"`
+	// Project is the name in the project file of the folder; HasProject is false when the
+	// folder holds none, and then one can be created there.
+	HasProject bool   `json:"hasProject"`
+	Project    string `json:"project,omitempty"`
 }
 
 // Try reads the repository with the given settings and token without changing anything. An
@@ -248,11 +252,27 @@ func (r *Runner) Try(ctx context.Context, set Settings, token string) Check {
 	} else if err != nil {
 		return Check{Error: err.Error()}
 	}
-	files, _, err := s.read(ctx, auth)
+	files, lay, err := s.read(ctx, auth)
 	if err != nil && !errors.Is(err, errNoFolder) {
 		return Check{Error: err.Error()}
 	}
-	return Check{OK: true, Files: len(files)}
+	return Check{OK: true, Files: len(files), HasProject: lay.manifest, Project: lay.name}
+}
+
+// Create connects the repository and makes its folder a project. It returns where the
+// project's first commit went.
+func (r *Runner) Create(ctx context.Context, set Settings, token, author string) (*descstore.GitProposal, error) {
+	if ParseWrite(set.Write) == WriteOff {
+		return nil, errors.New("creating a project needs push: choose Pull request or the branch")
+	}
+	if err := r.Connect(ctx, set, token); err != nil {
+		return nil, err
+	}
+	s := r.Current(ctx)
+	if s == nil {
+		return nil, errors.New("the repository was not connected")
+	}
+	return s.InitProject(ctx, author)
 }
 
 // Connect stores the settings and the token and switches to the repository at once.
