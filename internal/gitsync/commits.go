@@ -30,7 +30,7 @@ type Commit struct {
 }
 
 // maxCommits bounds what one request reads.
-const maxCommits = 50
+const maxCommits = 300
 
 // Commits lists the last commits of the followed branch, newest first. The result is kept
 // until the branch moves.

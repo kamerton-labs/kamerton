@@ -223,8 +223,14 @@ export interface GitCommit {
 export const useGitChanges = (enabled: boolean) =>
   useQuery({ queryKey: ['git', 'changes'], queryFn: () => request<{ changes: GitChange[] }>('/git/changes'), enabled })
 
-export const useGitCommits = (enabled: boolean) =>
-  useQuery({ queryKey: ['git', 'commits'], queryFn: () => request<{ commits: GitCommit[] }>('/git/commits'), enabled, staleTime: 30_000 })
+export const useGitCommits = (enabled: boolean, limit: number) =>
+  useQuery({
+    queryKey: ['git', 'commits', limit],
+    queryFn: () => request<{ commits: GitCommit[]; more: boolean }>(`/git/commits?limit=${limit}`),
+    enabled,
+    staleTime: 30_000,
+    placeholderData: (prev) => prev,
+  })
 
 export const useGitPush = () => {
   const qc = useQueryClient()

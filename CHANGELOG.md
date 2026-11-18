@@ -82,7 +82,7 @@ All notable changes to Kamerton are listed here. The format follows
   everything else there alone; with pull requests on it arrives as one.
   "Test" says whether the folder already holds a project.
 - Git in the sidebar: the project with its branch and folder at the top, and
-  a "Git" page with the changes to push, the repository, open pull
+  a "Project" page with the changes to push, the repository, open pull
   requests, commits and description files. Wording follows git: Commit,
   Push, Pull.
 - `git.generatedPath`: a change written by Kamerton also carries the rules,

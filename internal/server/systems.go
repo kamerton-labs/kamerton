@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"path"
+	"strconv"
 	"sync"
 	"time"
 
@@ -620,12 +621,21 @@ func (s *Server) gitCommits(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"commits": []gitsync.Commit{}})
 		return
 	}
-	list, err := s.git().Commits(r.Context(), 30)
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	if limit <= 0 {
+		limit = 20
+	}
+	// One more than asked, so the UI knows whether there is more to show.
+	list, err := s.git().Commits(r.Context(), limit+1)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, "commits_unavailable", err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"commits": list})
+	more := len(list) > limit
+	if more {
+		list = list[:limit]
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"commits": list, "more": more})
 }
 
 // moveSystemToGit puts a system made by hand under the repository: its description becomes a

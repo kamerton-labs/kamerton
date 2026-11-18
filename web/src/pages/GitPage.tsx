@@ -5,11 +5,12 @@ import { Link } from 'react-router'
 import { useState } from 'react'
 import { ArrowUp, ExternalLink, GitPullRequest, Loader2, Pencil, RefreshCw } from 'lucide-react'
 import { Page, StateDot } from '@/components/common'
-import GitCommitDialog, { ChangeSummary } from '@/components/GitCommitDialog'
+import { ChangeSummary, defaultMessage } from '@/components/GitChanges'
 import GitSettingsForm from '@/components/GitSettingsForm'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useT } from '@/i18n'
 import { useGitChanges, useGitCommits, useGitDiscard, useGitPush, useGitSettings, useGitSync, useSystems, type GitProposal, type GitSettingsView, type GitStatus } from '@/lib/api'
@@ -27,10 +28,13 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
   )
 }
 
-function Section({ title, children, testid }: { title: string; children: React.ReactNode; testid?: string }) {
+function Section({ title, children, testid, actions }: { title: string; children: React.ReactNode; testid?: string; actions?: React.ReactNode }) {
   return (
     <section className="rounded-xl border bg-card p-4" data-testid={testid}>
-      <h2 className="mb-2 text-sm font-medium">{title}</h2>
+      <div className="mb-2 flex min-h-7 items-center justify-between gap-3">
+        <h2 className="text-sm font-medium">{title}</h2>
+        {actions && <div className="flex items-center gap-2">{actions}</div>}
+      </div>
       {children}
     </section>
   )
@@ -44,14 +48,16 @@ export default function GitPage() {
   const git = systems.data?.git
   if (systems.isLoading)
     return (
-      <Page title={t('gitp.title')}>
+      <Page title={t('proj.title')}>
         <Skeleton className="h-40" />
       </Page>
     )
   if (!git)
     return (
-      <Page title="Git" description={t('gitp.off.lead')}>
+      <Page title={t('proj.title')} description={t('proj.off')}>
         <section className="max-w-2xl rounded-xl border bg-card p-4" data-testid="git-off">
+          <h2 className="mb-1 text-sm font-medium">Git</h2>
+          <p className="mb-4 text-sm text-muted-foreground">{t('gitp.off.lead')}</p>
           {!settings.data ? (
             <Skeleton className="h-40" />
           ) : settings.data.available && !settings.data.locked ? (
@@ -70,29 +76,27 @@ function Connected({ git, settings, ids }: { git: GitStatus; settings?: GitSetti
   const sync = useGitSync()
   const problems = gitProblems(git)
   const changes = useGitChanges(true)
-  const commits = useGitCommits(!git.empty)
+  const [commitLimit, setCommitLimit] = useState(10)
+  const commits = useGitCommits(!git.empty, commitLimit)
   const push = useGitPush()
   const discard = useGitDiscard()
-  const [committing, setCommitting] = useState(false)
+  const [message, setMessage] = useState('')
   const [editing, setEditing] = useState(false)
   const [pushed, setPushed] = useState<GitProposal | null>(null)
   const saved = changes.data?.changes ?? []
   const target = t(git.write === 'pullRequest' && !git.empty ? 'gitc.where.propose' : 'gitc.where.commit', { branch: git.branch })
+  const doPush = () =>
+    push.mutate(
+      { message: message.trim() || defaultMessage(saved) },
+      {
+        onSuccess: (res) => {
+          setPushed(res.proposal)
+          setMessage('')
+        },
+      },
+    )
   return (
-    <Page
-      title={projectName(git)}
-      actions={
-        <>
-          {settings && !settings.locked && (
-            <Button variant="outline" size="sm" onClick={() => setEditing(true)} data-testid="git-edit">
-              <Pencil /> {t('gitp.edit')}
-            </Button>
-          )}
-        <Button variant="outline" size="sm" onClick={() => sync.mutate()} disabled={sync.isPending} data-testid="git-check-now">
-          {sync.isPending ? <Loader2 className="animate-spin" /> : <RefreshCw />} {t(sync.isPending ? 'git.checking' : 'git.checkNow')}
-        </Button>
-        </>
-      }
+    <Page title={projectName(git)}
     >
       {git.error && (
         <Alert variant="destructive" data-testid="git-error">
@@ -120,13 +124,24 @@ function Connected({ git, settings, ids }: { git: GitStatus; settings?: GitSetti
 
       {saved.length > 0 && (
         <section className="rounded-xl border bg-card p-4" data-testid="git-changes">
-          <div className="mb-2 flex items-center justify-between gap-3">
-            <h2 className="text-sm font-medium">{tn('gitp.changes', saved.length)}</h2>
-            <Button size="sm" onClick={() => setCommitting(true)} data-testid="git-push">
-              <ArrowUp /> Push
+          <h2 className="mb-2 text-sm font-medium">{tn('gitp.changes', saved.length)}</h2>
+          <div className="flex flex-wrap gap-2">
+            <Input
+              className="min-w-0 flex-1"
+              value={message}
+              onChange={(e) => setMessage(e.target.value)}
+              placeholder={defaultMessage(saved)}
+              maxLength={120}
+              aria-label={t('gitc.message')}
+              data-testid="git-commit-message"
+              onKeyDown={(e) => e.key === 'Enter' && !push.isPending && doPush()}
+            />
+            <Button onClick={doPush} disabled={push.isPending} data-testid="git-push" title={target}>
+              {push.isPending ? <Loader2 className="animate-spin" /> : <ArrowUp />} Commit &amp; Push
             </Button>
           </div>
-          <ul className="divide-y">
+          {push.isError && <p className="mt-2 text-sm text-destructive">{push.error.message}</p>}
+          <ul className="mt-3 divide-y">
             {saved.map((c) => (
               <li key={c.system} className="flex items-start justify-between gap-3 py-2 text-sm">
                 <ChangeSummary c={c} />
@@ -140,7 +155,22 @@ function Connected({ git, settings, ids }: { git: GitStatus; settings?: GitSetti
       )}
 
       <div>
-        <Section title={t('gitp.repo')} testid="git-repo">
+        <Section
+          title="Git"
+          testid="git-repo"
+          actions={
+            <>
+              {settings && !settings.locked && (
+                <Button variant="outline" size="sm" onClick={() => setEditing(true)} data-testid="git-edit">
+                  <Pencil /> {t('gitp.edit')}
+                </Button>
+              )}
+              <Button variant="outline" size="sm" onClick={() => sync.mutate()} disabled={sync.isPending} data-testid="git-check-now">
+                {sync.isPending ? <Loader2 className="animate-spin" /> : <RefreshCw />} {t(sync.isPending ? 'git.checking' : 'git.checkNow')}
+              </Button>
+            </>
+          }
+        >
           <Row label={t('gitp.address')}>
             {git.repoURL ? (
               <a className={ext} href={git.repoURL} target="_blank" rel="noreferrer">
@@ -220,6 +250,17 @@ function Connected({ git, settings, ids }: { git: GitStatus; settings?: GitSetti
               </li>
             ))}
           </ul>
+          {commits.data.more && (
+            <button
+              type="button"
+              className="mt-2 text-xs text-muted-foreground underline underline-offset-2"
+              onClick={() => setCommitLimit((n) => Math.min(n + 30, 300))}
+              disabled={commits.isFetching}
+              data-testid="git-commits-more"
+            >
+              {t(commits.isFetching ? 'git.checking' : 'gitp.commits.more')}
+            </button>
+          )}
         </Section>
       )}
 
@@ -263,26 +304,6 @@ function Connected({ git, settings, ids }: { git: GitStatus; settings?: GitSetti
             <GitSettingsForm view={settings} onDone={() => setEditing(false)} />
           </DialogContent>
         </Dialog>
-      )}
-      {committing && (
-        <GitCommitDialog
-          changes={saved}
-          target={target}
-          pending={push.isPending}
-          error={push.error?.message}
-          onClose={() => setCommitting(false)}
-          onConfirm={(message) =>
-            push.mutate(
-              { message },
-              {
-                onSuccess: (res) => {
-                  setPushed(res.proposal)
-                  setCommitting(false)
-                },
-              },
-            )
-          }
-        />
       )}
     </Page>
   )

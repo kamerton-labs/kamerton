@@ -50,7 +50,7 @@ function Body({ onDone }: { onDone: () => void }) {
         if (r.staged) {
           // Saved, not pushed: the system is listed under Git until it is.
           onDone()
-          navigate('/git')
+          navigate('/project')
           return
         }
         onDone()
