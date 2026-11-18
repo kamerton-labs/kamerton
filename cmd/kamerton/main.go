@@ -48,6 +48,7 @@ import (
 	"github.com/kamerton-labs/kamerton/internal/schema"
 	"github.com/kamerton-labs/kamerton/internal/server"
 	"github.com/kamerton-labs/kamerton/internal/stack"
+	"github.com/kamerton-labs/kamerton/internal/tailmute"
 	"github.com/kamerton-labs/kamerton/internal/telegram"
 	"github.com/kamerton-labs/kamerton/internal/version"
 	"github.com/kamerton-labs/kamerton/web"
@@ -274,6 +275,13 @@ func serve(args []string) error {
 		opts.DiscoveryUnavailable = "Discovery of installed programs works only in a cluster: Kamerton runs without the Kubernetes controller and cannot ask the cluster for its services. Enter the addresses by hand."
 	}
 	server.LogAuthMode(log, opts.Auth)
+	tail, err := time.ParseDuration(cfg.TailMute)
+	if err != nil && cfg.TailMute != "0" {
+		return fmt.Errorf("--tail-mute: %w", err)
+	}
+	if tail > 0 {
+		opts.TailMute = &tailmute.Service{Grace: tail, Logger: log.With("component", "tailmute")}
+	}
 	srv := server.New(opts)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -299,6 +307,16 @@ func serve(args []string) error {
 		defer cancel()
 		return httpSrv.Shutdown(shutdownCtx)
 	})
+	if t := opts.TailMute; t != nil {
+		if mgr != nil {
+			// Leader-only, like the other writers.
+			if err := mgr.Add(t); err != nil {
+				return err
+			}
+		} else {
+			g.Go(func() error { return t.Start(ctx) })
+		}
+	}
 	if mgr != nil {
 		g.Go(func() error {
 			log.Info("starting controller")

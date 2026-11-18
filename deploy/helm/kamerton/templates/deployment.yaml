@@ -80,6 +80,8 @@ spec:
               value: {{ .Values.incidents.followUp.secretName | quote }}
             - name: KAMERTON_WORKLOAD_EVIDENCE
               value: {{ .Values.incidents.followUp.workloadRead | quote }}
+            - name: KAMERTON_TAIL_MUTE
+              value: {{ .Values.incidents.tailMute | quote }}
             - name: KAMERTON_GRAFANA_EXTERNAL_URL
               value: {{ .Values.incidents.grafanaExternalURL | quote }}
             {{- with (include "kamerton.authSecretName" .) }}

@@ -6,6 +6,21 @@ All notable changes to Kamerton are listed here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- The consequences of an incident stay out of the channels after its cause
+  is gone. Error rates and error budgets look back over a window and keep
+  firing for minutes after the fix, and Alertmanager stops muting them the
+  moment the cause resolves, so they used to arrive as new alerts. While an
+  alert is muted by an inhibit rule, Kamerton now keeps an Alertmanager
+  silence on exactly that alert (a matcher per label, author `kamerton`)
+  and prolongs it every 30 seconds; after the cause resolves the silence
+  runs out by itself, 10 minutes later by default. A different alert of the
+  same service is not silenced, and one that still fires after that time is
+  sent. Chart value `incidents.tailMute` (flag `--tail-mute`), `0` turns it
+  off. The Alerts screen keeps showing such alerts as the tail of the
+  incident.
+
 ### Changed
 
 - Alerts that linger after an incident has ended (error budgets, windows

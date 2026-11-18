@@ -790,7 +790,7 @@ func (s *Service) systemAlerts(ctx context.Context, sd *v1alpha1.SystemDescripti
 			if a.Labels[generator.LabelSystem] != sd.Name || resolved[a.Fingerprint] {
 				continue
 			}
-			out = append(out, toTriage(a.Fingerprint, a.Labels, a.Annotations, a.StartsAt, a.Inhibited()))
+			out = append(out, toTriage(a.Fingerprint, a.Labels, a.Annotations, a.StartsAt, a.Muted()))
 			seen[key(a.Fingerprint, a.Labels)] = true
 		}
 	}

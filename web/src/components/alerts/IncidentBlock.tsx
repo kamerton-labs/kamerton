@@ -185,6 +185,7 @@ export default function IncidentBlock({ inc, openAffected = false, systemText }:
       <div className="space-y-0.5">
         <p className="text-sm" data-testid="incident-cause">
           {cause}
+          {tail && inc.rootAlerts.every((a) => a.muted) && <> {t('incident.aftermathMuted')}</>}
         </p>
         {ev?.explains && ev.explains.length > 0 && (
           <p className="text-xs text-muted-foreground" data-testid="incident-explains">

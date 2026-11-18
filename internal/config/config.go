@@ -52,8 +52,10 @@ type Config struct {
 	// people open it; empty disables each.
 	AlertmanagerWebhookURL string
 	WebhookSecretName      string
-	WorkloadEvidence       bool
-	GrafanaExternalURL     string
+	// TailMute: how long the consequences of an incident stay silenced after its cause is gone.
+	TailMute           string
+	WorkloadEvidence   bool
+	GrafanaExternalURL string
 
 	LogLevel string
 }
@@ -91,6 +93,7 @@ func (c *Config) Register(fs *flag.FlagSet) {
 	str(&c.EmailSecretName, "email-secret-name", "kamerton-smtp", "Secret (in Kamerton's namespace) holding the SMTP password under key password")
 	str(&c.AlertmanagerWebhookURL, "alertmanager-webhook-url", "", "URL of Kamerton's webhook as Alertmanager reaches it, for example http://kamerton.kamerton.svc:8080/api/v1/hooks/alertmanager; empty: no follow-up messages (cluster mode)")
 	str(&c.WebhookSecretName, "webhook-secret-name", "kamerton-webhook", "Secret (in Kamerton's namespace) holding the webhook bearer token under key token; created when missing")
+	str(&c.TailMute, "tail-mute", "10m", "keep the consequences of an incident silenced in Alertmanager this long after its cause is gone (they look back over a window and would arrive as new alerts); 0 turns it off")
 	boolean(&c.WorkloadEvidence, "workload-evidence", true, "let follow-up messages read pods, ReplicaSets, StatefulSets and events of the root service (cluster mode)")
 	str(&c.GrafanaExternalURL, "grafana-external-url", "", "Grafana as people open it, for links to failing traces in follow-up messages; empty: no link")
 	str(&c.LogLevel, "log-level", "info", "log level: debug, info, warn, error")

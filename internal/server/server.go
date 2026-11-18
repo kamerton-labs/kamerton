@@ -33,6 +33,7 @@ import (
 	"github.com/kamerton-labs/kamerton/internal/rules"
 	"github.com/kamerton-labs/kamerton/internal/schema"
 	"github.com/kamerton-labs/kamerton/internal/stack"
+	"github.com/kamerton-labs/kamerton/internal/tailmute"
 	"github.com/kamerton-labs/kamerton/internal/telegram"
 	"github.com/kamerton-labs/kamerton/internal/triage"
 	"github.com/kamerton-labs/kamerton/internal/version"
@@ -56,6 +57,9 @@ type Options struct {
 	NewPrometheus        func(url string) (prometheus.Querier, error)
 	NewAlertmanager      func(url string) alertmanager.Reader
 	Generator            generator.Options
+	// TailMute silences the consequences of an incident for a while after its cause is gone;
+	// the server tells it which Alertmanager a system uses. Nil: off.
+	TailMute *tailmute.Service
 	// SecretMissing reports a receiver's Secret that does not exist, so the UI can say which
 	// channels of a system are off. Nil: not checked.
 	SecretMissing func(ctx context.Context, namespace string, ref v1alpha1.SecretKeyRef) bool
@@ -133,6 +137,14 @@ func New(opts Options) *Server {
 	}
 	if s.feedback.Descriptions == nil {
 		s.feedback.Descriptions = s.opts.Descriptions
+	}
+	if t := opts.TailMute; t != nil {
+		if t.Descriptions == nil {
+			t.Descriptions = s.opts.Descriptions
+		}
+		if t.For == nil {
+			t.For = s.tailMuteAlertmanager
+		}
 	}
 	s.history = opts.History
 	if s.history == nil {
@@ -582,7 +594,7 @@ func (s *Server) alertsFor(w http.ResponseWriter, r *http.Request, snap *descsto
 			Name: a.Labels["alertname"], System: a.Labels[generator.LabelSystem], Service: a.Labels[rules.LabelService], Severity: a.Labels[rules.LabelSeverity],
 			StartsAt: a.StartsAt, Summary: a.Annotations["summary"], Labels: a.Labels,
 			Title: a.Annotations[rules.AnnotationTitle], Value: a.Annotations[rules.AnnotationValue], Threshold: a.Annotations[rules.AnnotationThreshold],
-			Fingerprint: a.Fingerprint, Muted: a.Inhibited(),
+			Fingerprint: a.Fingerprint, Muted: a.Muted(),
 		}
 		since := a.StartsAt.UTC().Format("15:04 02.01 UTC")
 		fill := func(s string) string { return strings.ReplaceAll(s, "{since}", since) }
@@ -644,7 +656,7 @@ func triageAlert(a alertmanager.Alert) triage.Alert {
 	return triage.Alert{
 		Fingerprint: a.Fingerprint, Name: a.Labels["alertname"], Service: a.Labels[rules.LabelService],
 		Severity: a.Labels[rules.LabelSeverity], StartsAt: a.StartsAt,
-		Title: title, Value: a.Annotations[rules.AnnotationValue], Muted: a.Inhibited(),
+		Title: title, Value: a.Annotations[rules.AnnotationValue], Muted: a.Muted(),
 	}
 }
 
