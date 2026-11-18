@@ -33,6 +33,8 @@ type systemSummary struct {
 	Services    int    `json:"services"`
 	Rules       int    `json:"rules"`
 	Receivers   int    `json:"receivers"`
+	// Git is set for a system that comes from a git repository: it is changed there, not here.
+	Git *descstore.GitSource `json:"git,omitempty"`
 	// ChannelsOff lists receivers whose Secret is missing: their channel gets nothing yet.
 	ChannelsOff []channelOff `json:"channelsOff,omitempty"`
 	Valid       bool         `json:"valid"`
@@ -86,6 +88,7 @@ func (s *Server) listSystems(w http.ResponseWriter, r *http.Request) {
 		sd := snap.SD
 		sum.Namespace, sum.Environment, sum.Services = sd.Namespace, sd.Spec.Environment, len(sd.Spec.Services)
 		sum.Description = sd.Annotations[AnnotationDescription]
+		sum.Git = descstore.FromGit(sd)
 		if n := sd.Spec.Notifications; n != nil {
 			sum.Receivers = len(n.Receivers)
 		}
@@ -126,6 +129,9 @@ func (s *Server) listSystems(w http.ResponseWriter, r *http.Request) {
 	resp := map[string]any{
 		"mode": s.opts.Descriptions.Mode(), "writable": s.opts.Descriptions.Mode() != descstore.ModeNone,
 		"systems": out, "alertsConfigured": configured, "starter": starterDescription, "stacks": nsets,
+	}
+	if s.opts.Git != nil {
+		resp["git"] = s.opts.Git.Status()
 	}
 	if aerr != nil {
 		resp["alertsError"] = aerr.Error()
@@ -258,6 +264,9 @@ func (s *Server) getSystem(w http.ResponseWriter, r *http.Request) {
 		"mode": mode, "writable": mode != descstore.ModeNone, "valid": snap.SD != nil,
 		"errors": []description.Issue{}, "warnings": []description.Issue{},
 		"stack": map[string]any{"id": c.Set.ID, "name": c.Set.Name, "unknown": c.Unknown, "grafanaURL": c.Set.URL(stack.KindGrafana)},
+	}
+	if from := descstore.FromGit(snap.SD); from != nil {
+		resp["writable"], resp["git"] = false, from
 	}
 	if snap.Invalid != nil {
 		resp["errors"], resp["warnings"] = snap.Invalid.Errors, snap.Invalid.Warnings

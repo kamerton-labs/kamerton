@@ -16,7 +16,9 @@ import (
 	"time"
 
 	"github.com/prometheus/common/model"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	"github.com/kamerton-labs/kamerton/api/v1alpha1"
 	"github.com/kamerton-labs/kamerton/internal/clients/alertmanager"
@@ -445,5 +447,52 @@ func TestSystemsListNamesChannelsWithoutSecret(t *testing.T) {
 	want := []channelOff{{Receiver: "oncall-telegram", Channel: "telegram"}}
 	if got := list.Systems[0].ChannelsOff; !reflect.DeepEqual(got, want) {
 		t.Errorf("channelsOff = %+v, want %+v", got, want)
+	}
+}
+
+func TestSystemFromGitIsReadOnly(t *testing.T) {
+	sd, _, err := description.LoadFile("../../testdata/otel-demo/system.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sd.Namespace = "kamerton"
+	sd.Annotations = map[string]string{
+		descstore.AnnotationGitRepo: "https://example.com/team/obs.git#main", descstore.AnnotationGitPath: "systems/otel-demo.yaml",
+		descstore.AnnotationGitCommit: "0123456789abcdef",
+	}
+	sch := runtime.NewScheme()
+	if err := v1alpha1.AddToScheme(sch); err != nil {
+		t.Fatal(err)
+	}
+	store := &descstore.Cluster{Client: fake.NewClientBuilder().WithScheme(sch).WithObjects(sd).Build(), Namespace: "kamerton"}
+	srv := httptest.NewServer(New(Options{Descriptions: store}).Handler())
+	defer srv.Close()
+	api := srv.URL + "/api/v1"
+
+	var list struct {
+		Systems []struct {
+			Git *descstore.GitSource `json:"git"`
+		} `json:"systems"`
+	}
+	_, body := get(t, api+"/systems")
+	decode(t, body, &list)
+	if len(list.Systems) != 1 || list.Systems[0].Git == nil || list.Systems[0].Git.Path != "systems/otel-demo.yaml" {
+		t.Fatalf("list: %s", body)
+	}
+	var one struct {
+		Writable bool                 `json:"writable"`
+		YAML     string               `json:"yaml"`
+		Git      *descstore.GitSource `json:"git"`
+	}
+	_, body = get(t, api+"/systems/otel-demo")
+	decode(t, body, &one)
+	if one.Writable || one.Git == nil || one.Git.Commit != "0123456789abcdef" {
+		t.Fatalf("system: writable=%v git=%+v", one.Writable, one.Git)
+	}
+	if code, body := do(t, "PUT", api+"/systems/otel-demo", one.YAML); code != http.StatusConflict || !strings.Contains(body, "from_git") {
+		t.Errorf("save: %d %s", code, body)
+	}
+	if code, body := do(t, "DELETE", api+"/systems/otel-demo", ""); code != http.StatusConflict || !strings.Contains(body, "from_git") {
+		t.Errorf("delete: %d %s", code, body)
 	}
 }

@@ -80,6 +80,18 @@ spec:
               value: {{ .Values.incidents.followUp.secretName | quote }}
             - name: KAMERTON_WORKLOAD_EVIDENCE
               value: {{ .Values.incidents.followUp.workloadRead | quote }}
+            {{- /* dig: these settings are absent after an upgrade with --reuse-values from an older chart. */}}
+            {{- $git := .Values.git | default dict }}
+            - name: KAMERTON_GIT_URL
+              value: {{ dig "url" "" $git | toString | quote }}
+            - name: KAMERTON_GIT_BRANCH
+              value: {{ dig "branch" "main" $git | toString | quote }}
+            - name: KAMERTON_GIT_PATH
+              value: {{ dig "path" "" $git | toString | quote }}
+            - name: KAMERTON_GIT_SECRET_NAME
+              value: {{ dig "secretName" "kamerton-git" $git | toString | quote }}
+            - name: KAMERTON_GIT_INTERVAL
+              value: {{ dig "interval" "1m" $git | toString | quote }}
             - name: KAMERTON_TAIL_MUTE
               # Empty after an upgrade with --reuse-values from an older chart: the core uses its default.
               value: {{ dig "tailMute" "" (.Values.incidents | default dict) | toString | quote }}

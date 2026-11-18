@@ -105,6 +105,27 @@ incidents:
   # "tempo" as in grafana.datasources below). Empty: no link.
   grafanaExternalURL: ""
 
+# System descriptions from a git repository. With a url set, Kamerton reads
+# the description files of one branch, applies them and keeps following the
+# branch: a merged change is in the cluster within the interval. Such a
+# system is changed only in git; the UI shows it read-only, with its file and
+# commit. Systems made in the UI or with kubectl are left alone. Other YAML
+# files in the folder are ignored. A file with an error keeps the system as
+# it was and the error is shown; a deleted file deletes its system. Needs
+# controller.enabled.
+git:
+  # https URL of the repository, without credentials. Empty: off.
+  url: ""
+  branch: main
+  # Folder in the repository; empty reads the whole repository.
+  path: ""
+  # For a private repository: a Secret in the release namespace with a
+  # read-only access token under key "token" (GitHub, GitLab and Gitea take
+  # it as the password of HTTP basic auth). A missing Secret means no token.
+  #   kubectl -n kamerton create secret generic kamerton-git --from-literal=token=<token>
+  secretName: kamerton-git
+  interval: 1m
+
 # Sets of programs. The addresses under
 # endpoints / bringYourOwn below form the built-in set; in the UI each of its
 # addresses can be overridden (and reset), and more sets can be added, for

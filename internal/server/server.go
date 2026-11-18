@@ -28,6 +28,7 @@ import (
 	"github.com/kamerton-labs/kamerton/internal/email"
 	"github.com/kamerton-labs/kamerton/internal/followup"
 	"github.com/kamerton-labs/kamerton/internal/generator"
+	"github.com/kamerton-labs/kamerton/internal/gitsync"
 	"github.com/kamerton-labs/kamerton/internal/history"
 	"github.com/kamerton-labs/kamerton/internal/noise"
 	"github.com/kamerton-labs/kamerton/internal/rules"
@@ -57,6 +58,8 @@ type Options struct {
 	NewPrometheus        func(url string) (prometheus.Querier, error)
 	NewAlertmanager      func(url string) alertmanager.Reader
 	Generator            generator.Options
+	// Git reads system descriptions from a repository; nil: off.
+	Git *gitsync.Service
 	// TailMute silences the consequences of an incident for a while after its cause is gone;
 	// the server tells it which Alertmanager a system uses. Nil: off.
 	TailMute *tailmute.Service
@@ -732,6 +735,8 @@ func writeStoreErr(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusConflict, "conflict", err.Error())
 	case errors.Is(err, descstore.ErrExists):
 		writeError(w, http.StatusConflict, "exists", err.Error())
+	case errors.Is(err, descstore.ErrFromGit):
+		writeError(w, http.StatusConflict, "from_git", err.Error())
 	case errors.Is(err, descstore.ErrRename):
 		writeError(w, http.StatusConflict, "rename", err.Error())
 	default:

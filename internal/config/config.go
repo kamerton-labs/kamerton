@@ -52,6 +52,8 @@ type Config struct {
 	// people open it; empty disables each.
 	AlertmanagerWebhookURL string
 	WebhookSecretName      string
+	// GitURL, when set, makes a git repository the source of system descriptions.
+	GitURL, GitBranch, GitPath, GitSecretName, GitInterval string
 	// TailMute: how long the consequences of an incident stay silenced after its cause is gone.
 	TailMute           string
 	WorkloadEvidence   bool
@@ -93,6 +95,11 @@ func (c *Config) Register(fs *flag.FlagSet) {
 	str(&c.EmailSecretName, "email-secret-name", "kamerton-smtp", "Secret (in Kamerton's namespace) holding the SMTP password under key password")
 	str(&c.AlertmanagerWebhookURL, "alertmanager-webhook-url", "", "URL of Kamerton's webhook as Alertmanager reaches it, for example http://kamerton.kamerton.svc:8080/api/v1/hooks/alertmanager; empty: no follow-up messages (cluster mode)")
 	str(&c.WebhookSecretName, "webhook-secret-name", "kamerton-webhook", "Secret (in Kamerton's namespace) holding the webhook bearer token under key token; created when missing")
+	str(&c.GitURL, "git-url", "", "http(s) URL of a git repository with system descriptions; Kamerton applies its files and keeps following the branch (cluster mode). Empty: off")
+	str(&c.GitBranch, "git-branch", "main", "branch to follow")
+	str(&c.GitPath, "git-path", "", "folder in the repository to read; empty: the whole repository")
+	str(&c.GitSecretName, "git-secret-name", "kamerton-git", "Secret (in Kamerton's namespace) with an access token under key token, for a private repository; a missing Secret means no token")
+	str(&c.GitInterval, "git-interval", "1m", "how often to look at the branch")
 	str(&c.TailMute, "tail-mute", "10m", "keep the consequences of an incident silenced in Alertmanager this long after its cause is gone (they look back over a window and would arrive as new alerts); 0 turns it off")
 	boolean(&c.WorkloadEvidence, "workload-evidence", true, "let follow-up messages read pods, ReplicaSets, StatefulSets and events of the root service (cluster mode)")
 	str(&c.GrafanaExternalURL, "grafana-external-url", "", "Grafana as people open it, for links to failing traces in follow-up messages; empty: no link")
