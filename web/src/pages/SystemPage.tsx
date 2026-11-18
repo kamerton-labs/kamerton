@@ -250,7 +250,13 @@ function Editor({ data }: { data: SystemResponse }) {
             </div>
           )}
           {saveError && <p className="text-sm text-destructive">{t('system.saveError', { error: saveError.code === 'conflict' ? t('system.conflict') : saveError.message })}</p>}
-          {!data.writable && <p className="text-sm text-muted-foreground">{t('system.readOnly')}</p>}
+          {data.git ? (
+            <p className="text-sm text-muted-foreground" data-testid="system-from-git">
+              {t('system.fromGit', { path: data.git.path, commit: data.git.commit.slice(0, 8), repo: data.git.repo })}
+            </p>
+          ) : (
+            !data.writable && <p className="text-sm text-muted-foreground">{t('system.readOnly')}</p>
+          )}
           {del.isError && <p className="text-sm text-destructive">{t('system.deleteError', { error: del.error.message })}</p>}
           {missingStack && (
             <p className="text-sm text-warn" data-testid="stack-missing">

@@ -22,8 +22,10 @@ import (
 	"github.com/go-logr/logr"
 	"golang.org/x/sync/errgroup"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
@@ -43,6 +45,7 @@ import (
 	"github.com/kamerton-labs/kamerton/internal/evidence"
 	"github.com/kamerton-labs/kamerton/internal/followup"
 	"github.com/kamerton-labs/kamerton/internal/generator"
+	"github.com/kamerton-labs/kamerton/internal/gitsync"
 	"github.com/kamerton-labs/kamerton/internal/history"
 	"github.com/kamerton-labs/kamerton/internal/noise"
 	"github.com/kamerton-labs/kamerton/internal/schema"
@@ -164,6 +167,23 @@ func serve(args []string) error {
 			opts.Discoverer = &stack.Discoverer{Client: uncached}
 		} else {
 			opts.DiscoveryUnavailable = "Discovery is turned off in this installation (Helm: stacks.discovery.enabled=false, flag --stack-discovery=false). Enter the addresses by hand."
+		}
+		if cfg.GitURL != "" {
+			cluster := &descstore.Cluster{Client: uncached, Namespace: ns, WatchNamespace: cfg.WatchNamespace, Name: cfg.DescriptionName}
+			every, err := time.ParseDuration(cfg.GitInterval)
+			if err != nil || every < 10*time.Second {
+				every = gitsync.DefaultInterval
+			}
+			opts.Git = &gitsync.Service{
+				URL: cfg.GitURL, Branch: cfg.GitBranch, Path: cfg.GitPath, Target: cluster, Interval: every,
+				Token:  secretValue(uncached, ns, cfg.GitSecretName, "token"),
+				Logger: log.With("component", "git"),
+			}
+			// Leader-only: one replica writes descriptions.
+			if err := m.Add(opts.Git); err != nil {
+				return err
+			}
+			log.Info("system descriptions are read from git", "repo", opts.Git.Repo(), "branch", cfg.GitBranch, "path", cfg.GitPath, "every", every.String())
 		}
 		opts.SecretMissing = func(ctx context.Context, namespace string, ref v1alpha1.SecretKeyRef) bool {
 			return controller.SecretMissing(ctx, uncached, namespace, ref)
@@ -539,4 +559,20 @@ func parseTailMute(v string) (time.Duration, error) {
 		return 0, fmt.Errorf("--tail-mute: %w", err)
 	}
 	return d, nil
+}
+
+// secretValue reads one key of a Secret on every call; a missing Secret or key is an empty
+// value, not an error.
+func secretValue(c client.Client, ns, name, key string) func(ctx context.Context) (string, error) {
+	return func(ctx context.Context) (string, error) {
+		var s corev1.Secret
+		err := c.Get(ctx, types.NamespacedName{Namespace: ns, Name: name}, &s)
+		if apierrors.IsNotFound(err) {
+			return "", nil
+		}
+		if err != nil {
+			return "", err
+		}
+		return string(s.Data[key]), nil
+	}
 }

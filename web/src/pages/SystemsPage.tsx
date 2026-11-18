@@ -5,6 +5,7 @@ import { useState } from 'react'
 import { Link } from 'react-router'
 import { Plus } from 'lucide-react'
 import CreateSystemDialog from '@/components/CreateSystemDialog'
+import GitStatus from '@/components/GitStatus'
 import Orientation from '@/components/Orientation'
 import { Page, StatePill } from '@/components/common'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
@@ -40,6 +41,11 @@ function SystemCard({ s, stacks, incidents }: { s: SystemSummary; stacks: number
             <span className="font-medium text-foreground tabular-nums">{s.rules}</span> {tn('word.rules', s.rules)}
           </span>
           <span>{s.receivers === 0 ? <span className="text-warn">{t('systems.noReceivers')}</span> : tn('count.channels', s.receivers)}</span>
+          {s.git && (
+            <span data-testid="system-git" title={`${s.git.repo} · ${s.git.path}`}>
+              {t('systems.fromGit', { commit: s.git.commit.slice(0, 8) })}
+            </span>
+          )}
           {s.channelsOff && s.channelsOff.length > 0 && (
             <span className="text-warn" data-testid="system-channels-off">
               {t('systems.channelsOff', { channels: channelNames(s.channelsOff) })}
@@ -77,6 +83,7 @@ export default function SystemsPage() {
       }
     >
       <Orientation onAddSystem={() => setCreating(true)} />
+      {systems.data?.git && <GitStatus git={systems.data.git} />}
       {systems.isLoading ? (
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
           <Skeleton className="h-32" />

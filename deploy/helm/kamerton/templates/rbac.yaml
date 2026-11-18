@@ -92,6 +92,14 @@ rules:
       - {{ .Values.incidents.followUp.secretName | quote }}
       {{- end }}
     verbs: ["get", "update", "patch", "delete"]
+  {{- with (dig "url" "" (.Values.git | default dict)) }}
+  # The access token of the git repository: read only.
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames:
+      - {{ dig "secretName" "kamerton-git" ($.Values.git | default dict) | quote }}
+    verbs: ["get"]
+  {{- end }}
   # Kubernetes cannot restrict "create" by resourceNames (the name is not
   # known when the request is authorized), so this allows creating any
   # Secret in this namespace, but not reading, listing or changing others.

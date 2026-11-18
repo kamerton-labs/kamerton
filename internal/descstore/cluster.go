@@ -134,6 +134,9 @@ func (c *Cluster) Save(ctx context.Context, id string, raw []byte) (*Snapshot, d
 		}
 		return nil, res, err
 	}
+	if FromGit(&existing) != nil {
+		return nil, res, ErrFromGit
+	}
 	existing.Spec = doc.Spec
 	existing.Annotations = keepOwnAnnotations(existing.Annotations, doc.Annotations)
 	if err := c.Client.Update(ctx, &existing); err != nil {
@@ -164,6 +167,9 @@ func (c *Cluster) Update(ctx context.Context, id string, mutate func(*v1alpha1.S
 			}
 			return err
 		}
+		if FromGit(&sd) != nil {
+			return ErrFromGit
+		}
 		if err := mutate(&sd); err != nil {
 			return err
 		}
@@ -190,6 +196,9 @@ func (c *Cluster) Delete(ctx context.Context, id string) error {
 	key, err := c.key(ctx, id)
 	if err != nil {
 		return err
+	}
+	if cur, err := c.Get(ctx, id); err == nil && FromGit(cur.SD) != nil {
+		return ErrFromGit
 	}
 	obj := &v1alpha1.SystemDescription{}
 	obj.Name, obj.Namespace = key.Name, key.Namespace

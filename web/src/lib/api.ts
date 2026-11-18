@@ -71,6 +71,8 @@ export interface SystemSummary {
   services: number
   rules: number
   receivers: number
+  /** Set for a system that comes from a git repository: it is changed there, not in the UI. */
+  git?: GitSource
   /** Receivers whose Secret is missing: nothing reaches their channel yet. */
   channelsOff?: { receiver: string; channel: 'telegram' | 'email' }[]
   valid: boolean
@@ -84,9 +86,31 @@ export interface SystemSummary {
   stackUnknown?: string
 }
 
+/** Where a system's file is: repo is "https://host/team/repo.git#branch". */
+export interface GitSource {
+  repo: string
+  path: string
+  commit: string
+}
+
+/** gitsync.Status: the last look at the repository. */
+export interface GitStatus {
+  repo: string
+  branch: string
+  path?: string
+  commit?: string
+  checkedAt?: string
+  syncedAt?: string
+  error?: string
+  files: { path: string; system?: string; state: 'applied' | 'unchanged' | 'invalid' | 'conflict' | 'failed'; error?: string }[]
+  removed?: string[]
+}
+
 export interface SystemsResponse {
   mode: 'cluster' | 'file' | 'none'
   writable: boolean
+  /** Present when system descriptions are read from a git repository. */
+  git?: GitStatus
   systems: SystemSummary[]
   alertsConfigured: boolean
   alertsError?: string
@@ -101,6 +125,7 @@ export interface SystemResponse {
   source: string
   mode: 'cluster' | 'file' | 'none'
   writable: boolean
+  git?: GitSource
   valid: boolean
   errors: Issue[]
   warnings: Issue[]

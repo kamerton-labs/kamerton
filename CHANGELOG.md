@@ -6,6 +6,23 @@ All notable changes to Kamerton are listed here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- System descriptions from a git repository. With the chart value `git.url`
+  set (also `git.branch`, `git.path`, `git.secretName`, `git.interval`),
+  Kamerton reads the description files of one branch, applies them and keeps
+  following the branch every minute, so a merged change is in the cluster
+  without anyone running a command. A system from git is changed only
+  there: the UI shows it read-only with its file and commit, and saving or
+  deleting it through the API answers 409 `from_git`. Systems made in the UI
+  or with kubectl are left alone, and a file that names one of them is
+  reported as a conflict instead of taking it over. A file with an error
+  keeps the system as it was and the error is shown on the Systems screen;
+  a deleted file deletes its system; a repository that cannot be read
+  deletes nothing. A private repository needs a read-only token in the
+  Secret `kamerton-git`, key `token`. `GET /api/v1/systems` carries the state
+  of the last read in `git` and each system's file and commit.
+
 ## [0.2.4] - 2026-11-18
 
 ### Fixed
