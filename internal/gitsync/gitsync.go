@@ -215,7 +215,7 @@ func (s *Service) Sync(ctx context.Context) Status {
 		}
 		if fs.State == StateApplied {
 			s.log().Info("git: system applied", "file", f.path, "system", fs.System, "commit", short(head))
-		} else if fs.Error != "" {
+		} else if fs.Error != "" && s.firstTime(head, fs) {
 			s.log().Warn("git: file not applied", "file", f.path, "system", fs.System, "state", fs.State, "error", fs.Error)
 		}
 		out = append(out, fs)
@@ -234,6 +234,21 @@ func (s *Service) Sync(ctx context.Context) Status {
 	s.status = Status{Commit: head, CheckedAt: now, SyncedAt: now, Files: out, Removed: removed}
 	s.mu.Unlock()
 	return s.Status()
+}
+
+// firstTime: a problem is retried on every pass, but logged once per commit.
+func (s *Service) firstTime(commit string, f FileStatus) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.status.Commit != commit {
+		return true
+	}
+	for _, old := range s.status.Files {
+		if old.Path == f.Path {
+			return old.State != f.State || old.Error != f.Error
+		}
+	}
+	return true
 }
 
 func hasProblems(files []FileStatus) bool {
