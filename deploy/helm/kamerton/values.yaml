@@ -92,6 +92,14 @@ incidents:
     # run in many namespaces. Set to false to drop these permissions; the
     # follow-up then has no "what changed" part.
     workloadRead: true
+  # After the cause of an incident is gone, its consequences keep firing for
+  # a few minutes: error rates and error budgets look back over a window.
+  # Alertmanager stops muting them at that moment, so they would arrive as
+  # new alerts. Kamerton keeps a silence on exactly those alerts (one silence
+  # per alert, all its labels) and lets it run out this long after the
+  # cause. A different alert of the same service is not silenced. "0" turns
+  # it off.
+  tailMute: 10m
   # Grafana as people open it (ingress or port-forward address), for the
   # "failing traces" link (Grafana Explore with the Tempo data source, UID
   # "tempo" as in grafana.datasources below). Empty: no link.

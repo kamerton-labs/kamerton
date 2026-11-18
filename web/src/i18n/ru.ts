@@ -361,6 +361,7 @@ export const ru: Messages = {
   'incident.otherAlerts': 'Другие оповещения',
   'incident.aftermath': 'Хвост после инцидента {roots}, который закончился {ago}. Это не новый сбой: такие оповещения смотрят на прошедшее окно и гаснут сами.',
   'incident.aftermathNoTime': 'Хвост после инцидента {roots}. Это не новый сбой: такие оповещения смотрят на прошедшее окно и гаснут сами.',
+  'incident.aftermathMuted': 'Kamerton пока не пускает их в каналы.',
   'incident.stateAftermath': 'успокаивается после {roots}',
   'incident.state': { one: '{n} инцидент: {roots}', few: '{n} инцидента: {roots}', many: '{n} инцидентов: {roots}' },
   'incident.systemRoot': 'нет данных',

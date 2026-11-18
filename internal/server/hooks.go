@@ -18,6 +18,7 @@ import (
 	"github.com/kamerton-labs/kamerton/internal/generator"
 	"github.com/kamerton-labs/kamerton/internal/rules"
 	"github.com/kamerton-labs/kamerton/internal/stack"
+	"github.com/kamerton-labs/kamerton/internal/tailmute"
 )
 
 // The Alertmanager webhook needs no session or CSRF header: it is authenticated by a
@@ -120,4 +121,10 @@ func (s *Server) systemAlertsWithMuted(ctx context.Context, sd *v1alpha1.SystemD
 func (s *Server) evidenceSources(ctx context.Context, sd *v1alpha1.SystemDescription) evidence.Sources {
 	c := s.clientsFor(ctx, sd.Spec.Stack)
 	return evidence.Sources{Prom: c.Prom, LokiURL: c.Set.URL(stack.KindLoki)}
+}
+
+// tailMuteAlertmanager: test doubles and readers that cannot write silences give nil.
+func (s *Server) tailMuteAlertmanager(ctx context.Context, sd *v1alpha1.SystemDescription) tailmute.Alertmanager {
+	am, _ := s.clientsFor(ctx, sd.Spec.Stack).AM.(tailmute.Alertmanager)
+	return am
 }

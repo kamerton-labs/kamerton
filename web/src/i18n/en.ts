@@ -352,6 +352,7 @@ export const en = {
   'incident.otherAlerts': 'Other alerts',
   'incident.aftermath': 'Settling after the {roots} incident, which ended {ago}. Not a new failure: these alerts look back over a window and clear by themselves.',
   'incident.aftermathNoTime': 'Settling after the {roots} incident. Not a new failure: these alerts look back over a window and clear by themselves.',
+  'incident.aftermathMuted': 'Kamerton keeps them out of the channels meanwhile.',
   'incident.stateAftermath': 'settling after {roots}',
   'incident.state': { one: '{n} incident: {roots}', other: '{n} incidents: {roots}' },
   'incident.systemRoot': 'no data',
