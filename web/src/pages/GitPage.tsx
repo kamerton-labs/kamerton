@@ -13,7 +13,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useT } from '@/i18n'
-import { useCloseProject, useGitChanges, useGitCommit, useGitCommits, useGitDiscard, useGitPush, useGitSettings, useGitSync, useProject, useSystems, type GitProposal, type GitSettingsView, type GitStatus, type ProjectInfo } from '@/lib/api'
+import { useCloseProject, useRenameProject, useGitChanges, useGitCommit, useGitCommits, useGitDiscard, useGitPush, useGitSettings, useGitSync, useProject, useSystems, type GitProposal, type GitSettingsView, type GitStatus, type ProjectInfo } from '@/lib/api'
 import { timeAgo } from '@/lib/format'
 import { gitProblems, projectName } from '@/lib/git'
 
@@ -59,6 +59,13 @@ export default function GitPage() {
         {project.data?.where === 'local' ? (
           <LocalProject info={project.data} />
         ) : (
+          <>
+          {project.data?.name && (
+            <section className="max-w-2xl rounded-xl border bg-card p-4" data-testid="cluster-project">
+              <NameRow name={project.data.name} />
+              <Row label={t('setup.where')}>{t('setup.whereCluster', { ns: project.data.namespace || 'kamerton' })}</Row>
+            </section>
+          )}
           <section className="max-w-2xl rounded-xl border bg-card p-4" data-testid="git-off">
             <h2 className="mb-1 text-sm font-medium">Git</h2>
             <p className="mb-4 text-sm text-muted-foreground">{t('gitp.off.lead')}</p>
@@ -70,10 +77,53 @@ export default function GitPage() {
               <p className="text-sm text-muted-foreground">{t('gitp.off.unavailable')}</p>
             )}
           </section>
+          </>
         )}
       </Page>
     )
   return <Connected git={git} settings={settings.data} ids={new Map((systems.data?.systems ?? []).map((s) => [s.name, s.id]))} />
+}
+
+/** The project's name, renamed in place. */
+function NameRow({ name }: { name: string }) {
+  const { t } = useT()
+  const rename = useRenameProject()
+  const [draft, setDraft] = useState<string | null>(null)
+  if (draft === null)
+    return (
+      <Row label={t('setup.name')}>
+        <span className="mr-2">{name}</span>
+        <button type="button" className="text-xs text-muted-foreground underline underline-offset-2" onClick={() => (setDraft(name), rename.reset())} data-testid="project-rename">
+          {t('gitp.rename')}
+        </button>
+      </Row>
+    )
+  const save = () => {
+    const next = draft.trim()
+    if (!next || next === name) return setDraft(null)
+    rename.mutate(next, { onSuccess: () => setDraft(null) })
+  }
+  return (
+    <Row label={t('setup.name')}>
+      <form
+        className="flex flex-wrap items-center gap-2"
+        onSubmit={(e) => {
+          e.preventDefault()
+          save()
+        }}
+      >
+        <Input className="h-8 min-w-0 flex-1" value={draft} onChange={(e) => setDraft(e.target.value)} onKeyDown={(e) => e.key === 'Escape' && setDraft(null)} onFocus={(e) => e.currentTarget.select()} autoFocus maxLength={80} aria-label={t('setup.name')} />
+        <Button type="submit" size="sm" disabled={rename.isPending || !draft.trim()}>
+          {rename.isPending && <Loader2 className="animate-spin" />}
+          {t('system.save')}
+        </Button>
+        <Button type="button" size="sm" variant="ghost" onClick={() => setDraft(null)}>
+          {t('common.cancel')}
+        </Button>
+      </form>
+      {rename.isError && <p className="mt-1 text-xs text-destructive">{rename.error.message}</p>}
+    </Row>
+  )
 }
 
 /** A project kept in a folder on this machine: where it is, and the way back to the first screen. */
@@ -83,6 +133,7 @@ function LocalProject({ info }: { info: ProjectInfo }) {
   const navigate = useNavigate()
   return (
     <section className="max-w-2xl rounded-xl border bg-card p-4" data-testid="local-project">
+      {info.name && <NameRow name={info.name} />}
       <Row label={t('gitp.folder')}>
         <span className="font-mono text-xs">{info.path}</span>
       </Row>

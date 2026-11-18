@@ -92,7 +92,8 @@ All notable changes to Kamerton are listed here. The format follows
     commit. A clone goes into a folder as an ordinary working copy; the token is used for the
     clone and not kept. Projects opened before are listed and any project folder can be
     opened (`/api/v1/project/open`); the project opened last opens on start, and "Close
-    project" goes back to the first screen. `--description` also takes a project folder.
+    project" goes back to the first screen, where it stays after a restart. `--description`
+    also takes a project folder.
   - In a cluster the place is the cluster: the name is kept in the ConfigMap
     `kamerton-project`, and git can be connected at once or later. A project taken from a
     repository keeps its name there too, so disconnecting the repository does not end it. An
@@ -104,6 +105,9 @@ All notable changes to Kamerton are listed here. The format follows
     refuses with 422. An empty repository cannot be opened (409 `git_empty`), a project
     cannot be created over another (409), and a create that fails leaves nothing connected
     or on disk.
+  - A project is renamed on its page (`PATCH /api/v1/project`): locally the name in
+    `kamerton.yaml` changes and nothing else in the file; in a cluster the kept name. With a
+    repository connected the name is its project file's and is changed there.
   - What is wrong with a repository is said in words: no such server, no answer, a
     certificate that is not trusted, no access, no such repository or branch (`problem` in
     the check), with the message of git under it.

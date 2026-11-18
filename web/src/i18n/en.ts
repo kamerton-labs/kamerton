@@ -371,6 +371,7 @@ export const en = {
   'gits.problem.auth': "No access: the token is missing, wrong, or has no rights to this repository.",
   'gits.problem.not_found': "Repository not found. A private repository looks the same without a token.",
   'gits.problem.no_branch': "The repository has no such branch.",
+  'gitp.rename': "Rename",
   'proj.title': "Project",
   'proj.off': "The systems of this installation and where their descriptions are kept.",
   'proj.lead': "",

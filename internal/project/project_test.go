@@ -16,6 +16,7 @@ import (
 	"testing"
 
 	"github.com/kamerton-labs/kamerton/internal/descstore"
+	"github.com/kamerton-labs/kamerton/internal/gitsync"
 	"github.com/kamerton-labs/kamerton/internal/stack"
 )
 
@@ -118,6 +119,12 @@ func TestProjectsAreOpenedByFolderAndRemembered(t *testing.T) {
 	again := &Local{Root: l.Root, RecentFile: l.RecentFile, Descriptions: &descstore.Switch{}, Stacks: &stack.SwitchStateStore{}}
 	if !again.OpenLast(ctx) || again.Info(ctx).Name != "a" {
 		t.Errorf("after a restart: %+v", again.Info(ctx))
+	}
+	// A project closed by hand stays closed after a restart, and is still offered.
+	again.Close(ctx)
+	third := &Local{Root: l.Root, RecentFile: l.RecentFile, Descriptions: &descstore.Switch{}, Stacks: &stack.SwitchStateStore{}}
+	if third.OpenLast(ctx) || third.Info(ctx).Exists || len(third.Info(ctx).Recent) == 0 || third.Info(ctx).Recent[0].Closed {
+		t.Errorf("after closing and a restart: %+v", third.Info(ctx))
 	}
 	// A folder of description files from before project files is a project too.
 	old := t.TempDir()
@@ -303,5 +310,66 @@ func TestClusterProject(t *testing.T) {
 	old := &Cluster{Names: &memNames{}, Systems: listOnly{n: 2}}
 	if !old.Info(ctx).Exists {
 		t.Error("an installation with systems is a project")
+	}
+}
+
+func TestRenameKeepsTheProjectFileAsItIs(t *testing.T) {
+	l := newLocal(t)
+	ctx := context.Background()
+	if _, err := l.Rename(ctx, "x"); !errors.Is(err, ErrNotOpen) {
+		t.Errorf("nothing open: %v", err)
+	}
+	in, err := l.New(ctx, NewRequest{Name: "Shop"}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(in.Path, "kamerton.yaml")
+	before := read(t, file)
+	if in, err = l.Rename(ctx, "Магазин: склад"); err != nil || in.Name != "Магазин: склад" {
+		t.Fatalf("Rename = %+v, %v", in, err)
+	}
+	after := read(t, file)
+	if want := strings.Replace(before, `name: "Shop"`, `name: "Магазин: склад"`, 1); after != want {
+		t.Errorf("only the name may change:\n%s", after)
+	}
+	// The new name is what the folder opens with, and what the recent list shows.
+	if in, _ := l.Open(ctx, in.Path); in.Name != "Магазин: склад" {
+		t.Errorf("reopened: %q", in.Name)
+	}
+	if r := l.recent(); len(r) == 0 || r[0].Name != "Магазин: склад" {
+		t.Errorf("recent: %+v", r)
+	}
+}
+
+func TestSetProjectName(t *testing.T) {
+	for in, want := range map[string]string{
+		"kind: Project\nmetadata:\n  # who\n  name: a\nspec: {}\n": "kind: Project\nmetadata:\n  # who\n  name: \"b\"\nspec: {}\n",
+		"kind: Project\nmetadata:\n  labels: {}\nspec: {}\n":       "kind: Project\nmetadata:\n  name: \"b\"\n  labels: {}\nspec: {}\n",
+	} {
+		got, err := setProjectName([]byte(in), "b")
+		if err != nil || string(got) != want {
+			t.Errorf("setProjectName(%q) = %q, %v", in, got, err)
+		}
+	}
+	if _, err := setProjectName([]byte("kind: Project\n"), "b"); err == nil {
+		t.Error("a file without metadata")
+	}
+}
+
+func TestRenameInTheCluster(t *testing.T) {
+	ctx := context.Background()
+	names := &memNames{v: "Shop"}
+	c := &Cluster{Names: names, Systems: listOnly{}}
+	if in, err := c.Rename(ctx, "Магазин"); err != nil || in.Name != "Магазин" || names.v != "Магазин" {
+		t.Fatalf("Rename = %+v, %v", in, err)
+	}
+	if _, err := (&Cluster{Names: &memNames{}, Systems: listOnly{}}).Rename(ctx, "x"); !errors.Is(err, ErrNotOpen) {
+		t.Errorf("no project: %v", err)
+	}
+	// With a repository the name is its project file's; the cluster does not keep a second one.
+	withGit := &Cluster{Names: names, Systems: listOnly{}, Git: &gitsync.Runner{Locked: &gitsync.Settings{URL: "https://example.com/team/obs.git"}}}
+	var ue *UserError
+	if _, err := withGit.Rename(ctx, "y"); !errors.As(err, &ue) || names.v != "Магазин" {
+		t.Errorf("with git: %v, name %q", err, names.v)
 	}
 }

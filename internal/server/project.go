@@ -44,6 +44,8 @@ func (s *Server) user(r *http.Request) string {
 func writeProjectErr(w http.ResponseWriter, err error) {
 	var ue *project.UserError
 	switch {
+	case errors.Is(err, project.ErrNotOpen):
+		writeError(w, http.StatusConflict, "project_not_open", err.Error())
 	case errors.Is(err, project.ErrExists):
 		writeError(w, http.StatusConflict, "project_exists", err.Error())
 	case errors.Is(err, project.ErrNoName), errors.As(err, &ue):
@@ -69,6 +71,26 @@ func (s *Server) newProject(w http.ResponseWriter, r *http.Request) {
 	}
 	s.log.Info("project created", "name", in.Name, "where", in.Where, "path", in.Path)
 	writeJSON(w, http.StatusCreated, in)
+}
+
+func (s *Server) renameProject(w http.ResponseWriter, r *http.Request) {
+	if s.opts.Projects == nil {
+		writeError(w, http.StatusConflict, "project_unavailable", "this installation is its own project")
+		return
+	}
+	var req struct {
+		Name string `json:"name"`
+	}
+	if !readProjectBody(w, r, &req) {
+		return
+	}
+	in, err := s.opts.Projects.Rename(r.Context(), req.Name)
+	if err != nil {
+		writeProjectErr(w, err)
+		return
+	}
+	s.log.Info("project renamed", "name", in.Name)
+	writeJSON(w, http.StatusOK, in)
 }
 
 // local is the project kept in folders on this machine, or nil in a cluster.

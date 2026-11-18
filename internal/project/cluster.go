@@ -76,6 +76,29 @@ func (c *Cluster) New(ctx context.Context, req NewRequest, _ string) (Info, erro
 	return c.Info(ctx), nil
 }
 
+// Rename changes the name of the installation's project. With a repository connected the name
+// is the one in its project file, changed there like any other file.
+func (c *Cluster) Rename(ctx context.Context, name string) (Info, error) {
+	name, err := cleanName(name)
+	if err != nil {
+		return Info{}, err
+	}
+	in := c.Info(ctx)
+	if !in.Exists {
+		return Info{}, ErrNotOpen
+	}
+	if c.Git != nil && c.Git.Current(ctx) != nil {
+		return Info{}, userErr("the name comes from kamerton.yaml in the repository; change it there")
+	}
+	if c.Names == nil {
+		return Info{}, userErr("there is nowhere to keep the name here")
+	}
+	if err := c.Names.Set(ctx, name); err != nil {
+		return Info{}, err
+	}
+	return c.Info(ctx), nil
+}
+
 // Adopt keeps a name for the project when it has none yet: a project taken from a repository
 // stays a project, with that name, when the repository is disconnected later.
 func (c *Cluster) Adopt(ctx context.Context, name string) {

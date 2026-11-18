@@ -121,14 +121,87 @@ func (l *Local) Close(context.Context) {
 		l.Stacks.Set(nil)
 	}
 	l.mu.Lock()
+	cur := l.cur
 	l.cur = nil
 	l.mu.Unlock()
+	if cur != nil {
+		l.remember(Recent{Name: cur.Name, Path: cur.Path, Closed: true})
+	}
+}
+
+// Rename changes the name in the project file, keeping the rest of the file as it is, comments
+// included. A folder of descriptions without a project file is named after the folder.
+func (l *Local) Rename(ctx context.Context, name string) (Info, error) {
+	name, err := cleanName(name)
+	if err != nil {
+		return Info{}, err
+	}
+	l.mu.Lock()
+	cur := l.cur
+	l.mu.Unlock()
+	if cur == nil {
+		return Info{}, ErrNotOpen
+	}
+	file := filepath.Join(cur.Path, gitsync.ProjectFile)
+	raw, err := os.ReadFile(file)
+	if errors.Is(err, fs.ErrNotExist) {
+		return Info{}, userErr("this folder has no " + gitsync.ProjectFile + "; it is named after the folder")
+	}
+	if err != nil {
+		return Info{}, err
+	}
+	out, err := setProjectName(raw, name)
+	if err != nil {
+		return Info{}, err
+	}
+	if err := os.WriteFile(file, out, 0o644); err != nil {
+		return Info{}, err
+	}
+	l.mu.Lock()
+	if l.cur != nil && l.cur.Path == cur.Path {
+		l.cur.Name = name
+	}
+	l.mu.Unlock()
+	l.remember(Recent{Name: name, Path: cur.Path})
+	return l.Info(ctx), nil
+}
+
+// setProjectName replaces metadata.name in a project file, or adds it, touching no other line.
+func setProjectName(raw []byte, name string) ([]byte, error) {
+	quoted, _ := json.Marshal(name)
+	lines := strings.Split(string(raw), "\n")
+	for i, line := range lines {
+		if strings.TrimRight(line, " \r") != "metadata:" {
+			continue
+		}
+		for j := i + 1; j < len(lines); j++ {
+			l := lines[j]
+			if strings.TrimSpace(l) == "" || strings.HasPrefix(strings.TrimSpace(l), "#") {
+				continue
+			}
+			if !strings.HasPrefix(l, " ") && !strings.HasPrefix(l, "\t") {
+				break // the next top-level key: metadata has no name
+			}
+			if t := strings.TrimLeft(l, " \t"); strings.HasPrefix(t, "name:") {
+				lines[j] = l[:len(l)-len(t)] + "name: " + string(quoted)
+				return []byte(strings.Join(lines, "\n")), nil
+			}
+		}
+		lines = append(lines[:i+1], append([]string{"  name: " + string(quoted)}, lines[i+1:]...)...)
+		return []byte(strings.Join(lines, "\n")), nil
+	}
+	return nil, userErr(gitsync.ProjectFile + " has no metadata section")
 }
 
 // OpenLast opens the project opened last, the way an editor comes back to where it was. It
 // reports whether one was opened; a project that is gone or broken is skipped quietly.
 func (l *Local) OpenLast(ctx context.Context) bool {
-	for _, r := range l.recent() {
+	list := l.recent()
+	if len(list) > 0 && list[0].Closed {
+		// Closed by hand last time: start where it was left, on the first screen.
+		return false
+	}
+	for _, r := range list {
 		if _, err := l.Open(ctx, r.Path); err == nil {
 			return true
 		}

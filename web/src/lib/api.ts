@@ -237,6 +237,14 @@ export const useCloneProject = () => {
   return useMutation({ mutationFn: (v: CloneRequest) => postJSON<ProjectInfo>('/project/clone', v), onSuccess: () => projectChanged(qc) })
 }
 
+export const useRenameProject = () => {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (name: string) => request<ProjectInfo>('/project', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }) }),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ['project'] }),
+  })
+}
+
 export const useCloseProject = () => {
   const qc = useQueryClient()
   return useMutation({ mutationFn: () => postJSON<ProjectInfo>('/project/close', {}), onSuccess: () => projectChanged(qc) })

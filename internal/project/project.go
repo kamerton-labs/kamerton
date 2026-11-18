@@ -43,6 +43,8 @@ type Info struct {
 type Recent struct {
 	Name string `json:"name"`
 	Path string `json:"path"`
+	// Closed: the project was closed by hand, so it does not open by itself on the next start.
+	Closed bool `json:"closed,omitempty"`
 }
 
 // NewRequest makes a project.
@@ -71,6 +73,8 @@ type CloneRequest struct {
 type Projects interface {
 	Info(ctx context.Context) Info
 	New(ctx context.Context, req NewRequest, author string) (Info, error)
+	// Rename gives the open project another name.
+	Rename(ctx context.Context, name string) (Info, error)
 }
 
 // Local projects can also be opened by their folder and cloned from git.
@@ -84,6 +88,8 @@ type LocalProjects interface {
 var (
 	// ErrExists: there is a project already; open it instead.
 	ErrExists = errors.New("there is a project here already; open it instead")
+	// ErrNotOpen: there is no project to change.
+	ErrNotOpen = errors.New("no project is open")
 	// ErrNoName: a project needs a name.
 	ErrNoName = errors.New("give the project a name")
 )
