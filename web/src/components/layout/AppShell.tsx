@@ -21,7 +21,7 @@ const nav = [
   { to: '/', label: 'nav.systems', icon: Boxes, end: false, match: (p: string) => p === '/' || p.startsWith('/systems') },
   { to: '/alerts', label: 'nav.alerts', icon: BellRing, end: true, match: (p: string) => p.startsWith('/alerts') || p.includes('/runbooks/') },
   { to: '/channels', label: 'nav.channels', icon: Send, end: true, match: (p: string) => p.startsWith('/channels') },
-  { to: '/git', label: 'nav.git', icon: GitBranch, end: true, match: (p: string) => p.startsWith('/git') },
+  { to: '/project', label: 'nav.git', icon: FolderGit2, end: true, match: (p: string) => p.startsWith('/project') },
 ] as const
 
 function ThemeToggle() {
@@ -111,7 +111,7 @@ function ProjectBox() {
   const bad = !!git.error || gitProblems(git) > 0
   return (
     <NavLink
-      to="/git"
+      to="/project"
       data-testid="project-box"
       title={git.repo}
       className={({ isActive }) => cn('mb-3 block rounded-md border px-2 py-1.5 hover:bg-sidebar-accent', isActive && 'bg-sidebar-accent')}
@@ -183,7 +183,7 @@ export default function AppShell() {
               <Icon className="size-4" />
               {t(label)}
               {to === '/alerts' && <AlertCount />}
-              {to === '/git' && <GitCount />}
+              {to === '/project' && <GitCount />}
             </NavLink>
           ))}
         </nav>

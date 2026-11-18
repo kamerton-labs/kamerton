@@ -75,8 +75,26 @@ All notable changes to Kamerton are listed here. The format follows
   the Secret `kamerton-git`. Disconnecting deletes nothing: the systems
   stay and become editable in the UI. A repository set with `git.url` is
   shown and cannot be changed there.
+- Drafts. A system created in the UI while git push is on opens at once as
+  a draft: it is listed on the Systems screen with a mark, can be drawn,
+  edited and deleted, and runs nothing until it is pushed and on the
+  followed branch.
+- The diff of a change and of a commit. Each change to push has "Diff": the
+  description file line by line, removed and added. A commit in the list
+  opens to show, for every description file it touched, what happened to
+  the rules and the same line-by-line diff
+  (`GET /api/v1/git/commits/{hash}`). The commit list loads more on demand.
+- Creating a project. The form has two modes: "Open" a project that is
+  already in the repository, and "Create" one. Create writes the project
+  file, a README and a `.gitignore` into the chosen folder
+  (`observability` by default) of any repository, empty or not, and leaves
+  everything else there alone. It goes straight to the followed branch, so
+  systems can be pushed at once; only a branch that refuses a push gets a
+  pull request, and then systems wait for its merge. A new project has an
+  empty `systems` folder. "Test" says whether the folder already holds a
+  project.
 - Git in the sidebar: the project with its branch and folder at the top, and
-  a "Git" page with the changes to push, the repository, open pull
+  a "Project" page with the changes to push, the repository, open pull
   requests, commits and description files. Wording follows git: Commit,
   Push, Pull.
 - `git.generatedPath`: a change written by Kamerton also carries the rules,

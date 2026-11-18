@@ -48,9 +48,9 @@ function Body({ onDone }: { onDone: () => void }) {
     create.mutate(stringify(doc), {
       onSuccess: (r) => {
         if (r.staged) {
-          // Saved, not pushed: the system is listed under Git until it is.
+          // A draft: it opens at once and is pushed from the Project page when ready.
           onDone()
-          navigate('/git')
+          navigate(`/systems/${encodeURIComponent(name)}`)
           return
         }
         onDone()

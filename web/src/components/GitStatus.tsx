@@ -33,7 +33,7 @@ export default function GitStatus({ git }: { git: Status }) {
             </ul>
           )}
           <p>
-            <Link className="underline underline-offset-2" to="/git">
+            <Link className="underline underline-offset-2" to="/project">
               {t('git.open')}
             </Link>
           </p>

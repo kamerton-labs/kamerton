@@ -30,7 +30,7 @@ type Commit struct {
 }
 
 // maxCommits bounds what one request reads.
-const maxCommits = 50
+const maxCommits = 300
 
 // Commits lists the last commits of the followed branch, newest first. The result is kept
 // until the branch moves.
@@ -84,7 +84,7 @@ func (s *Service) Commits(ctx context.Context, limit int) ([]Commit, error) {
 		return nil
 	})
 	s.mu.Lock()
-	s.commits, s.commitsAt = out, head
+	s.commits, s.commitsAt, s.history = out, head, repo
 	s.mu.Unlock()
 	return markApplied(out, applied, limit), nil
 }
@@ -134,3 +134,88 @@ func touched(c *object.Commit, lay layout) []string {
 	sort.Strings(out)
 	return out
 }
+
+// FileChange is one description file of a commit, before and after.
+type FileChange struct {
+	Path string `json:"path"`
+	// Before and After are the file's text; empty when the file did not exist on that side.
+	Before string `json:"-"`
+	After  string `json:"-"`
+}
+
+// CommitDetail is a commit with the description files it changes.
+type CommitDetail struct {
+	Commit
+	Message string       `json:"message,omitempty"`
+	Files   []FileChange `json:"-"`
+	// Others counts the changed files that are not descriptions (generated rules, anything else).
+	Others int `json:"others"`
+}
+
+// CommitDetail reads one commit of the followed branch from the history fetched by Commits.
+func (s *Service) CommitDetail(ctx context.Context, hash string) (*CommitDetail, error) {
+	s.mu.Lock()
+	repo := s.history
+	s.mu.Unlock()
+	if repo == nil {
+		if _, err := s.Commits(ctx, maxCommits); err != nil {
+			return nil, err
+		}
+		s.mu.Lock()
+		repo = s.history
+		s.mu.Unlock()
+	}
+	if repo == nil {
+		return nil, errNoCommit
+	}
+	c, err := repo.CommitObject(plumbing.NewHash(hash))
+	if err != nil {
+		return nil, errNoCommit
+	}
+	s.mu.Lock()
+	lay, applied := s.lay, s.status.Commit
+	s.mu.Unlock()
+	title, rest, _ := strings.Cut(c.Message, "\n")
+	out := &CommitDetail{
+		Commit:  Commit{Hash: c.Hash.String(), Title: strings.TrimSpace(title), Author: c.Author.Name, When: c.Author.When.UTC(), Systems: touched(c, lay), Applied: c.Hash.String() == applied},
+		Message: strings.TrimSpace(rest),
+	}
+	if h, base := s.host(), s.webBase(); h != nil && base != "" {
+		out.URL = h.web(base, "commit", out.Hash, "")
+	}
+	stats, err := c.Stats()
+	if err != nil {
+		// The parent is beyond what was fetched: the commit is known, its content is not.
+		return out, nil
+	}
+	var parent *object.Commit
+	if c.NumParents() > 0 {
+		parent, _ = c.Parent(0)
+	}
+	text := func(of *object.Commit, p string) string {
+		if of == nil {
+			return ""
+		}
+		f, err := of.File(p)
+		if err != nil {
+			return ""
+		}
+		body, err := f.Contents()
+		if err != nil || len(body) > maxFile {
+			return ""
+		}
+		return body
+	}
+	for _, st := range stats {
+		p := st.Name
+		ext := path.Ext(p)
+		if lay.skip(p) || (lay.systems != "" && !strings.HasPrefix(p, lay.systems+"/")) || (ext != ".yaml" && ext != ".yml") || path.Base(p) == ProjectFile {
+			out.Others++
+			continue
+		}
+		out.Files = append(out.Files, FileChange{Path: p, Before: text(parent, p), After: text(c, p)})
+	}
+	return out, nil
+}
+
+var errNoCommit = stopError{}

@@ -25,6 +25,7 @@ import (
 	"github.com/kamerton-labs/kamerton/internal/description"
 	"github.com/kamerton-labs/kamerton/internal/descstore"
 	"github.com/kamerton-labs/kamerton/internal/generator"
+	"github.com/kamerton-labs/kamerton/internal/gitsync"
 )
 
 const shopYAML = `apiVersion: kamerton.dev/v1alpha1
@@ -494,5 +495,65 @@ func TestSystemFromGitIsReadOnly(t *testing.T) {
 	}
 	if code, body := do(t, "DELETE", api+"/systems/otel-demo", ""); code != http.StatusConflict || !strings.Contains(body, "from_git") {
 		t.Errorf("delete: %d %s", code, body)
+	}
+}
+
+// stagingGit is a repository that only keeps saved changes: enough for drafts.
+func stagingGit() *gitsync.Service {
+	return &gitsync.Service{URL: "https://example.com/team/obs.git", Write: gitsync.WritePullRequest}
+}
+
+func TestNewSystemIsADraftUntilPushed(t *testing.T) {
+	sch := runtime.NewScheme()
+	if err := v1alpha1.AddToScheme(sch); err != nil {
+		t.Fatal(err)
+	}
+	g := stagingGit()
+	store := &descstore.Cluster{Client: fake.NewClientBuilder().WithScheme(sch).Build(), Namespace: "kamerton", Git: g}
+	srv := httptest.NewServer(New(Options{Descriptions: store, Git: g}).Handler())
+	defer srv.Close()
+	api := srv.URL + "/api/v1"
+
+	// Creating keeps the system as a change to push and answers 202.
+	if code, body := do(t, "POST", api+"/systems", shopYAML); code != http.StatusAccepted || !strings.Contains(body, `"staged":true`) {
+		t.Fatalf("create: %d %s", code, body)
+	}
+	// It is listed as a draft and opens like any system, so it can be worked on before the push.
+	var list struct {
+		Systems []struct {
+			ID    string `json:"id"`
+			Draft bool   `json:"draft"`
+			Rules int    `json:"rules"`
+		} `json:"systems"`
+	}
+	_, body := get(t, api+"/systems")
+	decode(t, body, &list)
+	if len(list.Systems) != 1 || list.Systems[0].ID != "shop" || !list.Systems[0].Draft || list.Systems[0].Rules == 0 {
+		t.Fatalf("list: %s", body)
+	}
+	var one struct {
+		Draft    bool   `json:"draft"`
+		Writable bool   `json:"writable"`
+		YAML     string `json:"yaml"`
+	}
+	code, body := get(t, api+"/systems/shop")
+	decode(t, body, &one)
+	if code != http.StatusOK || !one.Draft || !one.Writable || one.YAML != shopYAML {
+		t.Fatalf("draft: %d %s", code, body)
+	}
+	// Saving the draft again replaces what is kept; still nothing is pushed.
+	edited := strings.Replace(shopYAML, "name: shop", "name: shop\n  annotations: {kamerton.dev/description: edited}", 1)
+	if code, body := do(t, "PUT", api+"/systems/shop", edited); code != http.StatusAccepted {
+		t.Fatalf("save a draft: %d %s", code, body)
+	}
+	if c, ok := g.Saved(context.Background(), "shop"); !ok || c.Kind != gitsync.KindNew || string(c.Content) != edited {
+		t.Fatalf("saved draft: %+v %v", c, ok)
+	}
+	// Deleting a draft forgets it.
+	if code, body := do(t, "DELETE", api+"/systems/shop", ""); code != http.StatusOK {
+		t.Fatalf("delete a draft: %d %s", code, body)
+	}
+	if code, _ := get(t, api+"/systems/shop"); code != http.StatusNotFound {
+		t.Errorf("a deleted draft: %d", code)
 	}
 }

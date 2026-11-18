@@ -143,6 +143,10 @@ func New(opts Options) *Server {
 	if s.feedback.Descriptions == nil {
 		s.feedback.Descriptions = s.opts.Descriptions
 	}
+	if opts.GitRunner != nil || opts.Git != nil {
+		// Systems made in the UI and not pushed yet are shown as drafts.
+		s.opts.Descriptions = &draftStore{Store: s.opts.Descriptions, git: s.git}
+	}
 	if t := opts.TailMute; t != nil {
 		if t.Descriptions == nil {
 			t.Descriptions = s.opts.Descriptions
@@ -218,6 +222,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("DELETE /api/v1/git/changes/{system}", s.gitDiscard)
 	mux.HandleFunc("POST /api/v1/git/push", s.gitPush)
 	mux.HandleFunc("GET /api/v1/git/commits", s.gitCommits)
+	mux.HandleFunc("GET /api/v1/git/commits/{hash}", s.gitCommit)
 	mux.HandleFunc("GET /api/v1/git/settings", s.gitSettings)
 	mux.HandleFunc("PUT /api/v1/git/settings", s.putGitSettings)
 	mux.HandleFunc("POST /api/v1/git/settings/test", s.testGitSettings)

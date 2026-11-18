@@ -391,7 +391,7 @@ func TestStartingFromAnEmptyRepository(t *testing.T) {
 	}
 	// The new repository describes itself: a project file, a README and a .gitignore.
 	tree := h.git(h.bare, "ls-tree", "-r", "--name-only", "main")
-	for _, want := range []string{"kamerton.yaml", "README.md", ".gitignore", "systems/shop.yaml", "generated/shop/rules/shop.rules.yaml"} {
+	for _, want := range []string{"kamerton.yaml", "README.md", ".gitignore", "systems/.gitkeep", "systems/shop.yaml", "generated/shop/rules/shop.rules.yaml"} {
 		if !strings.Contains(tree, want) {
 			t.Errorf("the first commit lacks %s:\n%s", want, tree)
 		}
@@ -544,6 +544,17 @@ func TestCommitsListsTheBranch(t *testing.T) {
 	if list[1].Title != "first" || list[1].Applied {
 		t.Errorf("oldest commit: %+v", list[1])
 	}
+	// A commit opens: the description file it changed, before and after.
+	d, err := s.CommitDetail(context.Background(), list[0].Hash)
+	if err != nil || len(d.Files) != 1 || d.Files[0].Path != "systems/shop.yaml" {
+		t.Fatalf("detail: %+v, %v", d, err)
+	}
+	if !strings.Contains(d.Files[0].Before, "name: api") || !strings.Contains(d.Files[0].After, "name: gateway") {
+		t.Errorf("before/after: %q -> %q", d.Files[0].Before, d.Files[0].After)
+	}
+	if _, err := s.CommitDetail(context.Background(), "0000000000000000000000000000000000000000"); err == nil {
+		t.Error("an unknown commit must be an error")
+	}
 }
 
 func TestReadOnlyRepositoryRefusesASave(t *testing.T) {
@@ -659,5 +670,56 @@ func TestRepositoryFromTheInstallationIsLocked(t *testing.T) {
 	}
 	if err := r.Disconnect(ctx); err == nil {
 		t.Error("a locked repository cannot be disconnected from the UI")
+	}
+}
+
+func TestCreateAProjectInARepositoryThatHasOtherThings(t *testing.T) {
+	// A team's existing repository: code, a README of its own.
+	h := newHosted(t, "tok", map[string]string{"README.md": "our service", "src/main.go": "package main"})
+	store, c := cluster(t)
+	r := &Runner{Base: Service{Target: store}, Store: &memSettings{}, Tokens: &memToken{}, Release: store.ReleaseGit}
+	store.Git = r
+	ctx := context.Background()
+
+	if chk := r.Try(ctx, Settings{URL: h.url(), Path: "observability"}, "tok"); !chk.OK || chk.HasProject || chk.Files != 0 {
+		t.Fatalf("before: %+v", chk)
+	}
+	if _, err := r.Create(ctx, Settings{URL: h.url(), Path: "observability"}, "tok", ""); err == nil {
+		t.Error("creating without push must be refused")
+	}
+	p, err := r.Create(ctx, Settings{URL: h.url(), Path: "observability", Write: "commit"}, "tok", "anna")
+	if err != nil || !p.Direct {
+		t.Fatalf("Create = %+v, %v", p, err)
+	}
+	tree := h.git(h.bare, "ls-tree", "-r", "--name-only", "main")
+	for _, want := range []string{"observability/kamerton.yaml", "observability/README.md", "observability/.gitignore", "observability/systems/.gitkeep", "README.md", "src/main.go"} {
+		if !strings.Contains(tree, want) {
+			t.Errorf("tree lacks %s:\n%s", want, tree)
+		}
+	}
+	// The team's own README is untouched, and the commit names who started the project.
+	if got := h.git(h.bare, "show", "main:README.md"); got != "our service" {
+		t.Errorf("the repository's README changed: %q", got)
+	}
+	if msg := h.git(h.bare, "log", "-1", "--format=%B", "main"); !strings.Contains(msg, "Start a Kamerton project in observability") || !strings.Contains(msg, "by anna") {
+		t.Errorf("commit message: %q", msg)
+	}
+	if chk := r.Try(ctx, Settings{URL: h.url(), Path: "observability"}, "tok"); !chk.HasProject || chk.Project != "obs" {
+		t.Errorf("after: %+v", chk)
+	}
+	// The first system lands in the project's own folder.
+	s := r.Current(ctx)
+	s.Sync(ctx)
+	if _, _, err := store.Create(ctx, []byte(shop)); !errors.Is(err, descstore.ErrStaged) {
+		t.Fatalf("Create system = %v", err)
+	}
+	push(t, s, "")
+	s.Sync(ctx)
+	if from := descstore.FromGit(get(t, c, "shop")); from == nil || from.Path != "observability/systems/shop.yaml" {
+		t.Errorf("first system: %+v", from)
+	}
+	// A second project in the same folder is refused.
+	if _, err := s.InitProject(ctx, ""); err == nil || !strings.Contains(err.Error(), "already holds a project") {
+		t.Errorf("a second InitProject = %v", err)
 	}
 }

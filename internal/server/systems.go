@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"path"
+	"strconv"
 	"sync"
 	"time"
 
@@ -25,6 +26,7 @@ import (
 	"github.com/kamerton-labs/kamerton/internal/rulediff"
 	"github.com/kamerton-labs/kamerton/internal/rules"
 	"github.com/kamerton-labs/kamerton/internal/stack"
+	"github.com/kamerton-labs/kamerton/internal/textdiff"
 )
 
 type systemSummary struct {
@@ -37,6 +39,8 @@ type systemSummary struct {
 	Services    int    `json:"services"`
 	Rules       int    `json:"rules"`
 	Receivers   int    `json:"receivers"`
+	// Draft: made in the UI and not pushed yet; it runs nowhere until its file is on the branch.
+	Draft bool `json:"draft,omitempty"`
 	// Git is set for a system that comes from a git repository: it is changed there, not here.
 	Git *descstore.GitSource `json:"git,omitempty"`
 	// ChannelsOff lists receivers whose Secret is missing: their channel gets nothing yet.
@@ -93,6 +97,7 @@ func (s *Server) listSystems(w http.ResponseWriter, r *http.Request) {
 		sum.Namespace, sum.Environment, sum.Services = sd.Namespace, sd.Spec.Environment, len(sd.Spec.Services)
 		sum.Description = sd.Annotations[AnnotationDescription]
 		sum.Git = descstore.FromGit(sd)
+		sum.Draft = isDraft(snap)
 		if n := sd.Spec.Notifications; n != nil {
 			sum.Receivers = len(n.Receivers)
 		}
@@ -110,6 +115,8 @@ func (s *Server) listSystems(w http.ResponseWriter, r *http.Request) {
 		}
 		cnt, known := counts[snap.ID]
 		switch {
+		case sum.Draft:
+			sum.State = "unknown"
 		case !known:
 			sum.State = "unknown"
 		default:
@@ -277,6 +284,13 @@ func (s *Server) getSystem(w http.ResponseWriter, r *http.Request) {
 		"errors": []description.Issue{}, "warnings": []description.Issue{},
 		"stack": map[string]any{"id": c.Set.ID, "name": c.Set.Name, "unknown": c.Unknown, "grafanaURL": c.Set.URL(stack.KindGrafana)},
 	}
+	if isDraft(snap) {
+		// A draft is edited freely; every save keeps it as a change to push.
+		resp["draft"], resp["writable"], resp["gitSaved"] = true, true, gitsync.KindNew
+		if g := s.git(); g != nil {
+			resp["gitWrite"] = g.WriteMode()
+		}
+	}
 	if from := descstore.FromGit(snap.SD); from != nil {
 		resp["git"] = from
 		// Read-only unless Kamerton may write to the repository; then a save is a proposal there.
@@ -359,6 +373,8 @@ type gitSettingsBody struct {
 	gitsync.Settings
 	// Token is write-only: it goes to the Secret and is never returned.
 	Token string `json:"token"`
+	// Create makes the folder a new project instead of opening one.
+	Create bool `json:"create"`
 }
 
 func (s *Server) gitSettings(w http.ResponseWriter, r *http.Request) {
@@ -409,12 +425,26 @@ func (s *Server) putGitSettings(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnprocessableEntity, "git_unreachable", c.Error)
 		return
 	}
+	if in.Create {
+		author := ""
+		if a := s.opts.Auth; a != nil {
+			author, _ = a.session(r)
+		}
+		p, err := s.opts.GitRunner.Create(r.Context(), in.Settings, in.Token, author)
+		if err != nil {
+			writeError(w, http.StatusConflict, "git_create_failed", err.Error())
+			return
+		}
+		s.log.Info("git: project created from the UI", "branch", p.Branch)
+		writeJSON(w, http.StatusOK, map[string]any{"settings": s.opts.GitRunner.View(r.Context()), "proposal": p})
+		return
+	}
 	if err := s.opts.GitRunner.Connect(r.Context(), in.Settings, in.Token); err != nil {
 		writeError(w, http.StatusConflict, "git_connect_failed", err.Error())
 		return
 	}
 	s.log.Info("git: settings changed from the UI")
-	writeJSON(w, http.StatusOK, s.opts.GitRunner.View(r.Context()))
+	writeJSON(w, http.StatusOK, map[string]any{"settings": s.opts.GitRunner.View(r.Context())})
 }
 
 func (s *Server) deleteGitSettings(w http.ResponseWriter, r *http.Request) {
@@ -507,7 +537,9 @@ type gitChange struct {
 	SavedAt time.Time        `json:"savedAt"`
 	Author  string           `json:"author,omitempty"`
 	Diff    *rulediff.Result `json:"diff,omitempty"`
-	Error   string           `json:"error,omitempty"`
+	// Text is the change of the description file, line by line.
+	Text  []textdiff.Line `json:"text,omitempty"`
+	Error string          `json:"error,omitempty"`
 }
 
 // gitChanges lists the changes saved in the UI and not pushed, each with its effect on the rules.
@@ -525,6 +557,13 @@ func (s *Server) gitChanges(w http.ResponseWriter, r *http.Request) {
 	out := make([]gitChange, 0, len(list))
 	for _, c := range list {
 		one := gitChange{System: c.System, Kind: c.Kind, Path: c.Path, SavedAt: c.SavedAt, Author: c.Author}
+		was := ""
+		if c.Kind == gitsync.KindChange || c.Kind == gitsync.KindDelete {
+			if raw, ok := g.Raw(c.Path); ok {
+				was = string(raw)
+			}
+		}
+		one.Text = textdiff.Lines(was, string(c.Content))
 		if c.Kind != gitsync.KindDelete {
 			after := description.Validate(c.Content).Document
 			if after == nil {
@@ -599,17 +638,70 @@ func (s *Server) gitPush(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"proposal": p})
 }
 
+// gitCommit opens one commit: for each description file it changes, what happens to the rules
+// and the change of the text.
+func (s *Server) gitCommit(w http.ResponseWriter, r *http.Request) {
+	g := s.git()
+	if g == nil {
+		writeError(w, http.StatusNotFound, "not_found", "no repository")
+		return
+	}
+	d, err := g.CommitDetail(r.Context(), r.PathValue("hash"))
+	if err != nil {
+		writeError(w, http.StatusNotFound, "not_found", "no such commit among the last ones of the branch")
+		return
+	}
+	type fileView struct {
+		Path   string           `json:"path"`
+		System string           `json:"system,omitempty"`
+		Kind   string           `json:"kind"`
+		Diff   *rulediff.Result `json:"diff,omitempty"`
+		Text   []textdiff.Line  `json:"text,omitempty"`
+	}
+	files := make([]fileView, 0, len(d.Files))
+	for _, f := range d.Files {
+		v := fileView{Path: f.Path, Kind: gitsync.KindChange, Text: textdiff.Lines(f.Before, f.After)}
+		before, after := description.Validate([]byte(f.Before)).Document, description.Validate([]byte(f.After)).Document
+		switch {
+		case f.After == "":
+			v.Kind = gitsync.KindDelete
+			if before != nil {
+				v.System = before.Name
+			}
+		case f.Before == "":
+			v.Kind = gitsync.KindNew
+		}
+		if after != nil {
+			v.System = after.Name
+			if res, err := rulediff.Compare(before, after); err == nil {
+				v.Diff = &res
+			}
+		}
+		files = append(files, v)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"commit": d.Commit, "message": d.Message, "files": files, "others": d.Others})
+}
+
 func (s *Server) gitCommits(w http.ResponseWriter, r *http.Request) {
 	if s.git() == nil {
 		writeJSON(w, http.StatusOK, map[string]any{"commits": []gitsync.Commit{}})
 		return
 	}
-	list, err := s.git().Commits(r.Context(), 30)
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	if limit <= 0 {
+		limit = 20
+	}
+	// One more than asked, so the UI knows whether there is more to show.
+	list, err := s.git().Commits(r.Context(), limit+1)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, "commits_unavailable", err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"commits": list})
+	more := len(list) > limit
+	if more {
+		list = list[:limit]
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"commits": list, "more": more})
 }
 
 // moveSystemToGit puts a system made by hand under the repository: its description becomes a

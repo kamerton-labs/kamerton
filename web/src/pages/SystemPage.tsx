@@ -240,7 +240,7 @@ function Editor({ data }: { data: SystemResponse }) {
                   if (ok)
                     del.mutate(id, {
                       // A system from git is not deleted here: its removal waits for a push.
-                      onSuccess: (res) => navigate(res.staged ? '/git' : '/', { replace: true }),
+                      onSuccess: (res) => navigate(res.staged ? '/project' : '/', { replace: true }),
                     })
                 }}
               >
@@ -275,8 +275,8 @@ function Editor({ data }: { data: SystemResponse }) {
           {saveError && <p className="text-sm text-destructive">{t('system.saveError', { error: saveError.code === 'conflict' ? t('system.conflict') : saveError.message })}</p>}
           {unpushed && (
             <p className="flex flex-wrap items-center gap-x-2 text-sm" data-testid="git-unpushed">
-              {t('system.gitUnpushed')}
-              <Link className="font-medium underline underline-offset-2" to="/git">
+              {t(data.draft ? 'system.gitDraft' : 'system.gitUnpushed')}
+              <Link className="font-medium underline underline-offset-2" to="/project">
                 Push
               </Link>
             </p>
