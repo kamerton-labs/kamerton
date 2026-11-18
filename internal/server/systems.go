@@ -446,7 +446,12 @@ func (s *Server) putGitSettings(w http.ResponseWriter, r *http.Request) {
 		if a := s.opts.Auth; a != nil {
 			author, _ = a.session(r)
 		}
-		p, err := s.opts.GitRunner.Create(r.Context(), in.Settings, in.Token, author, in.Name)
+		// A project named on the first screen keeps its name in the repository's project file.
+		name := in.Name
+		if name == "" && s.opts.Projects != nil {
+			name = s.opts.Projects.Info(r.Context()).Name
+		}
+		p, err := s.opts.GitRunner.Create(r.Context(), in.Settings, in.Token, author, name)
 		if err != nil {
 			writeError(w, http.StatusConflict, "git_create_failed", err.Error())
 			return

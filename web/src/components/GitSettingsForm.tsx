@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 import { useState, type FormEvent } from 'react'
-import { Loader2 } from 'lucide-react'
+import { ChevronRight, Loader2 } from 'lucide-react'
 import { useConfirm } from '@/components/ConfirmDialog'
 import { Field } from '@/components/common'
 import { Button } from '@/components/ui/button'
@@ -30,6 +30,8 @@ export default function GitSettingsForm({ view, onDone }: { view: GitSettingsVie
   const [write, setWrite] = useState<Write>(view.connected ? ((view.write || 'off') as Write) : 'pullRequest')
   const [token, setToken] = useState('')
   const [check, setCheck] = useState<GitCheck | null>(null)
+  // Folder and push are rarely changed: tucked away when connecting, open when editing.
+  const [more, setMore] = useState(view.connected)
   const [testing, setTesting] = useState(false)
 
   // A check is about the fields as they were: any change makes it stale.
@@ -101,11 +103,6 @@ export default function GitSettingsForm({ view, onDone }: { view: GitSettingsVie
         <Field label="Branch" htmlFor="git-branch">
           <Input id="git-branch" value={branch} onChange={(e) => edit(setBranch)(e.target.value)} placeholder="main" />
         </Field>
-        <Field label={t('gits.path')} htmlFor="git-path" hint={t('gits.pathHint')}>
-          <Input id="git-path" value={path} onChange={(e) => edit(setPath)(e.target.value)} placeholder={t('gits.root')} />
-        </Field>
-      </div>
-      <div className="grid gap-4 sm:grid-cols-2">
         <Field label="Token" htmlFor="git-token" hint={view.hasToken ? t('gits.tokenKept') : t('gits.tokenHint')}>
           <Input
             id="git-token"
@@ -116,18 +113,31 @@ export default function GitSettingsForm({ view, onDone }: { view: GitSettingsVie
             placeholder={view.hasToken ? '••••••••' : ''}
           />
         </Field>
-        <Field label="Push">
-          <Select value={mode} onValueChange={(v) => setWrite(v as Write)}>
-            <SelectTrigger data-testid="git-write">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {!creating && <SelectItem value="off">{t('gits.write.off')}</SelectItem>}
-              <SelectItem value="pullRequest">Pull request</SelectItem>
-              <SelectItem value="commit">{t('gits.write.commit')}</SelectItem>
-            </SelectContent>
-          </Select>
-        </Field>
+      </div>
+      <div>
+        <button type="button" className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground" onClick={() => setMore((v) => !v)} aria-expanded={more} data-testid="git-more">
+          <ChevronRight className={more ? 'size-4 rotate-90 transition-transform' : 'size-4 transition-transform'} />
+          {t('setup.more')}
+        </button>
+        {more && (
+          <div className="mt-3 grid gap-4 sm:grid-cols-2">
+            <Field label={t('gits.path')} htmlFor="git-path" hint={t('gits.pathHint')}>
+              <Input id="git-path" value={path} onChange={(e) => edit(setPath)(e.target.value)} placeholder={t('gits.root')} />
+            </Field>
+            <Field label="Push">
+              <Select value={mode} onValueChange={(v) => setWrite(v as Write)}>
+                <SelectTrigger data-testid="git-write">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {!creating && <SelectItem value="off">{t('gits.write.off')}</SelectItem>}
+                  <SelectItem value="pullRequest">Pull request</SelectItem>
+                  <SelectItem value="commit">{t('gits.write.commit')}</SelectItem>
+                </SelectContent>
+              </Select>
+            </Field>
+          </div>
+        )}
       </div>
       {check && (
         <div className="space-y-1 text-sm" data-testid="git-check">
