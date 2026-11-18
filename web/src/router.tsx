@@ -25,6 +25,7 @@ export const router = createBrowserRouter([
       { path: 'systems/:id/runbooks/:service/:alert?', lazy: runbook },
       { path: 'alerts', lazy: lazyPage(() => import('@/pages/AlertsPage')) },
       { path: 'channels', lazy: lazyPage(() => import('@/pages/ChannelsPage')) },
+      { path: 'git', lazy: lazyPage(() => import('@/pages/GitPage')) },
       { path: 'status', lazy: lazyPage(() => import('@/pages/StatusPage')) },
       // Links in notifications that were already sent carry no system.
       { path: 'runbooks/:service/:alert?', lazy: runbook },

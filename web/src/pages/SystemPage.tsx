@@ -337,20 +337,17 @@ function Editor({ data }: { data: SystemResponse }) {
             </p>
           )}
           {data.git ? (
-            <p className="text-sm text-muted-foreground" data-testid="system-from-git">
-              {t(data.gitWrite === 'pullRequest' ? 'system.fromGitPropose' : data.gitWrite === 'commit' ? 'system.fromGitCommit' : 'system.fromGit', {
-                path: data.git.path,
-                commit: data.git.commit.slice(0, 8),
-                repo: data.git.repo,
-              })}
-              {data.gitFileURL && (
-                <>
-                  {' '}
-                  <a className="underline underline-offset-2" href={data.gitFileURL} target="_blank" rel="noreferrer">
-                    {t('system.gitFile')}
-                  </a>
-                </>
+            <p className="flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground" data-testid="system-from-git">
+              <GitBranch className="size-3.5" />
+              {data.gitFileURL ? (
+                <a className="font-mono underline underline-offset-2" href={data.gitFileURL} target="_blank" rel="noreferrer">
+                  {data.git.path}
+                </a>
+              ) : (
+                <span className="font-mono">{data.git.path}</span>
               )}
+              <span className="font-mono">{data.git.commit.slice(0, 8)}</span>
+              {!data.gitWrite && <span>{t('system.gitReadOnly')}</span>}
             </p>
           ) : (
             !data.writable && <p className="text-sm text-muted-foreground">{t('system.readOnly')}</p>

@@ -7,7 +7,6 @@ import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Textarea } from '@/components/ui/textarea'
 import { useT } from '@/i18n'
 import { gitPreview, type GitPreview, type RuleLine } from '@/lib/api'
 
@@ -45,7 +44,6 @@ export default function GitCommitDialog({
   const [previewError, setPreviewError] = useState('')
   const fallback = t(action === 'delete' ? 'gitc.title.delete' : action === 'move' ? 'gitc.title.move' : 'gitc.title.save', { system })
   const [title, setTitle] = useState(fallback)
-  const [details, setDetails] = useState('')
 
   useEffect(() => {
     if (action === 'delete') return
@@ -66,8 +64,8 @@ export default function GitCommitDialog({
     <Dialog open onOpenChange={(v) => !v && !pending && onClose()}>
       <DialogContent className="max-h-[90svh] overflow-y-auto sm:max-w-xl" data-testid="git-commit-dialog">
         <DialogHeader>
-          <DialogTitle>{t(mode === 'pullRequest' ? 'gitc.heading.propose' : 'gitc.heading.commit')}</DialogTitle>
-          <DialogDescription>{t(mode === 'pullRequest' ? 'gitc.lead.propose' : 'gitc.lead.commit')}</DialogDescription>
+          <DialogTitle>Commit</DialogTitle>
+          <DialogDescription className="sr-only">{t(mode === 'pullRequest' ? 'gitc.where.propose' : 'gitc.where.commit', { branch: '', repo: '' })}</DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4 text-sm">
@@ -118,12 +116,6 @@ export default function GitCommitDialog({
             <Label htmlFor="git-msg">{t('gitc.message')}</Label>
             <Input id="git-msg" value={title} onChange={(e) => setTitle(e.target.value)} maxLength={120} data-testid="git-commit-message" />
           </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="git-details">
-              {t('gitc.details')} <span className="font-normal text-muted-foreground">{t('create.optional')}</span>
-            </Label>
-            <Textarea id="git-details" rows={2} value={details} onChange={(e) => setDetails(e.target.value)} placeholder={t('gitc.detailsPlaceholder')} />
-          </div>
           {error && <p className="text-destructive">{error}</p>}
         </div>
 
@@ -132,13 +124,13 @@ export default function GitCommitDialog({
             {t('common.cancel')}
           </Button>
           <Button
-            onClick={() => onConfirm([title.trim() || fallback, details.trim()].filter(Boolean).join('\n\n'))}
+            onClick={() => onConfirm(title.trim() || fallback)}
             disabled={pending || (action !== 'delete' && !preview && !previewError)}
             variant={action === 'delete' ? 'destructive' : 'default'}
             data-testid="git-commit-confirm"
           >
             {pending && <Loader2 className="animate-spin" />}
-            {t(mode === 'pullRequest' ? 'gitc.confirm.propose' : 'gitc.confirm.commit')}
+            Push
           </Button>
         </DialogFooter>
       </DialogContent>

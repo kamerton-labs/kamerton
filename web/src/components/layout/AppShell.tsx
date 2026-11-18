@@ -3,14 +3,15 @@
 
 import { useSyncExternalStore } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { Activity, BellRing, Boxes, LogOut, Moon, Send, Sun, UserRound } from 'lucide-react'
+import { Activity, BellRing, Boxes, FolderGit2, GitBranch, LogOut, Moon, Send, Sun, UserRound } from 'lucide-react'
 import { Navigate, NavLink, Outlet, useLocation, useNavigate } from 'react-router'
 import { cn } from 'cn'
 import { StateDot } from '@/components/common'
 import LangSwitch from '@/components/LangSwitch'
 import { shortVersion } from '@/lib/format'
 import { Button } from '@/components/ui/button'
-import { useAlerts, useSession, useStacks, useVersion } from '@/lib/api'
+import { useAlerts, useSession, useStacks, useSystems, useVersion } from '@/lib/api'
+import { gitProblems, projectName } from '@/lib/git'
 import { loginPath, logout, LOGIN_PATH } from '@/lib/auth'
 import { coreHealth } from '@/lib/stacks'
 import { useT } from '@/i18n'
@@ -20,6 +21,7 @@ const nav = [
   { to: '/', label: 'nav.systems', icon: Boxes, end: false, match: (p: string) => p === '/' || p.startsWith('/systems') },
   { to: '/alerts', label: 'nav.alerts', icon: BellRing, end: true, match: (p: string) => p.startsWith('/alerts') || p.includes('/runbooks/') },
   { to: '/channels', label: 'nav.channels', icon: Send, end: true, match: (p: string) => p.startsWith('/channels') },
+  { to: '/git', label: 'nav.git', icon: GitBranch, end: true, match: (p: string) => p.startsWith('/git') },
 ] as const
 
 function ThemeToggle() {
@@ -79,6 +81,50 @@ function AlertCount() {
   return <span className={cn('ml-auto rounded-full px-1.5 text-xs font-medium tabular-nums', critical ? 'bg-firing/15 text-firing' : 'bg-warn/15 text-warn')}>{n}</span>
 }
 
+/** Open requests waiting for a merge, or a mark when the repository needs attention. */
+function GitCount() {
+  const git = useSystems().data?.git
+  if (!git) return null
+  if (git.error || gitProblems(git) > 0) return <span className="ml-auto rounded-full bg-firing/15 px-1.5 text-xs font-medium text-firing">!</span>
+  const n = git.requests?.length ?? 0
+  if (!n) return null
+  return (
+    <span className="ml-auto rounded-full bg-muted px-1.5 text-xs font-medium tabular-nums text-muted-foreground" data-testid="git-count">
+      {n}
+    </span>
+  )
+}
+
+/** The project at the top of the sidebar: its name, and the branch and folder it is read from. */
+function ProjectBox() {
+  const git = useSystems().data?.git
+  const { t } = useT()
+  if (!git) return null
+  const bad = !!git.error || gitProblems(git) > 0
+  return (
+    <NavLink
+      to="/git"
+      data-testid="project-box"
+      title={git.repo}
+      className={({ isActive }) => cn('mb-3 block rounded-md border px-2 py-1.5 hover:bg-sidebar-accent', isActive && 'bg-sidebar-accent')}
+    >
+      <div className="flex items-center gap-1.5">
+        <FolderGit2 className="size-3.5 shrink-0 text-muted-foreground" />
+        <span className="truncate text-sm font-medium">{projectName(git)}</span>
+        <StateDot state={bad ? 'firing' : git.commit ? 'ok' : 'unknown'} className="ml-auto" />
+      </div>
+      <div className="mt-0.5 flex items-center gap-1 truncate pl-5 text-xs text-muted-foreground">
+        <GitBranch className="size-3 shrink-0" />
+        <span className="truncate">
+          {git.branch}
+          {git.systemsPath ? ` · ${git.systemsPath}` : ''}
+        </span>
+      </div>
+      {git.empty && <div className="mt-0.5 pl-5 text-xs text-muted-foreground">{t('shell.projectEmpty')}</div>}
+    </NavLink>
+  )
+}
+
 /** Link to the health of Prometheus and Alertmanager of every set in use. */
 function StackLink({ compact }: { compact?: boolean }) {
   const stacks = useStacks()
@@ -111,10 +157,11 @@ export default function AppShell() {
   return (
     <div className="flex min-h-svh">
       <aside className="sticky top-0 hidden h-svh w-52 shrink-0 flex-col border-r bg-sidebar p-3 text-sidebar-foreground md:flex">
-        <div className="mb-5 flex items-center gap-2 px-2 pt-1">
+        <div className="mb-4 flex items-center gap-2 px-2 pt-1">
           <img src="/favicon.svg" alt="" className="size-6" />
           <span className="text-base font-semibold">Kamerton</span>
         </div>
+        <ProjectBox />
         <nav className="flex flex-col gap-0.5">
           {nav.map(({ to, label, icon: Icon, match }) => (
             <NavLink
@@ -128,6 +175,7 @@ export default function AppShell() {
               <Icon className="size-4" />
               {t(label)}
               {to === '/alerts' && <AlertCount />}
+              {to === '/git' && <GitCount />}
             </NavLink>
           ))}
         </nav>
