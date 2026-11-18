@@ -456,7 +456,7 @@ func (s *Server) putGitSettings(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusConflict, "git_create_failed", err.Error())
 			return
 		}
-		s.adoptProject(r.Context(), name, in.Settings.URL)
+		s.adoptProject(r.Context(), name, in.URL)
 		s.log.Info("git: project created from the UI", "branch", p.Branch)
 		writeJSON(w, http.StatusOK, map[string]any{"settings": s.opts.GitRunner.View(r.Context()), "proposal": p})
 		return
@@ -465,7 +465,7 @@ func (s *Server) putGitSettings(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "git_connect_failed", err.Error())
 		return
 	}
-	s.adoptProject(r.Context(), c.Project, in.Settings.URL)
+	s.adoptProject(r.Context(), c.Project, in.URL)
 	s.log.Info("git: settings changed from the UI")
 	writeJSON(w, http.StatusOK, map[string]any{"settings": s.opts.GitRunner.View(r.Context())})
 }
