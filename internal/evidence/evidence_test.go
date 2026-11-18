@@ -407,3 +407,28 @@ func TestWorkloadScaledToZero(t *testing.T) {
 		t.Errorf("no workload at all = %+v", got)
 	}
 }
+
+func TestFirstInstallIsNotANewVersion(t *testing.T) {
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "payment-only-abcde", OwnerReferences: owner("ReplicaSet", "payment-only")},
+		Status:     corev1.PodStatus{Phase: corev1.PodRunning},
+	}
+	sd := shop()
+	first := &Collector{Kube: kube(t, rs("payment-only", "1", 8*time.Minute, "payment:3.1.0"), pod)}
+	got, err := first.Workload(context.Background(), sd, &sd.Spec.Services[0], nil, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Rollouts) != 1 || !got.Rollouts[0].First {
+		t.Errorf("first install: rollouts = %+v", got.Rollouts)
+	}
+	// A later revision whose older ReplicaSets were cleaned up is still a change.
+	later := &Collector{Kube: kube(t, rs("payment-only", "4", 8*time.Minute, "payment:3.1.0"), pod)}
+	got, err = later.Workload(context.Background(), sd, &sd.Spec.Services[0], nil, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Rollouts) != 1 || got.Rollouts[0].First {
+		t.Errorf("revision 4: rollouts = %+v", got.Rollouts)
+	}
+}

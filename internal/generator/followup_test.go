@@ -220,3 +220,17 @@ func TestRenderScaledToZero(t *testing.T) {
 		t.Errorf("russian:\n%s", ru)
 	}
 }
+
+func TestFirstInstallIsWordedAsSuch(t *testing.T) {
+	f := likelyFollowUp()
+	r := &f.Likely[0].Evidence.Changes.Rollouts[0]
+	r.OldImage, r.First = "", true
+	sum := Summarize(f, rules.LanguageEnglish, "Asia/Almaty", time.Date(2026, 11, 16, 4, 20, 30, 0, time.UTC))
+	if len(sum.Changes) != 1 || sum.Changes[0] != "first deployed at 09:14 UTC+5 (v1.4.3)" {
+		t.Errorf("changes = %q", sum.Changes)
+	}
+	ru := Summarize(f, rules.LanguageRussian, "Asia/Almaty", time.Date(2026, 11, 16, 4, 20, 30, 0, time.UTC))
+	if len(ru.Changes) != 1 || ru.Changes[0] != "первая установка в 09:14 UTC+5 (v1.4.3)" {
+		t.Errorf("russian changes = %q", ru.Changes)
+	}
+}

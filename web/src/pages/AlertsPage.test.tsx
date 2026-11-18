@@ -108,6 +108,23 @@ describe('Alerts page with incidents', () => {
     expect(html).not.toContain('Probable')
   })
 
+  it('shows the tail of a finished incident as settling, not as a new failure', () => {
+    const tail = incident({
+      id: 'shop:checkout',
+      roots: ['checkout'],
+      rootAlerts: [ia({ name: 'KamertonSLOBurnRateFast', service: 'checkout', severity: 'critical' })],
+      affected: [],
+      affectedAlerts: [],
+      aftermath: { roots: ['payment'], endedAt: ago(3) },
+    })
+    state.data = response([tail])
+    const html = render()
+    expect(html).toContain('data-aftermath="true"')
+    expect(html).toContain('Settling after the payment incident, which ended 3 minutes ago.')
+    expect(html).not.toContain('Cause: checkout is failing')
+    expect(systemStateText({ state: 'firing', alerts: { critical: 1, warning: 0 } }, [tail])).toBe('settling after payment')
+  })
+
   it('words the cause as probable when the evidence is not certain', () => {
     state.data = response([incident({ evidence: { cause: 'payment: errors 40%', likely: true } })])
     expect(render()).toContain('Probable cause: payment: errors 40%')

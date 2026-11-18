@@ -333,8 +333,12 @@ func (c *Collector) deploymentRollouts(ctx context.Context, ns string, podRS map
 		newImages := images(newest.Spec.Template.Spec.Containers)
 		if len(sets) > 1 {
 			r.OldImage, r.NewImage = changedTags(images(sets[1].Spec.Template.Spec.Containers), newImages)
-		} else if len(newImages) > 0 {
-			r.NewImage = imageTag(newImages[0].image)
+		} else {
+			// Revision 1 with no older ReplicaSet: the Deployment was just installed.
+			r.First = revision(newest) <= 1
+			if len(newImages) > 0 {
+				r.NewImage = imageTag(newImages[0].image)
+			}
 		}
 		out = append(out, r)
 	}

@@ -22,7 +22,7 @@ const hasEvidence = (e: IncidentEvidence | undefined) => Boolean(e && (e.cause |
 // The core puts every alerting service into some incident
 // (internal/triage/incidents.go); one with no affected services and nothing
 // found about its cause is a lone failure and stays a plain alert.
-export const isIncident = (i: Incident): boolean => isSystemIncident(i) || i.affected.length > 0 || hasEvidence(i.evidence)
+export const isIncident = (i: Incident): boolean => isSystemIncident(i) || i.affected.length > 0 || hasEvidence(i.evidence) || !!i.aftermath
 
 export const isCritical = (i: Incident): boolean => i.rootAlerts.some((a) => a.severity === 'critical')
 

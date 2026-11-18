@@ -163,7 +163,10 @@ export default function IncidentBlock({ inc, openAffected = false, systemText }:
   const ev = inc.evidence
   const roots = inc.roots.join(', ')
   const wide = isSystemIncident(inc)
-  const cause = ev?.cause
+  const tail = inc.aftermath
+  const cause = tail
+    ? t(tail.endedAt ? 'incident.aftermath' : 'incident.aftermathNoTime', { roots: tail.roots.join(', '), ago: tail.endedAt ? timeAgo(tail.endedAt) : '' })
+    : ev?.cause
     ? t(ev.likely ? 'incident.causeLikely' : 'incident.cause', { cause: ev.cause })
     : wide
       ? systemText || t('incident.systemCause')
@@ -172,7 +175,7 @@ export default function IncidentBlock({ inc, openAffected = false, systemText }:
   const prev = inc.previous
   const fix = prev?.fix?.trim()
   return (
-    <section data-testid="incident" data-incident={inc.id} className={cn('space-y-3 rounded-xl border bg-card p-4', isCritical(inc) && 'border-firing/40')}>
+    <section data-testid="incident" data-incident={inc.id} className={cn('space-y-3 rounded-xl border bg-card p-4', isCritical(inc) && !tail && 'border-firing/40')} data-aftermath={tail ? 'true' : undefined}>
       <ul className="space-y-3">
         {inc.rootAlerts.map((a, i) => (
           <RootAlert key={a.fingerprint || `${a.service}-${a.name}-${i}`} a={a} system={inc.system} />

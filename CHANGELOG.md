@@ -6,6 +6,18 @@ All notable changes to Kamerton are listed here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- Alerts that linger after an incident has ended (error budgets, windows
+  that still see the failure) are shown on the Alerts screen as the tail of
+  that incident, "Settling after the payment incident", not as a new
+  incident with its own cause. The system's state says "settling after
+  payment". `GET /api/v1/alerts` names the finished incident in
+  `aftermath`.
+- The evidence words the first rollout of a workload as "first deployed
+  at", not "new version at": a service installed minutes ago has not
+  changed.
+
 ## [0.2.2] - 2026-11-18
 
 ### Added
