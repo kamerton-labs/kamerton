@@ -6,6 +6,17 @@ All notable changes to Kamerton are listed here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- A receiver whose Secret does not exist yet no longer switches off the
+  whole system. The Prometheus Operator rejects an AlertmanagerConfig that
+  refers to a missing Secret, so a description naming Telegram or email
+  before the channel was connected got no routes and no muting by cause at
+  all. Kamerton now leaves out only that channel, applies the rest, sets
+  the condition `ChannelsConnected` to False on the description with the
+  receiver and Secret named, and looks again every 30 seconds. A Secret
+  Kamerton may not read is kept as before.
+
 ## [0.2.0] - 2026-11-18
 
 ### Added

@@ -408,6 +408,7 @@ func newManager(cfg config.Config, log *slog.Logger, sets *stack.Sets, ns string
 		Applier: &deployer.KubernetesApplier{Client: mgr.GetClient()},
 		Options: generator.Options{RunbookBaseURL: cfg.RunbookBaseURL},
 		Sets:    sets, SetsNamespace: ns, SetsConfigMap: cfg.StacksConfigMap,
+		Secrets: mgr.GetAPIReader(),
 	}
 	if err := r.SetupWithManager(mgr); err != nil {
 		return nil, nil, nil, err

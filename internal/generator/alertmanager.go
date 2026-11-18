@@ -69,7 +69,7 @@ func (g *gen) alertmanagerConfig() map[string]any {
 	receivers := []any{map[string]any{"name": nullReceiver}}
 	for _, r := range n.Receivers {
 		recv := map[string]any{"name": r.Name}
-		if t := r.Telegram; t != nil {
+		if t := r.Telegram; t != nil && !g.secretMissing(r.Name, "telegram", t.BotTokenSecret) {
 			recv["telegramConfigs"] = []any{map[string]any{
 				"chatID":       t.ChatID,
 				"botToken":     secretRef(t.BotTokenSecret),
@@ -78,7 +78,7 @@ func (g *gen) alertmanagerConfig() map[string]any {
 				"message":      msg.TelegramHTML,
 			}}
 		}
-		if e := r.Email; e != nil {
+		if e := r.Email; e != nil && (e.AuthPasswordSecret == nil || !g.secretMissing(r.Name, "email", *e.AuthPasswordSecret)) {
 			cfg := map[string]any{
 				"to":           strings.Join(e.To, ", "),
 				"from":         e.From,
@@ -121,6 +121,14 @@ func (g *gen) alertmanagerConfig() map[string]any {
 		out["inhibitRules"] = inhibit
 	}
 	return out
+}
+
+func (g *gen) secretMissing(receiver, channel string, ref v1alpha1.SecretKeyRef) bool {
+	if g.opts.SecretMissing == nil || !g.opts.SecretMissing(ref) {
+		return false
+	}
+	g.missing = append(g.missing, MissingSecret{Receiver: receiver, Channel: channel, Secret: ref.Name, Key: ref.Key})
+	return true
 }
 
 func matcher(name, value string) map[string]any {
