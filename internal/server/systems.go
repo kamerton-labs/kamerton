@@ -456,6 +456,7 @@ func (s *Server) putGitSettings(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusConflict, "git_create_failed", err.Error())
 			return
 		}
+		s.adoptProject(r.Context(), name, in.Settings.URL)
 		s.log.Info("git: project created from the UI", "branch", p.Branch)
 		writeJSON(w, http.StatusOK, map[string]any{"settings": s.opts.GitRunner.View(r.Context()), "proposal": p})
 		return
@@ -464,6 +465,7 @@ func (s *Server) putGitSettings(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "git_connect_failed", err.Error())
 		return
 	}
+	s.adoptProject(r.Context(), c.Project, in.Settings.URL)
 	s.log.Info("git: settings changed from the UI")
 	writeJSON(w, http.StatusOK, map[string]any{"settings": s.opts.GitRunner.View(r.Context())})
 }
@@ -478,6 +480,19 @@ func (s *Server) deleteGitSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, s.opts.GitRunner.View(r.Context()))
+}
+
+// adoptProject gives the installation's project the name of the one taken from a repository,
+// so it stays a project after the repository is disconnected.
+func (s *Server) adoptProject(ctx context.Context, name, repoURL string) {
+	a, ok := s.opts.Projects.(interface{ Adopt(context.Context, string) })
+	if !ok {
+		return
+	}
+	if name == "" {
+		name = gitsync.RepoName(repoURL)
+	}
+	a.Adopt(ctx, name)
 }
 
 // gitNote carries the commit message a person wrote (header X-Kamerton-Message, percent-encoded)

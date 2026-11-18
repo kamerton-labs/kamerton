@@ -177,7 +177,7 @@ export default function GitSettingsForm({ view, onDone }: { view: GitSettingsVie
             className="ml-auto text-destructive"
             disabled={disconnect.isPending}
             onClick={async () => {
-              if (await confirm({ title: t('gits.disconnect.title'), description: t('gits.disconnect.text') })) disconnect.mutate(undefined, { onSuccess: onDone })
+              if (await confirm({ title: t('gits.disconnect.title'), description: t('gits.disconnect.text'), confirmLabel: t('gits.disconnect') })) disconnect.mutate(undefined, { onSuccess: onDone })
             }}
           >
             {t('gits.disconnect')}

@@ -288,6 +288,17 @@ func TestClusterProject(t *testing.T) {
 	if _, err := c.New(ctx, NewRequest{Name: "Other"}, ""); !errors.Is(err, ErrExists) {
 		t.Errorf("a second project: %v", err)
 	}
+	// A project taken from a repository keeps its name; a named one is not renamed.
+	c.Adopt(ctx, "Other")
+	if names.v != "Shop" {
+		t.Errorf("Adopt renamed the project: %q", names.v)
+	}
+	fresh := &memNames{}
+	(&Cluster{Names: fresh}).Adopt(ctx, "obs")
+	if fresh.v != "obs" {
+		t.Errorf("Adopt: %q", fresh.v)
+	}
+
 	// An installation from before projects, with systems, is never sent to the first screen.
 	old := &Cluster{Names: &memNames{}, Systems: listOnly{n: 2}}
 	if !old.Info(ctx).Exists {

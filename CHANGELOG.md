@@ -94,8 +94,9 @@ All notable changes to Kamerton are listed here. The format follows
     opened (`/api/v1/project/open`); the project opened last opens on start, and "Close
     project" goes back to the first screen. `--description` also takes a project folder.
   - In a cluster the place is the cluster: the name is kept in the ConfigMap
-    `kamerton-project`, and git can be connected at once or later. An installation that
-    already has systems is a project and never sees the first screen.
+    `kamerton-project`, and git can be connected at once or later. A project taken from a
+    repository keeps its name there too, so disconnecting the repository does not end it. An
+    installation that already has systems is a project and never sees the first screen.
   - Cloning reads the repository first (`/api/v1/project/check`) and then opens the project
     there or starts one in it with the first commit, named as given; the folder in the
     repository (the root by default) and the push mode are under "More". Starting a project

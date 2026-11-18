@@ -5,6 +5,7 @@ package project
 
 import (
 	"context"
+	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -73,6 +74,20 @@ func (c *Cluster) New(ctx context.Context, req NewRequest, _ string) (Info, erro
 		return Info{}, err
 	}
 	return c.Info(ctx), nil
+}
+
+// Adopt keeps a name for the project when it has none yet: a project taken from a repository
+// stays a project, with that name, when the repository is disconnected later.
+func (c *Cluster) Adopt(ctx context.Context, name string) {
+	if c.Names == nil || strings.TrimSpace(name) == "" {
+		return
+	}
+	if cur, err := c.Names.Get(ctx); err != nil || cur != "" {
+		return
+	}
+	if name, err := cleanName(name); err == nil {
+		_ = c.Names.Set(ctx, name)
+	}
 }
 
 // ConfigMapName keeps the project's name in a ConfigMap.

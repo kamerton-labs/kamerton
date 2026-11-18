@@ -278,6 +278,11 @@ func (r *Runner) Create(ctx context.Context, set Settings, token, author, name s
 		return nil, errors.New("the repository was not connected")
 	}
 	p, err := s.InitProject(ctx, author, name)
+	if err == nil {
+		// The read started on connecting may have seen the repository before the first commit:
+		// read it again now, so the project shows with its name at once, not a minute later.
+		s.Sync(ctx)
+	}
 	if err != nil && !wasConnected {
 		// No project, no connection: a half-made start would leave a repository that is
 		// followed but holds nothing, and the next try would have to open it instead.

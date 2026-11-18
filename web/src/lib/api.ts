@@ -175,6 +175,8 @@ export interface GitCheck {
 }
 
 const gitInvalidate = (qc: ReturnType<typeof useQueryClient>) => {
+  // A repository connected or disconnected can make or end the project, too.
+  void qc.invalidateQueries({ queryKey: ['project'] })
   void qc.invalidateQueries({ queryKey: ['git'] })
   void qc.invalidateQueries({ queryKey: ['systems'] })
   void qc.invalidateQueries({ queryKey: ['system'] })
