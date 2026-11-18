@@ -6,6 +6,8 @@ All notable changes to Kamerton are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-11-18
+
 ### Fixed
 
 - A receiver whose Secret does not exist yet no longer switches off the
