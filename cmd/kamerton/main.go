@@ -164,6 +164,9 @@ func serve(args []string) error {
 		} else {
 			opts.DiscoveryUnavailable = "Discovery is turned off in this installation (Helm: stacks.discovery.enabled=false, flag --stack-discovery=false). Enter the addresses by hand."
 		}
+		opts.SecretMissing = func(ctx context.Context, namespace string, ref v1alpha1.SecretKeyRef) bool {
+			return controller.SecretMissing(ctx, uncached, namespace, ref)
+		}
 		opts.Descriptions = &descstore.Cluster{Client: uncached, Namespace: ns, WatchNamespace: cfg.WatchNamespace, Name: cfg.DescriptionName}
 		if cfg.DescriptionFile != "" {
 			log.Warn("--description is ignored in cluster mode; the description is read from SystemDescription resources", "file", cfg.DescriptionFile)

@@ -3,7 +3,7 @@
 
 import { Page } from '@/components/common'
 import EmailSetup from '@/components/notifications/EmailSetup'
-import { LinksNotice, NoAuthWarning } from '@/components/notifications/Notices'
+import { ChannelsOffNotice, LinksNotice, NoAuthWarning } from '@/components/notifications/Notices'
 import TelegramSetup from '@/components/notifications/TelegramSetup'
 import { useT } from '@/i18n'
 
@@ -12,6 +12,7 @@ export default function ChannelsPage() {
   return (
     <Page title={t('channels.title')} description={t('channels.description')}>
       <div className="space-y-5">
+        <ChannelsOffNotice />
         <TelegramSetup />
         <EmailSetup />
       </div>

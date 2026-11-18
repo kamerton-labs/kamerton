@@ -12,7 +12,7 @@ import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useAlerts, useSystems, type Incident, type SystemSummary } from '@/lib/api'
 import { useT } from '@/i18n'
-import { systemStateText } from '@/lib/format'
+import { channelNames, systemStateText } from '@/lib/format'
 import { systemIncidents } from '@/lib/incidents'
 import { stackBadge, stackName } from '@/lib/stacks'
 
@@ -40,6 +40,11 @@ function SystemCard({ s, stacks, incidents }: { s: SystemSummary; stacks: number
             <span className="font-medium text-foreground tabular-nums">{s.rules}</span> {tn('word.rules', s.rules)}
           </span>
           <span>{s.receivers === 0 ? <span className="text-warn">{t('systems.noReceivers')}</span> : tn('count.channels', s.receivers)}</span>
+          {s.channelsOff && s.channelsOff.length > 0 && (
+            <span className="text-warn" data-testid="system-channels-off">
+              {t('systems.channelsOff', { channels: channelNames(s.channelsOff) })}
+            </span>
+          )}
           {set && (
             <span data-testid="system-stack" title={t('systems.stackTitle')}>
               {t('systems.stack', { name: set })}

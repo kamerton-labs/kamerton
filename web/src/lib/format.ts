@@ -71,3 +71,9 @@ export function shortVersion(v: string): string {
   if (commit) return commit[1].slice(0, 7)
   return s.length > 12 ? `${s.slice(0, 12)}…` : s
 }
+
+/** "Telegram and email" for the channels a system names but nobody has connected. */
+export function channelNames(off: NonNullable<SystemSummary['channelsOff']>): string {
+  const kinds = [...new Set(off.map((c) => c.channel))].sort().reverse()
+  return kinds.map((k) => t(k === 'telegram' ? 'notice.channelsOff.telegram' : 'notice.channelsOff.email')).join(t('notice.channelsOff.and'))
+}
