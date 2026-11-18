@@ -9,6 +9,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -151,5 +152,99 @@ func TestTruncateKeepsUTF8(t *testing.T) {
 	}
 	if truncate("short", 10) != "short" {
 		t.Error("short strings must stay as they are")
+	}
+}
+
+func TestReconcileLeavesOutChannelWithoutSecret(t *testing.T) {
+	sd, _, err := description.LoadFile("../../testdata/otel-demo/system.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sd.Namespace = "kamerton"
+	s := runtime.NewScheme()
+	if err := v1alpha1.AddToScheme(s); err != nil {
+		t.Fatal(err)
+	}
+	if err := corev1.AddToScheme(s); err != nil {
+		t.Fatal(err)
+	}
+	// The mail password exists, the bot token does not.
+	smtp := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "kamerton", Name: "kamerton-smtp"},
+		Data:       map[string][]byte{"password": []byte("x")},
+	}
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(sd, smtp).WithStatusSubresource(sd).Build()
+	applier := &deployer.DryRunApplier{}
+	r := &SystemDescriptionReconciler{Client: c, Applier: applier, Secrets: c}
+	key := types.NamespacedName{Namespace: "kamerton", Name: sd.Name}
+
+	reconcile := func() (ctrl.Result, map[string]any) {
+		t.Helper()
+		res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, o := range applier.Applied {
+			if o.GetKind() == "AlertmanagerConfig" {
+				return res, o.Object["spec"].(map[string]any)
+			}
+		}
+		t.Fatal("no AlertmanagerConfig applied")
+		return res, nil
+	}
+	channels := func(spec map[string]any) (telegram, email int) {
+		for _, raw := range spec["receivers"].([]any) {
+			recv := raw.(map[string]any)
+			if _, ok := recv["telegramConfigs"]; ok {
+				telegram++
+			}
+			if _, ok := recv["emailConfigs"]; ok {
+				email++
+			}
+		}
+		return
+	}
+
+	res, spec := reconcile()
+	if tg, mail := channels(spec); tg != 0 || mail == 0 {
+		t.Errorf("want Telegram left out and email kept, got telegram=%d email=%d", tg, mail)
+	}
+	if rules, _ := spec["inhibitRules"].([]any); len(rules) == 0 {
+		t.Error("inhibit rules must survive a missing channel Secret")
+	}
+	if res.RequeueAfter != missingSecretRetry {
+		t.Errorf("RequeueAfter = %v, want %v", res.RequeueAfter, missingSecretRetry)
+	}
+	var got v1alpha1.SystemDescription
+	if err := c.Get(context.Background(), key, &got); err != nil {
+		t.Fatal(err)
+	}
+	cond := meta.FindStatusCondition(got.Status.Conditions, ConditionChannels)
+	if cond == nil || cond.Status != metav1.ConditionFalse || !strings.Contains(cond.Message, "kamerton-telegram") {
+		t.Errorf("condition %s = %+v", ConditionChannels, cond)
+	}
+	if !meta.IsStatusConditionTrue(got.Status.Conditions, ConditionApplied) {
+		t.Errorf("Applied must stay true: %+v", got.Status.Conditions)
+	}
+
+	token := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "kamerton", Name: "kamerton-telegram"},
+		Data:       map[string][]byte{"bot-token": []byte("x")},
+	}
+	if err := c.Create(context.Background(), token); err != nil {
+		t.Fatal(err)
+	}
+	res, spec = reconcile()
+	if tg, _ := channels(spec); tg == 0 {
+		t.Error("Telegram must come back once its Secret exists")
+	}
+	if res.RequeueAfter != 0 {
+		t.Errorf("RequeueAfter = %v, want none", res.RequeueAfter)
+	}
+	if err := c.Get(context.Background(), key, &got); err != nil {
+		t.Fatal(err)
+	}
+	if !meta.IsStatusConditionTrue(got.Status.Conditions, ConditionChannels) {
+		t.Errorf("condition %s not true: %+v", ConditionChannels, got.Status.Conditions)
 	}
 }

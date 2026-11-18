@@ -66,6 +66,18 @@ type Options struct {
 	// Now picks the daylight-saving changes of the notification time zone. Zero means time.Now().
 	Now     time.Time
 	Webhook *WebhookOptions
+	// SecretMissing reports that a Secret key a receiver refers to does not exist. The operator
+	// rejects the whole AlertmanagerConfig over one missing Secret, so such a channel is left out.
+	// Nil: every reference is kept.
+	SecretMissing func(ref v1alpha1.SecretKeyRef) bool
+}
+
+// MissingSecret is a channel left out of the AlertmanagerConfig because its Secret is absent.
+type MissingSecret struct {
+	Receiver string
+	Channel  string
+	Secret   string
+	Key      string
 }
 
 type Bundle struct {
@@ -77,7 +89,9 @@ type Bundle struct {
 	// AlertmanagerConfig is the spec of a prometheus-operator AlertmanagerConfig,
 	// or nil when the description has no notifications.
 	AlertmanagerConfig map[string]any
-	Runbooks           map[string]string
+	// MissingSecrets lists the channels left out of AlertmanagerConfig.
+	MissingSecrets []MissingSecret
+	Runbooks       map[string]string
 }
 
 // Generate expects a description that passed description.Validate or ValidateSpec.
@@ -114,6 +128,7 @@ func Generate(sd *v1alpha1.SystemDescription, opts Options) (*Bundle, error) {
 	}
 	b.Dashboards[fmt.Sprintf("kamerton-%s.json", sd.Name)] = dash
 	b.AlertmanagerConfig = g.alertmanagerConfig()
+	b.MissingSecrets = g.missing
 	for _, rg := range b.RuleGroups.Groups {
 		if rg.Name == systemGroup(sd.Name) {
 			b.Runbooks[SystemRunbook+".md"] = runbook(sd, nil, rg.Rules)
@@ -134,6 +149,7 @@ type gen struct {
 	byName map[string]*v1alpha1.Service
 	// feeders is triage.Graph.Feeders, computed on first use.
 	feeders map[string][]rules.Feeder
+	missing []MissingSecret
 }
 
 func newGen(sd *v1alpha1.SystemDescription, opts Options) *gen {

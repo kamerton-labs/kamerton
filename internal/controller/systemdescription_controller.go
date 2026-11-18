@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	corev1 "k8s.io/api/core/v1"
@@ -34,7 +35,13 @@ const (
 	ConditionValid     = "Valid"
 	ConditionGenerated = "Generated"
 	ConditionApplied   = "Applied"
+	// ConditionChannels is False while a receiver's Secret is missing and its channel is off.
+	ConditionChannels = "ChannelsConnected"
 )
+
+// missingSecretRetry is how soon a system with a missing channel Secret is looked at again:
+// Kamerton may not watch Secrets, so it polls.
+const missingSecretRetry = 30 * time.Second
 
 // TODO: watch owned objects so manual drift is corrected before the next resync.
 type SystemDescriptionReconciler struct {
@@ -47,6 +54,9 @@ type SystemDescriptionReconciler struct {
 	// a change of it re-reconciles every system. Empty: not watched.
 	SetsNamespace string
 	SetsConfigMap string
+	// Secrets reads Secrets without a cache (a cache would need list and watch on all of them).
+	// Nil: references are not checked.
+	Secrets client.Reader
 }
 
 // RBAC for the Helm chart is maintained by hand in
@@ -108,7 +118,13 @@ func (r *SystemDescriptionReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	}
 	setCond(ConditionValid, true, "Valid", "description is valid")
 
-	bundle, err := generator.Generate(&sd, r.Options)
+	opts := r.Options
+	if r.Secrets != nil {
+		opts.SecretMissing = func(ref v1alpha1.SecretKeyRef) bool {
+			return r.secretMissing(ctx, sd.Namespace, ref)
+		}
+	}
+	bundle, err := generator.Generate(&sd, opts)
 	if err != nil {
 		setCond(ConditionGenerated, false, "GenerationFailed", err.Error())
 		return finish(err)
@@ -153,7 +169,37 @@ func (r *SystemDescriptionReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return finish(err)
 	}
 	setCond(ConditionApplied, true, "Applied", fmt.Sprintf("%d objects applied%s", len(objs), setNote))
-	return finish(nil)
+	if len(bundle.MissingSecrets) == 0 {
+		setCond(ConditionChannels, true, "Connected", "every channel has its Secret")
+		return finish(nil)
+	}
+	var off []string
+	for _, m := range bundle.MissingSecrets {
+		off = append(off, fmt.Sprintf("%s (%s): Secret %s, key %s not found", m.Receiver, m.Channel, m.Secret, m.Key))
+	}
+	msg := "channels left out until their Secrets exist: " + strings.Join(off, "; ")
+	log.Info(msg)
+	setCond(ConditionChannels, false, "SecretMissing", msg)
+	res, err := finish(nil)
+	if err == nil {
+		res.RequeueAfter = missingSecretRetry
+	}
+	return res, err
+}
+
+// secretMissing is true only when the Secret or its key is known to be absent: a Secret Kamerton
+// may not read stays in the configuration.
+func (r *SystemDescriptionReconciler) secretMissing(ctx context.Context, ns string, ref v1alpha1.SecretKeyRef) bool {
+	var s corev1.Secret
+	err := r.Secrets.Get(ctx, types.NamespacedName{Namespace: ns, Name: ref.Name}, &s)
+	if apierrors.IsNotFound(err) {
+		return true
+	}
+	if err != nil {
+		return false
+	}
+	_, ok := s.Data[ref.Key]
+	return !ok
 }
 
 func (r *SystemDescriptionReconciler) SetupWithManager(mgr ctrl.Manager) error {
