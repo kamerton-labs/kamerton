@@ -113,7 +113,18 @@ func (s *Service) Propose(ctx context.Context, c descstore.GitChange) (*descstor
 		return nil, errors.New("nothing to change: the repository already has this content")
 	}
 	title := fmt.Sprintf("%s system %s", what, c.System)
-	hash, err := wt.Commit(title+"\n\nMade in the Kamerton UI.\n", &git.CommitOptions{
+	note := "Made in the Kamerton UI."
+	if c.Author != "" {
+		note = "Made in the Kamerton UI by " + oneLine(c.Author) + "."
+	}
+	// The first line of a person's message is the title; the rest goes into the body.
+	if first, rest, _ := strings.Cut(strings.TrimSpace(c.Message), "\n"); oneLine(first) != "" {
+		title = oneLine(first)
+		if rest = strings.TrimSpace(rest); rest != "" {
+			note = rest + "\n\n" + note
+		}
+	}
+	hash, err := wt.Commit(title+"\n\n"+note+"\n", &git.CommitOptions{
 		Author: &object.Signature{Name: "Kamerton", Email: "kamerton@noreply.invalid", When: s.now()},
 	})
 	if err != nil {
@@ -121,7 +132,7 @@ func (s *Service) Propose(ctx context.Context, c descstore.GitChange) (*descstor
 	}
 	out := &descstore.GitProposal{Branch: s.branch(), Direct: s.Write == WriteCommit, Commit: hash.String()}
 	if !out.Direct {
-		out.Branch = fmt.Sprintf("kamerton/%s-%s", safeRef(c.System), short(hash.String()))
+		out.Branch = branchPrefix + safeRef(c.System) + "-" + short(hash.String())
 	}
 	spec := gitconfig.RefSpec(fmt.Sprintf("refs/heads/%s:refs/heads/%s", s.branch(), out.Branch))
 	if err := repo.PushContext(ctx, &git.PushOptions{RemoteName: "origin", Auth: auth, RefSpecs: []gitconfig.RefSpec{spec}}); err != nil {
@@ -135,13 +146,13 @@ func (s *Service) Propose(ctx context.Context, c descstore.GitChange) (*descstor
 	}
 	if host := s.host(); host != nil {
 		tok, _ := s.Token(ctx)
-		url, err := host.openRequest(ctx, strings.TrimSpace(tok), out.Branch, s.branch(), title,
-			"Made in the Kamerton UI. Kamerton applies it after the merge.")
+		url, err := host.openRequest(ctx, strings.TrimSpace(tok), out.Branch, s.branch(), title, note+" Kamerton applies it after the merge.")
 		if err != nil {
 			// The branch is there; the request can be opened by hand.
 			s.log().Warn("git: branch pushed, but the request was not opened", "branch", out.Branch, "error", err)
 		}
 		out.URL = url
+		s.refreshRequests(ctx)
 	}
 	return out, nil
 }
@@ -181,6 +192,15 @@ func (s *Service) writeGenerated(fs billy.Filesystem, wt *git.Worktree, c descst
 		}
 	}
 	return nil
+}
+
+// oneLine keeps a title on one line and within what hosting services show.
+func oneLine(s string) string {
+	s = strings.Join(strings.Fields(s), " ")
+	if len(s) > 120 {
+		s = s[:120]
+	}
+	return s
 }
 
 func isHTTP(u string) bool {

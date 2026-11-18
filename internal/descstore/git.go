@@ -43,6 +43,26 @@ type GitChange struct {
 	Content []byte
 	// New: the system has no file yet; the writer picks the path and refuses to overwrite.
 	New bool
+	// Message is the commit message a person wrote; empty: Kamerton words it. Author is who
+	// made the change in the UI, when login is on.
+	Message, Author string
+}
+
+type gitNoteKey struct{}
+
+type gitNote struct{ message, author string }
+
+// WithGitNote attaches a commit message and the name of the person to a save that may end up
+// in the repository.
+func WithGitNote(ctx context.Context, message, author string) context.Context {
+	return context.WithValue(ctx, gitNoteKey{}, gitNote{message: message, author: author})
+}
+
+func noteFrom(ctx context.Context, c GitChange) GitChange {
+	if n, ok := ctx.Value(gitNoteKey{}).(gitNote); ok {
+		c.Message, c.Author = n.message, n.author
+	}
+	return c
 }
 
 // GitProposal says where a change went.
@@ -115,7 +135,7 @@ func (c *Cluster) MoveToGit(ctx context.Context, id string) (*GitProposal, error
 	if err := mark(c.Git.RepoKey()); err != nil {
 		return nil, err
 	}
-	p, err := c.Git.Propose(ctx, GitChange{System: cur.SD.Name, Content: cur.Raw, New: true})
+	p, err := c.Git.Propose(ctx, noteFrom(ctx, GitChange{System: cur.SD.Name, Content: cur.Raw, New: true}))
 	if err != nil {
 		_ = mark("")
 		return nil, fmt.Errorf("write the system to git: %w", err)
@@ -129,7 +149,7 @@ func (c *Cluster) propose(ctx context.Context, sd *v1alpha1.SystemDescription, c
 	if c.Git == nil || !c.Git.WriteEnabled() {
 		return ErrFromGit
 	}
-	p, err := c.Git.Propose(ctx, GitChange{System: sd.Name, Path: from.Path, Content: content})
+	p, err := c.Git.Propose(ctx, noteFrom(ctx, GitChange{System: sd.Name, Path: from.Path, Content: content}))
 	if err != nil {
 		return fmt.Errorf("write the change to git: %w", err)
 	}

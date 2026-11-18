@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/url"
+	"path"
 	"sync"
 	"time"
 
@@ -19,6 +21,7 @@ import (
 	"github.com/kamerton-labs/kamerton/internal/description"
 	"github.com/kamerton-labs/kamerton/internal/descstore"
 	"github.com/kamerton-labs/kamerton/internal/generator"
+	"github.com/kamerton-labs/kamerton/internal/rulediff"
 	"github.com/kamerton-labs/kamerton/internal/rules"
 	"github.com/kamerton-labs/kamerton/internal/stack"
 )
@@ -277,6 +280,9 @@ func (s *Server) getSystem(w http.ResponseWriter, r *http.Request) {
 			if raw, ok := g.Raw(from.Path); ok && snap.SD != nil {
 				resp["yaml"] = string(raw)
 			}
+			if u := g.FileURL(from.Path); u != "" {
+				resp["gitFileURL"] = u
+			}
 		}
 	}
 	if snap.Invalid != nil {
@@ -295,7 +301,7 @@ func (s *Server) createSystem(w http.ResponseWriter, r *http.Request) {
 	if !s.allowSave(ctx, w, body, nil) {
 		return
 	}
-	snap, res, err := s.opts.Descriptions.Create(ctx, body)
+	snap, res, err := s.opts.Descriptions.Create(s.gitNote(ctx, r), body)
 	if err != nil {
 		writeStoreErr(w, err)
 		return
@@ -316,13 +322,83 @@ func (s *Server) putSystem(w http.ResponseWriter, r *http.Request) {
 	if !s.allowSave(ctx, w, body, stored) {
 		return
 	}
-	snap, res, err := s.opts.Descriptions.Save(ctx, r.PathValue("id"), body)
+	snap, res, err := s.opts.Descriptions.Save(s.gitNote(ctx, r), r.PathValue("id"), body)
 	if err != nil {
 		writeStoreErr(w, err)
 		return
 	}
 	s.log.Info("system saved", "system", snap.ID, "source", snap.Source)
 	writeJSON(w, http.StatusOK, map[string]any{"saved": true, "id": snap.ID, "source": snap.Source, "mode": s.opts.Descriptions.Mode(), "warnings": append(res.Warnings, s.stackWarnings(ctx, stackOf(snap))...)})
+}
+
+// gitNote carries the commit message a person wrote (header X-Kamerton-Message, percent-encoded)
+// and their login into a save that may end up in the repository.
+func (s *Server) gitNote(ctx context.Context, r *http.Request) context.Context {
+	msg, err := url.PathUnescape(r.Header.Get("X-Kamerton-Message"))
+	if err != nil || len(msg) > 2000 {
+		msg = ""
+	}
+	author := ""
+	if a := s.opts.Auth; a != nil {
+		author, _ = a.session(r)
+	}
+	return descstore.WithGitNote(ctx, msg, author)
+}
+
+// gitSync looks at the repository now instead of waiting for the next tick.
+func (s *Server) gitSync(w http.ResponseWriter, r *http.Request) {
+	if s.opts.Git == nil {
+		writeError(w, http.StatusConflict, "git_off", "system descriptions are not read from git")
+		return
+	}
+	writeJSON(w, http.StatusOK, s.opts.Git.Sync(r.Context()))
+}
+
+// gitPreview says what a description would change if it were written to the repository: where
+// it goes and which rules differ from what is there now. Nothing is written.
+func (s *Server) gitPreview(w http.ResponseWriter, r *http.Request) {
+	body, ok := readBody(w, r)
+	if !ok {
+		return
+	}
+	g := s.opts.Git
+	if g == nil || g.WriteMode() == "" {
+		writeError(w, http.StatusConflict, "git_off", "writing to git is off")
+		return
+	}
+	res := description.Validate(body)
+	if !res.Valid || res.Document == nil {
+		writeInvalid(w, res)
+		return
+	}
+	after := res.Document
+	st := g.Status()
+	out := map[string]any{"system": after.Name, "mode": g.WriteMode(), "branch": st.Branch, "repo": st.Repo, "repoURL": st.RepoURL}
+	var before *v1alpha1.SystemDescription
+	file := path.Join(st.Path, after.Name+".yaml")
+	if stored := s.storedByName(r.Context(), after); stored != nil && stored.SD != nil {
+		before = stored.SD
+		if from := descstore.FromGit(stored.SD); from != nil {
+			file = from.Path
+			// Compare with the file, not the cluster: the two differ while a file has an error.
+			if raw, ok := g.Raw(from.Path); ok {
+				if doc := description.Validate(raw).Document; doc != nil {
+					before = doc
+				}
+			}
+		} else {
+			// A system made by hand: its description moves to git unchanged.
+			out["move"] = true
+		}
+	}
+	out["file"], out["new"] = file, before == nil
+	d, err := rulediff.Compare(before, after)
+	if err != nil {
+		writeError(w, http.StatusUnprocessableEntity, "generation_failed", err.Error())
+		return
+	}
+	out["diff"] = d
+	writeJSON(w, http.StatusOK, out)
 }
 
 // moveSystemToGit puts a system made by hand under the repository: its description becomes a
@@ -337,7 +413,7 @@ func (s *Server) moveSystemToGit(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
 	defer cancel()
-	p, err := mover.MoveToGit(ctx, r.PathValue("id"))
+	p, err := mover.MoveToGit(s.gitNote(ctx, r), r.PathValue("id"))
 	if errors.Is(err, descstore.ErrNoDescription) {
 		writeError(w, http.StatusNotFound, "not_found", "no such system")
 		return
@@ -353,7 +429,7 @@ func (s *Server) moveSystemToGit(w http.ResponseWriter, r *http.Request) {
 func (s *Server) deleteSystem(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
-	if err := s.opts.Descriptions.Delete(ctx, r.PathValue("id")); err != nil {
+	if err := s.opts.Descriptions.Delete(s.gitNote(ctx, r), r.PathValue("id")); err != nil {
 		writeStoreErr(w, err)
 		return
 	}

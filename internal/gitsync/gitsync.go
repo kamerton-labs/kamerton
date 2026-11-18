@@ -92,6 +92,45 @@ type Service struct {
 	raw map[string][]byte
 	// reported is the commit and outcome last sent as a commit status.
 	reported string
+	// requests are the open requests seen at the last look.
+	requests []Request
+}
+
+// webBase is the repository's address for a browser; empty when the URL is not http(s).
+func (s *Service) webBase() string {
+	if !isHTTP(s.URL) {
+		return ""
+	}
+	return strings.TrimSuffix(s.Repo(), ".git")
+}
+
+// FileURL opens a file of the followed branch on the hosting service; empty when unknown.
+func (s *Service) FileURL(file string) string {
+	h, base := s.host(), s.webBase()
+	if h == nil || base == "" {
+		return ""
+	}
+	return h.web(base, "file", s.branch(), file)
+}
+
+// refreshRequests looks up the open requests; a failure keeps the last list.
+func (s *Service) refreshRequests(ctx context.Context) {
+	h := s.host()
+	if h == nil || s.Token == nil || !s.WriteEnabled() {
+		return
+	}
+	tok, err := s.Token(ctx)
+	if err != nil || strings.TrimSpace(tok) == "" {
+		return
+	}
+	list, err := h.openRequests(ctx, strings.TrimSpace(tok))
+	if err != nil {
+		s.log().Debug("git: open requests unavailable", "error", err)
+		return
+	}
+	s.mu.Lock()
+	s.requests = list
+	s.mu.Unlock()
 }
 
 // Raw returns a file as it was at the last read.
@@ -161,6 +200,11 @@ type Status struct {
 	Write   string       `json:"write,omitempty"`
 	Files   []FileStatus `json:"files"`
 	Removed []string     `json:"removed,omitempty"`
+	// Requests are the open pull or merge requests Kamerton made, when the hosting service is known.
+	Requests []Request `json:"requests,omitempty"`
+	// RepoURL and CommitURL open the repository and the applied commit on the hosting service.
+	RepoURL   string `json:"repoURL,omitempty"`
+	CommitURL string `json:"commitURL,omitempty"`
 }
 
 // NeedLeaderElection: one replica writes.
@@ -191,6 +235,13 @@ func (s *Service) Status() Status {
 	st := s.status
 	st.Repo, st.Branch, st.Path = s.Repo(), s.branch(), cleanPath(s.Path)
 	st.Write = s.WriteMode()
+	st.Requests = s.requests
+	if base := s.webBase(); base != "" {
+		st.RepoURL = base
+		if h := s.host(); h != nil && st.Commit != "" {
+			st.CommitURL = h.web(base, "commit", st.Commit, "")
+		}
+	}
 	if st.Files == nil {
 		st.Files = []FileStatus{}
 	}
@@ -238,6 +289,7 @@ func (s *Service) Sync(ctx context.Context) Status {
 	if err != nil {
 		return fail(err)
 	}
+	s.refreshRequests(ctx)
 	s.mu.Lock()
 	last, clean := s.status.Commit, s.status.Error == "" && !hasProblems(s.status.Files)
 	s.mu.Unlock()

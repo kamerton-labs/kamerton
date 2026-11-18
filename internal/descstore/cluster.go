@@ -114,7 +114,7 @@ func (c *Cluster) Create(ctx context.Context, raw []byte) (*Snapshot, descriptio
 		if !apierrors.IsNotFound(err) {
 			return nil, res, err
 		}
-		p, err := c.Git.Propose(ctx, GitChange{System: doc.Name, Content: raw, New: true})
+		p, err := c.Git.Propose(ctx, noteFrom(ctx, GitChange{System: doc.Name, Content: raw, New: true}))
 		if err != nil {
 			return nil, res, fmt.Errorf("write the new system to git: %w", err)
 		}

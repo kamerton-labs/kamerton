@@ -108,12 +108,96 @@ func (h *host) setStatus(ctx context.Context, token, commit string, ok bool, des
 	return h.call(ctx, token, "/projects/"+url.PathEscape(h.repo)+"/statuses/"+commit, map[string]any{"state": state, "name": "kamerton", "description": description}, nil)
 }
 
-func (h *host) call(ctx context.Context, token, path string, in, out any) error {
-	raw, err := json.Marshal(in)
-	if err != nil {
-		return err
+// Request is an open pull or merge request that Kamerton made.
+type Request struct {
+	// System is the system the request changes, from the branch name.
+	System string `json:"system"`
+	Title  string `json:"title"`
+	URL    string `json:"url"`
+	Branch string `json:"branch"`
+}
+
+// branchPrefix starts the branches Kamerton pushes: kamerton/<system>-<commit>.
+const branchPrefix = "kamerton/"
+
+// systemOfBranch reads the system back from kamerton/<system>-<8 hex>.
+func systemOfBranch(branch string) string {
+	rest, ok := strings.CutPrefix(branch, branchPrefix)
+	if !ok {
+		return ""
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, h.api+path, bytes.NewReader(raw))
+	if i := strings.LastIndex(rest, "-"); i > 0 {
+		return rest[:i]
+	}
+	return rest
+}
+
+// openRequests lists the open requests from Kamerton's branches.
+func (h *host) openRequests(ctx context.Context, token string) ([]Request, error) {
+	var out []Request
+	if h.provider == ProviderGitHub {
+		var list []struct {
+			Title   string `json:"title"`
+			HTMLURL string `json:"html_url"`
+			Head    struct {
+				Ref string `json:"ref"`
+			} `json:"head"`
+		}
+		if err := h.do(ctx, http.MethodGet, token, "/repos/"+h.repo+"/pulls?state=open&per_page=100", nil, &list); err != nil {
+			return nil, err
+		}
+		for _, p := range list {
+			if sys := systemOfBranch(p.Head.Ref); sys != "" {
+				out = append(out, Request{System: sys, Title: p.Title, URL: p.HTMLURL, Branch: p.Head.Ref})
+			}
+		}
+		return out, nil
+	}
+	var list []struct {
+		Title        string `json:"title"`
+		WebURL       string `json:"web_url"`
+		SourceBranch string `json:"source_branch"`
+	}
+	if err := h.do(ctx, http.MethodGet, token, "/projects/"+url.PathEscape(h.repo)+"/merge_requests?state=opened&per_page=100", nil, &list); err != nil {
+		return nil, err
+	}
+	for _, p := range list {
+		if sys := systemOfBranch(p.SourceBranch); sys != "" {
+			out = append(out, Request{System: sys, Title: p.Title, URL: p.WebURL, Branch: p.SourceBranch})
+		}
+	}
+	return out, nil
+}
+
+// web builds addresses on the hosting service's site for a person to open.
+func (h *host) web(base, kind, ref, file string) string {
+	sep := "/"
+	if h.provider == ProviderGitLab {
+		sep = "/-/"
+	}
+	switch kind {
+	case "commit":
+		return base + sep + "commit/" + ref
+	case "file":
+		return base + sep + "blob/" + ref + "/" + file
+	}
+	return base
+}
+
+func (h *host) call(ctx context.Context, token, path string, in, out any) error {
+	return h.do(ctx, http.MethodPost, token, path, in, out)
+}
+
+func (h *host) do(ctx context.Context, method, token, path string, in, out any) error {
+	var body io.Reader
+	if in != nil {
+		raw, err := json.Marshal(in)
+		if err != nil {
+			return err
+		}
+		body = bytes.NewReader(raw)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, h.api+path, body)
 	if err != nil {
 		return err
 	}

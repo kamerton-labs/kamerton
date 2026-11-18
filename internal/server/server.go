@@ -210,6 +210,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/systems/{id}", s.getSystem)
 	mux.HandleFunc("PUT /api/v1/systems/{id}", s.putSystem)
 	mux.HandleFunc("POST /api/v1/systems/{id}/git", s.moveSystemToGit)
+	mux.HandleFunc("POST /api/v1/git/sync", s.gitSync)
+	mux.HandleFunc("POST /api/v1/git/preview", s.gitPreview)
 	mux.HandleFunc("DELETE /api/v1/systems/{id}", s.deleteSystem)
 	mux.HandleFunc("POST /api/v1/systems/{id}/validate", s.validateSystem)
 	mux.HandleFunc("POST /api/v1/systems/{id}/rules/preview", s.previewSystemRules)

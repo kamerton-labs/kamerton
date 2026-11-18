@@ -118,6 +118,53 @@ export interface GitStatus {
   write?: 'pullRequest' | 'commit'
   files: { path: string; system?: string; state: 'applied' | 'unchanged' | 'invalid' | 'conflict' | 'failed'; error?: string }[]
   removed?: string[]
+  /** Open pull or merge requests Kamerton made, when the hosting service is known. */
+  requests?: GitRequest[]
+  repoURL?: string
+  commitURL?: string
+}
+
+export interface GitRequest {
+  system: string
+  title: string
+  url: string
+  branch: string
+}
+
+/** What a description would change if written to the repository (POST /git/preview). */
+export interface GitPreview {
+  system: string
+  mode: 'pullRequest' | 'commit'
+  branch: string
+  repo: string
+  repoURL?: string
+  file: string
+  new: boolean
+  /** A system made by hand that would move to git as it is. */
+  move?: boolean
+  diff: { total: number; new: boolean; changed: RuleLine[]; added: RuleLine[]; removed: RuleLine[] }
+}
+
+export interface RuleLine {
+  rule: string
+  what?: string
+}
+
+/** A change that may go to git: the commit message a person wrote travels in a header. */
+export interface GitNote {
+  message?: string
+}
+
+const noteHeaders = (note?: GitNote): Record<string, string> => (note?.message?.trim() ? { 'X-Kamerton-Message': encodeURIComponent(note.message.trim()) } : {})
+
+export const gitPreview = (yaml: string) => postYAML<GitPreview>('/git/preview', yaml)
+
+export const useGitSync = () => {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: () => request<GitStatus>('/git/sync', { method: 'POST' }),
+    onSettled: () => qc.invalidateQueries({ queryKey: ['systems'] }),
+  })
 }
 
 export interface SystemsResponse {
@@ -142,6 +189,8 @@ export interface SystemResponse {
   git?: GitSource
   /** How a save of a system from git is written to the repository; absent when it is read-only. */
   gitWrite?: 'pullRequest' | 'commit'
+  /** The file on the hosting service, when it is known. */
+  gitFileURL?: string
   valid: boolean
   errors: Issue[]
   warnings: Issue[]
@@ -811,7 +860,14 @@ export const backtestRule = (id: string, req: RuleBacktestRequest) => postJSON<R
 export const useSaveSystem = (id: string) => {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: (yaml: string) => request<SaveDescriptionResult>(sys(id), { method: 'PUT', headers: { 'Content-Type': 'application/yaml' }, body: yaml }),
+    mutationFn: (v: string | ({ yaml: string } & GitNote)) => {
+      const yaml = typeof v === 'string' ? v : v.yaml
+      return request<SaveDescriptionResult>(sys(id), {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/yaml', ...noteHeaders(typeof v === 'string' ? undefined : v) },
+        body: yaml,
+      })
+    },
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['systems'] })
       void qc.invalidateQueries({ queryKey: ['telegram'] })
@@ -822,8 +878,12 @@ export const useSaveSystem = (id: string) => {
 export const useCreateSystem = () => {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: (yaml: string) =>
-      request<SaveDescriptionResult & { id: string }>('/systems', { method: 'POST', headers: { 'Content-Type': 'application/yaml' }, body: yaml }),
+    mutationFn: (v: string | ({ yaml: string } & GitNote)) =>
+      request<SaveDescriptionResult & { id: string }>('/systems', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/yaml', ...noteHeaders(typeof v === 'string' ? undefined : v) },
+        body: typeof v === 'string' ? v : v.yaml,
+      }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['systems'] }),
   })
 }
@@ -831,13 +891,17 @@ export const useCreateSystem = () => {
 /** Puts a system made by hand under the git repository; it keeps working until the merge. */
 export const useMoveToGit = () =>
   useMutation({
-    mutationFn: (id: string) => request<{ proposed: boolean; proposal: GitProposal }>(`${sys(id)}/git`, { method: 'POST' }),
+    mutationFn: (v: { id: string } & GitNote) => request<{ proposed: boolean; proposal: GitProposal }>(`${sys(v.id)}/git`, { method: 'POST', headers: noteHeaders(v) }),
   })
 
 export const useDeleteSystem = () => {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: (id: string) => request<{ deleted?: boolean; proposed?: boolean; proposal?: GitProposal }>(sys(id), { method: 'DELETE' }),
+    mutationFn: (v: string | ({ id: string } & GitNote)) =>
+      request<{ deleted?: boolean; proposed?: boolean; proposal?: GitProposal }>(sys(typeof v === 'string' ? v : v.id), {
+        method: 'DELETE',
+        headers: noteHeaders(typeof v === 'string' ? undefined : v),
+      }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['systems'] }),
   })
 }

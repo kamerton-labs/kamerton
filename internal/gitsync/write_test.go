@@ -98,6 +98,12 @@ type call struct {
 func newAPI(t *testing.T) *api {
 	a := &api{}
 	a.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			// The list of open requests: one of Kamerton's and one of somebody else's.
+			_, _ = w.Write([]byte(`[{"title":"Change system shop","html_url":"https://example.com/obs/pull/7","head":{"ref":"kamerton/shop-0a1b2c3d"}},
+				{"title":"Unrelated","html_url":"https://example.com/obs/pull/8","head":{"ref":"feature/x"}}]`))
+			return
+		}
 		raw, _ := io.ReadAll(r.Body)
 		c := call{Path: r.URL.Path, Auth: r.Header.Get("Authorization")}
 		_ = json.Unmarshal(raw, &c.Body)
@@ -197,6 +203,11 @@ func TestSaveFromUIBecomesAPullRequest(t *testing.T) {
 	pulls := fake.find("/pulls")
 	if len(pulls) != 1 || pulls[0].Body["head"] != p.Branch || pulls[0].Body["base"] != "main" || pulls[0].Body["title"] != "Change system shop" {
 		t.Fatalf("pull request: %+v", pulls)
+	}
+
+	// The open request is listed for the UI, with the system worked out from the branch.
+	if st := s.Status(); len(st.Requests) != 1 || st.Requests[0].System != "shop" || st.Requests[0].URL != "https://example.com/obs/pull/7" {
+		t.Errorf("open requests: %+v", st.Requests)
 	}
 
 	// Merged: the change arrives by itself.
