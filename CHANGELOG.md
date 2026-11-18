@@ -28,10 +28,16 @@ All notable changes to Kamerton are listed here. The format follows
   opened as a pull or merge request; the API answers 202 with the request's
   address and the change reaches the cluster after the merge. With
   `git.write: commit` the save is committed straight to the followed branch.
-  Deleting such a system removes its file the same way. The UI then edits
+  Deleting such a system removes its file the same way, and a system
+  created in the UI becomes a new file `<git.path>/<name>.yaml`: with
+  writing on, the repository is where systems are made. The UI then edits
   the file as it is in the repository, comments included. Changes Kamerton
   makes to a description by itself (a chat added on the Channels screen) are
   still refused for a system from git.
+- "Move to git" in a system's menu (`POST /api/v1/systems/{id}/git`): a
+  system made in the UI or with kubectl is written to the repository as a
+  new file. It keeps working as it is, and once the file is on the followed
+  branch the file takes it over in place: no deletion, no gap in its rules.
 - `git.generatedPath`: a change written by Kamerton also carries the rules,
   dashboards and runbooks generated from the description, in
   `<generatedPath>/<system>/`, laid out like `kamerton generate -o`, so the

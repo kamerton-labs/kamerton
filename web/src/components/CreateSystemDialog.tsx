@@ -10,7 +10,7 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { useT } from '@/i18n'
-import { ApiError, useCreateSystem, useDiscovery, useSystems } from '@/lib/api'
+import { ApiError, useCreateSystem, useDiscovery, useSystems, type GitProposal } from '@/lib/api'
 import { NAME_RE } from '@/lib/model/types'
 
 export default function CreateSystemDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v: boolean) => void }) {
@@ -30,6 +30,9 @@ function Body({ onDone }: { onDone: () => void }) {
   const [name, setName] = useState('')
   const [about, setAbout] = useState('')
   const [picked, setPicked] = useState<string[]>([])
+  // With writing to git on, a new system becomes a new file in the repository.
+  const gitWrite = systems.data?.git?.write
+  const [proposal, setProposal] = useState<GitProposal | null>(null)
   const taken = systems.data?.systems.some((s) => s.name === name)
   const nameError = name && !NAME_RE.test(name) ? t('create.nameFormat') : taken ? t('create.nameTaken') : undefined
   const inUse = (s: { described: boolean; inSystems?: string[] }) => (s.described || (s.inSystems?.length ?? 0) > 0 ? 1 : 0)
@@ -45,17 +48,51 @@ function Body({ onDone }: { onDone: () => void }) {
     }
     create.mutate(stringify(doc), {
       onSuccess: (r) => {
+        if (r.proposed && r.proposal) {
+          // The system does not exist here yet: it arrives from the repository.
+          setProposal(r.proposal)
+          return
+        }
         onDone()
         navigate(`/systems/${encodeURIComponent(r.id)}`)
       },
     })
   }
 
+  if (proposal)
+    return (
+      <>
+        <DialogHeader>
+          <DialogTitle>{t('create.git.title', { name })}</DialogTitle>
+          <DialogDescription data-testid="create-proposal">
+            {proposal.direct ? (
+              t('create.git.committed', { branch: proposal.branch })
+            ) : proposal.url ? (
+              <>
+                {t('create.git.proposed')}{' '}
+                <a className="font-medium underline underline-offset-2" href={proposal.url} target="_blank" rel="noreferrer">
+                  {proposal.url}
+                </a>
+              </>
+            ) : (
+              t('create.git.pushed', { branch: proposal.branch })
+            )}
+          </DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <Button onClick={onDone}>{t('create.git.close')}</Button>
+        </DialogFooter>
+      </>
+    )
+
   return (
     <>
       <DialogHeader>
         <DialogTitle>{t('create.title')}</DialogTitle>
-        <DialogDescription>{t('create.description')}</DialogDescription>
+        <DialogDescription>
+          {t('create.description')}
+          {gitWrite && <> {t(gitWrite === 'commit' ? 'create.git.hintCommit' : 'create.git.hintPropose')}</>}
+        </DialogDescription>
       </DialogHeader>
       <div className="space-y-4">
         <Field label={t('create.name')} htmlFor="sys-name" hint={t('create.nameHint')} error={nameError}>

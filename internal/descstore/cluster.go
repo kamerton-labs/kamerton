@@ -103,6 +103,23 @@ func (c *Cluster) Create(ctx context.Context, raw []byte) (*Snapshot, descriptio
 	if c.WatchNamespace != "" && ns != c.WatchNamespace {
 		return nil, res, fmt.Errorf("kamerton watches only namespace %s; cannot create a description in %s", c.WatchNamespace, ns)
 	}
+	if c.Git != nil && c.Git.WriteEnabled() {
+		// With writing to git on, the repository is where systems are made: a new one becomes a
+		// new file there, not a resource nobody reviewed.
+		var existing v1alpha1.SystemDescription
+		err := c.Client.Get(ctx, types.NamespacedName{Namespace: ns, Name: doc.Name}, &existing)
+		if err == nil {
+			return nil, res, ErrExists
+		}
+		if !apierrors.IsNotFound(err) {
+			return nil, res, err
+		}
+		p, err := c.Git.Propose(ctx, GitChange{System: doc.Name, Content: raw, New: true})
+		if err != nil {
+			return nil, res, fmt.Errorf("write the new system to git: %w", err)
+		}
+		return nil, res, &ProposedError{Proposal: *p}
+	}
 	obj := &v1alpha1.SystemDescription{}
 	obj.Name, obj.Namespace = doc.Name, ns
 	obj.Annotations = keepOwnAnnotations(nil, doc.Annotations)

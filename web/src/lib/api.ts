@@ -828,6 +828,12 @@ export const useCreateSystem = () => {
   })
 }
 
+/** Puts a system made by hand under the git repository; it keeps working until the merge. */
+export const useMoveToGit = () =>
+  useMutation({
+    mutationFn: (id: string) => request<{ proposed: boolean; proposal: GitProposal }>(`${sys(id)}/git`, { method: 'POST' }),
+  })
+
 export const useDeleteSystem = () => {
   const qc = useQueryClient()
   return useMutation({
