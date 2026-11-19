@@ -171,7 +171,13 @@ func (r *SystemDescriptionReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return finish(err)
 	}
 	setCond(ConditionApplied, true, "Applied", fmt.Sprintf("%d objects applied%s", len(objs), setNote))
+	// A system with a missing Secret is looked at every 30 seconds; the log says so only
+	// when the list of channels left out changes, the condition carries it in between.
+	prev := meta.FindStatusCondition(sd.Status.Conditions, ConditionChannels)
 	if len(bundle.MissingSecrets) == 0 {
+		if prev != nil && prev.Status == metav1.ConditionFalse {
+			log.Info("every channel has its Secret now")
+		}
 		setCond(ConditionChannels, true, "Connected", "every channel has its Secret")
 		return finish(nil)
 	}
@@ -180,7 +186,9 @@ func (r *SystemDescriptionReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		off = append(off, fmt.Sprintf("%s (%s): Secret %s, key %s not found", m.Receiver, m.Channel, m.Secret, m.Key))
 	}
 	msg := "channels left out until their Secrets exist: " + strings.Join(off, "; ")
-	log.Info(msg)
+	if prev == nil || prev.Status != metav1.ConditionFalse || prev.Message != truncate(msg, 1024) {
+		log.Info(msg)
+	}
 	setCond(ConditionChannels, false, "SecretMissing", msg)
 	res, err := finish(nil)
 	if err == nil {

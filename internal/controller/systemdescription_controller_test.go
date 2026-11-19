@@ -17,6 +17,9 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
+	"github.com/go-logr/logr/funcr"
+	logf "sigs.k8s.io/controller-runtime/pkg/log"
+
 	"github.com/kamerton-labs/kamerton/api/v1alpha1"
 	"github.com/kamerton-labs/kamerton/internal/deployer"
 	"github.com/kamerton-labs/kamerton/internal/description"
@@ -178,9 +181,11 @@ func TestReconcileLeavesOutChannelWithoutSecret(t *testing.T) {
 	r := &SystemDescriptionReconciler{Client: c, Applier: applier, Secrets: c}
 	key := types.NamespacedName{Namespace: "kamerton", Name: sd.Name}
 
+	var logged []string
+	ctx := logf.IntoContext(context.Background(), funcr.New(func(_, args string) { logged = append(logged, args) }, funcr.Options{}))
 	reconcile := func() (ctrl.Result, map[string]any) {
 		t.Helper()
-		res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key})
+		res, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: key})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -227,6 +232,12 @@ func TestReconcileLeavesOutChannelWithoutSecret(t *testing.T) {
 		t.Errorf("Applied must stay true: %+v", got.Status.Conditions)
 	}
 
+	// The next look 30 seconds later finds the same Secret missing: nothing new to log.
+	reconcile()
+	if n := countLogged(logged, "left out until"); n != 1 {
+		t.Errorf("missing Secret logged %d times over two reconciles, want once: %v", n, logged)
+	}
+
 	token := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "kamerton", Name: "kamerton-telegram"},
 		Data:       map[string][]byte{"bot-token": []byte("x")},
@@ -247,4 +258,17 @@ func TestReconcileLeavesOutChannelWithoutSecret(t *testing.T) {
 	if !meta.IsStatusConditionTrue(got.Status.Conditions, ConditionChannels) {
 		t.Errorf("condition %s not true: %+v", ConditionChannels, got.Status.Conditions)
 	}
+	if n := countLogged(logged, "every channel has its Secret now"); n != 1 {
+		t.Errorf("channels back logged %d times, want once: %v", n, logged)
+	}
+}
+
+func countLogged(lines []string, part string) int {
+	n := 0
+	for _, l := range lines {
+		if strings.Contains(l, part) {
+			n++
+		}
+	}
+	return n
 }
