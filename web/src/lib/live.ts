@@ -431,25 +431,41 @@ export function rows(spans: Span[], quiet: boolean): Row[] {
 export const REQUEST_MAX_MS = 60_000
 
 /**
- * The request a step belongs to, when the trace is a long session of many requests: the step's
- * highest ancestor still the size of a request. Null when the whole trace is one request.
+ * The request a step belongs to, when the trace is a session of many requests (a load generator
+ * keeps one trace for a whole visit). A session shows either as several roots, one per request,
+ * or as one long root whose children are requests made one after another. Null when the trace is
+ * one request, however long it took: a request of 62 s stays whole.
  */
 export function requestOf(spans: Span[], focus: string | undefined): Span[] | null {
   const total = Math.max(...spans.map((s) => s.startMs + s.durationMs), 0)
   if (total <= REQUEST_MAX_MS || !focus) return null
   const byId = new Map(spans.map((s) => [s.id, s]))
-  let top = byId.get(focus)
-  if (!top) return null
-  for (let p = top.parent ? byId.get(top.parent) : undefined; p && p.durationMs <= REQUEST_MAX_MS; p = p.parent ? byId.get(p.parent) : undefined) top = p
+  const first = byId.get(focus)
+  if (!first) return null
+  const chain = [first]
+  for (let p = first.parent ? byId.get(first.parent) : undefined; p; p = p.parent ? byId.get(p.parent) : undefined) chain.push(p)
+  const root = chain[chain.length - 1]
   const children = new Map<string, Span[]>()
-  for (const s of spans) if (s.parent) children.set(s.parent, [...(children.get(s.parent) ?? []), s])
+  for (const s of spans) if (s.parent && byId.has(s.parent)) children.set(s.parent, [...(children.get(s.parent) ?? []), s])
+  const roots = spans.filter((s) => !s.parent || !byId.has(s.parent))
+  let top: Span
+  if (roots.length > 1) top = root
+  else if (chain.length > 1 && isSession(root, children.get(root.id) ?? [])) top = chain[chain.length - 2]
+  else return null
   const out: Span[] = []
   const walk = (s: Span) => {
-    out.push({ ...s, parent: s.id === top!.id ? undefined : s.parent, startMs: s.startMs - top!.startMs })
+    out.push({ ...s, parent: s.id === top.id ? undefined : s.parent, startMs: s.startMs - top.startMs })
     for (const c of children.get(s.id) ?? []) walk(c)
   }
   walk(top)
   return out
+}
+
+/** A long span whose children are separate requests, each starting after the one before ended. */
+function isSession(root: Span, kids: Span[]): boolean {
+  if (root.durationMs <= REQUEST_MAX_MS || kids.length < 2) return false
+  const sorted = [...kids].sort((a, b) => a.startMs - b.startMs)
+  return sorted.every((k, i) => i === 0 || k.startMs >= sorted[i - 1].startMs + sorted[i - 1].durationMs)
 }
 
 /**

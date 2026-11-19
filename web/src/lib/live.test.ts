@@ -90,4 +90,24 @@ describe('one request', () => {
     expect(r[1].startMs).toBe(10)
     expect(requestOf(spans, 'b')).toBeNull()
   })
+
+  it('cuts the request of a session made of several roots, even when it lasts over a minute', () => {
+    // A visit of the load generator: a cart request, then a checkout whose server part outlives
+    // the proxy that gave up after 15 s; the slow step is the write to the queue.
+    const visit = [
+      span('cart', undefined, 0, 5),
+      span('cartSrv', 'cart', 1, 3),
+      span('proxy', undefined, 10, 15_001, true),
+      span('checkout', 'proxy', 10, 61_895),
+      span('publish', 'checkout', 20, 61_800),
+    ]
+    const r = requestOf(visit, 'publish')!
+    expect(r.map((s) => s.id)).toEqual(['proxy', 'checkout', 'publish'])
+    expect(r[0].startMs).toBe(0)
+  })
+
+  it('keeps a long request whole when it is the only one', () => {
+    const slow = [span('proxy', undefined, 0, 62_000), span('checkout', 'proxy', 1, 61_900), span('cart', 'checkout', 2, 5), span('publish', 'checkout', 10, 61_800)]
+    expect(requestOf(slow, 'publish')).toBeNull()
+  })
 })
