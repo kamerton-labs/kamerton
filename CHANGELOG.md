@@ -172,6 +172,11 @@ All notable changes to Kamerton are listed here. The format follows
   `kubectl -n <namespace> delete statefulset kamerton-tempo`. Tempo is down
   until the upgrade starts it again, and the traces it held are not carried over.
   (With `--cascade=orphan` the old pod is kept, and it goes on without the disk.)
+- Prometheus keeps metrics on a disk of its own too (20Gi, `prometheusSpec.storageSpec`),
+  so the 15 days of `retention` survive a restart of the pod, and `retentionSize: 18GB`
+  drops the oldest days before the disk fills. The operator recreates its StatefulSet by
+  itself; the metrics gathered before the upgrade are not carried over, so the usual
+  levels (the day before) come back a day later.
 
 ## [0.2.4] - 2026-11-18
 

@@ -354,6 +354,18 @@ kube-prometheus-stack:
       # Rules are evaluated often so that an alert fires soon after the condition holds.
       evaluationInterval: 15s
       retention: 15d
+      # Metrics live on a disk of their own and outlast a restart of the pod; without it the
+      # retention above holds only until the pod is moved. The demo shop (100k series) takes
+      # about 0.7 GB a day, so 15 days fit in 20Gi. retentionSize drops the oldest days first
+      # when a busier system would fill the disk, instead of Prometheus stopping on a full one.
+      retentionSize: 18GB
+      storageSpec:
+        volumeClaimTemplate:
+          spec:
+            accessModes: [ReadWriteOnce]
+            resources:
+              requests:
+                storage: 20Gi
   alertmanager:
     alertmanagerSpec:
       alertmanagerConfigSelector:
