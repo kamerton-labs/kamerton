@@ -6,6 +6,8 @@ All notable changes to Kamerton are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-11-19
+
 ### Changed
 
 - Every generated alert keeps firing for 5 minutes after its condition stops holding

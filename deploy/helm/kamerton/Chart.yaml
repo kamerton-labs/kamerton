@@ -2,8 +2,8 @@ apiVersion: v2
 name: kamerton
 description: Kamerton installs and configures an open-source observability stack (OpenTelemetry Collector, Prometheus, Alertmanager, Grafana, Loki, Tempo) from one short system description.
 type: application
-version: 0.3.0
-appVersion: "0.3.0"
+version: 0.3.1
+appVersion: "0.3.1"
 annotations:
   artifacthub.io/license: AGPL-3.0-only
 home: https://github.com/kamerton-labs/kamerton
