@@ -3,17 +3,18 @@
 
 import { Link, useNavigate } from 'react-router'
 import { useState } from 'react'
-import { ArrowUp, ExternalLink, GitPullRequest, Loader2, Pencil, RefreshCw } from 'lucide-react'
+import { ArrowDown, ArrowUp, ExternalLink, GitPullRequest, Loader2, Pencil, RefreshCw } from 'lucide-react'
 import { Page, StateDot } from '@/components/common'
 import { ChangeSummary, defaultMessage } from '@/components/GitChanges'
 import GitSettingsForm from '@/components/GitSettingsForm'
+import LocalGitProblem from '@/components/LocalGitProblem'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useT } from '@/i18n'
-import { useCloseProject, useProjectGit, useProjectPull, useProjectPush, useRenameProject, useGitChanges, useGitCommit, useGitCommits, useGitDiscard, useGitPush, useGitSettings, useGitSync, useProject, useSystems, type GitProposal, type GitSettingsView, type GitStatus, type ProjectInfo } from '@/lib/api'
+import { gitFailure, useCloseProject, useProjectFetch, useProjectGit, useProjectPull, useProjectPush, useRenameProject, useGitChanges, useGitCommit, useGitCommits, useGitDiscard, useGitPush, useGitSettings, useGitSync, useProject, useSystems, type GitProposal, type GitSettingsView, type GitStatus, type ProjectInfo } from '@/lib/api'
 import { timeAgo } from '@/lib/format'
 import { gitProblems, projectName } from '@/lib/git'
 
@@ -91,25 +92,33 @@ export default function GitPage() {
 function LocalGit() {
   const { t, tn } = useT()
   const st = useProjectGit(true)
+  const fetch = useProjectFetch()
   const pull = useProjectPull()
   const push = useProjectPush()
   const [message, setMessage] = useState('')
   const g = st.data
   if (!g) return <Row label="Git">{st.isLoading ? <Skeleton className="h-5 w-40" /> : t('gitp.localNoGit')}</Row>
-  if (!g.available) return <Row label="Git">{g.why}</Row>
+  if (!g.available)
+    return (
+      <Row label="Git">
+        {g.problem === 'not_repo' ? t('gitp.localNoGit') : <LocalGitProblem problem={g.problem} detail={g.why} tone="muted" />}
+      </Row>
+    )
   const changed = g.changes.length
   const canPush = changed > 0 || g.ahead > 0 || !g.upstream
-  const busy = pull.isPending || push.isPending
-  const failure = pull.error ?? push.error
-  const doPush = () => push.mutate(message.trim(), { onSuccess: () => setMessage('') })
+  const busy = fetch.isPending || pull.isPending || push.isPending
+  const failure = gitFailure(fetch.error ?? pull.error ?? push.error)
+  const reset = () => (fetch.reset(), pull.reset(), push.reset())
+  const doPush = () => (reset(), push.mutate(message.trim(), { onSuccess: () => setMessage('') }))
   return (
     <>
       <Row label={t('gitp.branch')}>
         <span className="font-mono text-xs">{g.branch}</span>
         {g.upstream && <span className="text-muted-foreground"> → <span className="font-mono text-xs">{g.upstream}</span></span>}
         {g.ahead > 0 && <span className="ml-2 text-xs text-warn">{tn('gitp.local.ahead', g.ahead)}</span>}
-        {g.behind > 0 && <span className="ml-2 text-xs text-warn">{tn('gitp.local.behind', g.behind)}</span>}
+        {g.behind > 0 && <span className="ml-2 text-xs text-warn" data-testid="local-behind">{tn('gitp.local.behind', g.behind)}</span>}
         {!g.upstream && <span className="ml-2 text-xs text-muted-foreground">{t('gitp.local.noUpstream')}</span>}
+        {fetch.isSuccess && g.behind === 0 && g.upstream && <span className="ml-2 text-xs text-muted-foreground" data-testid="local-uptodate">{t('gitp.local.upToDate')}</span>}
       </Row>
       <Row label={t('gitp.local.changes')}>
         {changed === 0 ? (
@@ -138,11 +147,18 @@ function LocalGit() {
         <Button type="submit" size="sm" disabled={busy || !canPush || (changed > 0 && !message.trim())} data-testid="local-push">
           {push.isPending ? <Loader2 className="animate-spin" /> : <ArrowUp />} {changed > 0 ? 'Commit & Push' : 'Push'}
         </Button>
-        <Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => pull.mutate()} data-testid="local-pull">
-          {pull.isPending ? <Loader2 className="animate-spin" /> : <RefreshCw />} Pull
+        <Button type="button" size="sm" variant={g.behind > 0 ? 'default' : 'outline'} disabled={busy} onClick={() => (reset(), pull.mutate())} data-testid="local-pull">
+          {pull.isPending ? <Loader2 className="animate-spin" /> : <ArrowDown />} Pull
+        </Button>
+        <Button type="button" size="sm" variant="ghost" disabled={busy || !g.upstream} onClick={() => (reset(), fetch.mutate())} title={t('gitp.local.fetchHint')} data-testid="local-fetch">
+          {fetch.isPending ? <Loader2 className="animate-spin" /> : <RefreshCw />} {t('gitp.local.fetch')}
         </Button>
       </form>
-      {failure && <p className="mt-2 text-xs text-destructive [overflow-wrap:anywhere]">{failure.message}</p>}
+      {failure && (
+        <div className="mt-2 text-sm">
+          <LocalGitProblem {...failure} />
+        </div>
+      )}
       <p className="mt-2 text-xs text-muted-foreground">{t('gitp.localGit')}</p>
     </>
   )

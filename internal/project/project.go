@@ -85,6 +85,7 @@ type LocalProjects interface {
 	Clone(ctx context.Context, req CloneRequest, author string) (Info, error)
 	// The project's folder as a git working copy, pulled and pushed with the person's own git.
 	GitState(ctx context.Context) GitState
+	Fetch(ctx context.Context) (GitState, error)
 	Pull(ctx context.Context) (GitState, error)
 	Push(ctx context.Context, message string) (GitState, error)
 }

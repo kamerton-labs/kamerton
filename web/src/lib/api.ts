@@ -10,11 +10,14 @@ import { CSRF_HEADER, CSRF_VALUE, fetchSession, notifyUnauthorized } from '@/lib
 export class ApiError extends Error {
   readonly status: number
   readonly code: string
+  /** The whole answer, for errors that say more than a message (a problem, git's own words). */
+  readonly body?: Record<string, unknown>
 
-  constructor(status: number, code: string, message: string) {
+  constructor(status: number, code: string, message: string, body?: Record<string, unknown>) {
     super(message)
     this.status = status
     this.code = code
+    this.body = body
   }
 }
 
@@ -33,7 +36,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   if (!res.ok) {
     const err = (body ?? {}) as { error?: string; code?: string }
     if (res.status === 401 && err.code === 'unauthorized') notifyUnauthorized()
-    throw new ApiError(res.status, err.code ?? 'http_error', err.error ?? res.statusText)
+    throw new ApiError(res.status, err.code ?? 'http_error', err.error ?? res.statusText, body && typeof body === 'object' ? (body as Record<string, unknown>) : undefined)
   }
   return body as T
 }
@@ -253,7 +256,20 @@ export interface ProjectGit {
   ahead: number
   behind: number
   changes: { path: string; status: string }[]
+  /** Set when not available: git's message, and what it means (see internal/project.Git*). */
   why?: string
+  problem?: string
+}
+
+/** What went wrong with a step of the person's git: a problem said in words, git's own message under it. */
+export const gitFailure = (e: unknown): { problem?: string; detail?: string; message: string } | null => {
+  if (!e) return null
+  if (e instanceof ApiError && e.body) {
+    const problem = typeof e.body.problem === 'string' && e.body.problem ? e.body.problem : undefined
+    const detail = typeof e.body.detail === 'string' && e.body.detail ? e.body.detail : undefined
+    return { problem, detail, message: e.message }
+  }
+  return { message: e instanceof Error ? e.message : String(e) }
 }
 
 export const useProjectGit = (enabled: boolean) =>
@@ -264,6 +280,16 @@ const gitDone = (qc: ReturnType<typeof useQueryClient>) => {
   void qc.invalidateQueries({ queryKey: ['project', 'git'] })
   void qc.invalidateQueries({ queryKey: ['systems'] })
   void qc.invalidateQueries({ queryKey: ['system'] })
+}
+
+/** Asks the repository what it has, so the new commits there show; the folder is not changed. */
+export const useProjectFetch = () => {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: () => postJSON<ProjectGit>('/project/git/fetch', {}),
+    onSuccess: (st) => qc.setQueryData(['project', 'git'], st),
+    onError: () => void qc.invalidateQueries({ queryKey: ['project', 'git'] }),
+  })
 }
 
 export const useProjectPull = () => {

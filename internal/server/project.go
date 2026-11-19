@@ -168,19 +168,32 @@ func (s *Server) projectGit(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// writeGitResult answers with the state of the working copy, and the error of git when the
-// step failed, so the UI shows both.
+// writeGitResult answers with the state of the working copy, and what went wrong when the step
+// failed: a problem the UI says in words, and git's own message under it.
 func writeGitResult(w http.ResponseWriter, st project.GitState, err error) {
-	if err != nil {
-		code := http.StatusUnprocessableEntity
-		var ue *project.UserError
-		if !errors.As(err, &ue) && !errors.Is(err, project.ErrNotOpen) {
-			code = http.StatusInternalServerError
-		}
-		writeJSON(w, code, map[string]any{"error": err.Error(), "code": "git_failed", "state": st})
+	if err == nil {
+		writeJSON(w, http.StatusOK, st)
 		return
 	}
-	writeJSON(w, http.StatusOK, st)
+	body := map[string]any{"error": err.Error(), "code": "git_failed", "state": st}
+	status := http.StatusUnprocessableEntity
+	var ge *project.GitError
+	switch {
+	case errors.As(err, &ge):
+		body["problem"], body["detail"] = ge.Problem, ge.Detail
+	case errors.Is(err, project.ErrNotOpen):
+		body["code"] = "project_not_open"
+	default:
+		status = http.StatusInternalServerError
+	}
+	writeJSON(w, status, body)
+}
+
+func (s *Server) projectFetch(w http.ResponseWriter, r *http.Request) {
+	if l := s.local(w); l != nil {
+		st, err := l.Fetch(r.Context())
+		writeGitResult(w, st, err)
+	}
 }
 
 func (s *Server) projectPull(w http.ResponseWriter, r *http.Request) {

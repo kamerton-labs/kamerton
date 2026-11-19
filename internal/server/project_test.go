@@ -4,7 +4,9 @@
 package server
 
 import (
+	"io"
 	"net/http/httptest"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -48,6 +50,19 @@ func TestProjectAPI(t *testing.T) {
 	resp, err = post(t, s.URL+"/api/v1/project", "application/json", `{"name":"Shop"}`)
 	if err != nil || resp.StatusCode != 409 {
 		t.Errorf("the same folder again: %v %v", resp.StatusCode, err)
+	}
+
+	// A folder without git: the step fails with a problem the UI says in words.
+	if _, err := exec.LookPath("git"); err == nil {
+		resp, err = post(t, s.URL+"/api/v1/project/git/fetch", "application/json", `{}`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if resp.StatusCode != 422 || !strings.Contains(string(body), `"problem":"not_repo"`) || !strings.Contains(string(body), `"state":{"available":false`) {
+			t.Errorf("fetch without git: %d %s", resp.StatusCode, body)
+		}
 	}
 
 	// Closing goes back to the first screen and offers the project again.
