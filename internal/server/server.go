@@ -235,6 +235,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/v1/project/check", s.checkProjectRepo)
 	mux.HandleFunc("POST /api/v1/project/clone", s.cloneProject)
 	mux.HandleFunc("GET /api/v1/project/git", s.projectGit)
+	mux.HandleFunc("POST /api/v1/project/git/fetch", s.projectFetch)
 	mux.HandleFunc("POST /api/v1/project/git/pull", s.projectPull)
 	mux.HandleFunc("POST /api/v1/project/git/push", s.projectPush)
 	mux.HandleFunc("GET /api/v1/git/settings", s.gitSettings)

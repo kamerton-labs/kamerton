@@ -109,7 +109,10 @@ All notable changes to Kamerton are listed here. The format follows
     person's own git and its access to the repository (`/api/v1/project/git`, `…/pull`,
     `…/push`): what is not committed and not pushed is listed, Commit & Push commits only the
     project's folder, Pull only follows on. Without `user.email` set Kamerton does not commit,
-    so git cannot put an address made up from the host name into the history.
+    so git cannot put an address made up from the host name into the history. Check
+    (`…/fetch`) asks the repository for new commits without changing the folder. A failed
+    step answers with a `problem` (`auth`, `identity`, `behind`, `diverged`, `no_host`, …)
+    and git's own message as `detail`; the UI says the problem in its own language.
   - A project is renamed on its page (`PATCH /api/v1/project`): locally the name in
     `kamerton.yaml` changes and nothing else in the file; in a cluster the kept name. With a
     repository connected the name is its project file's and is changed there.

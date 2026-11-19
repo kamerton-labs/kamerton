@@ -426,15 +426,16 @@ func TestPullAndPushALocalProjectWithTheirOwnGit(t *testing.T) {
 	if len(st.Changes) != 1 || st.Changes[0].Path != "systems/shop.yaml" || st.Changes[0].Status != "??" {
 		t.Fatalf("after a save: %+v", st)
 	}
-	if _, err := l.Push(ctx, ""); err == nil {
-		t.Error("an empty message must be refused")
+	var ge *GitError
+	if _, err := l.Push(ctx, ""); !errors.As(err, &ge) || ge.Problem != GitNoMessage {
+		t.Errorf("an empty message must be refused: %v", err)
 	}
 	// Without a name of its own git would make one up from the host: refused.
 	t.Setenv("GIT_AUTHOR_EMAIL", "")
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
-	if _, err := l.Push(ctx, "Add shop"); err == nil || !strings.Contains(err.Error(), "user.email") {
+	if _, err := l.Push(ctx, "Add shop"); !errors.As(err, &ge) || ge.Problem != GitIdentity {
 		t.Errorf("no identity: %v", err)
 	}
 	t.Setenv("GIT_AUTHOR_EMAIL", "anna@example.com")
@@ -452,8 +453,17 @@ func TestPullAndPushALocalProjectWithTheirOwnGit(t *testing.T) {
 	run(seed, "add", "-A")
 	run(seed, "commit", "-q", "-m", "Add billing")
 	run(seed, "push", "-q")
-	if _, err := l.Pull(ctx); err != nil {
-		t.Fatal(err)
+	if st := l.GitState(ctx); st.Behind != 0 {
+		t.Errorf("behind before a fetch: %d", st.Behind)
+	}
+	if st, err := l.Fetch(ctx); err != nil || st.Behind != 1 || len(st.Changes) != 0 {
+		t.Fatalf("Fetch = %+v, %v", st, err)
+	}
+	if list, _ := l.Descriptions.List(ctx); len(list) != 1 {
+		t.Errorf("a fetch changed the systems: %d", len(list))
+	}
+	if st, err := l.Pull(ctx); err != nil || st.Behind != 0 {
+		t.Fatalf("Pull = %+v, %v", st, err)
 	}
 	if list, _ := l.Descriptions.List(ctx); len(list) != 2 {
 		t.Errorf("systems after the pull: %d", len(list))
@@ -462,8 +472,34 @@ func TestPullAndPushALocalProjectWithTheirOwnGit(t *testing.T) {
 	if _, err := l.New(ctx, NewRequest{Name: "plain", Path: filepath.Join(root, "plain")}, ""); err != nil {
 		t.Fatal(err)
 	}
-	if st := l.GitState(ctx); st.Available || st.Why == "" {
+	if st := l.GitState(ctx); st.Available || st.Problem != GitNotRepo {
 		t.Errorf("not a working copy: %+v", st)
+	}
+	if _, err := l.Fetch(ctx); !errors.As(err, &ge) || ge.Problem != GitNotRepo {
+		t.Errorf("fetch outside a working copy: %v", err)
+	}
+}
+
+func TestGitProblemNamesTheUsualReasons(t *testing.T) {
+	for msg, want := range map[string]string{
+		"fatal: not a git repository (or any of the parent directories): .git":                                            GitNotRepo,
+		"fatal: could not read Username for 'https://github.com': terminal prompts disabled":                              GitAuth,
+		"git@github.com: Permission denied (publickey).\nfatal: Could not read from remote repository.":                   GitAuth,
+		"remote: Repository not found.\nfatal: repository 'https://github.com/team/nope.git/' not found":                  GitNotFound,
+		"fatal: unable to access 'https://nohost.example/x.git/': Could not resolve host: nohost.example":                 GitNoHost,
+		"ssh: Could not resolve hostname nohost: nodename nor servname provided":                                          GitNoHost,
+		"fatal: unable to access 'https://127.0.0.1:1/x.git/': Failed to connect to 127.0.0.1 port 1: Connection refused": GitOffline,
+		"fatal: unable to access 'https://self.example/x.git/': SSL certificate problem: self-signed certificate":         GitTLS,
+		"! [rejected]        main -> main (fetch first)\nerror: failed to push some refs":                                 GitBehind,
+		"fatal: Not possible to fast-forward, aborting.":                                                                  GitDiverged,
+		"fatal: 'origin' does not appear to be a git repository\nfatal: Could not read from remote repository.":           GitNoRemote,
+		"fatal: No configured push destination.":                                                                          GitNoRemote,
+		"Author identity unknown\n*** Please tell me who you are.":                                                        GitIdentity,
+		"error: pathspec 'x' did not match any file(s) known to git":                                                      "",
+	} {
+		if got := gitProblem(msg); got != want {
+			t.Errorf("%q: %q, want %q", msg, got, want)
+		}
 	}
 }
 

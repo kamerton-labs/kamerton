@@ -26,8 +26,9 @@ type GitState struct {
 	Behind   int    `json:"behind"`
 	// Changes are the files of the project's folder not committed yet.
 	Changes []GitChange `json:"changes"`
-	// Why is set when Available is false.
-	Why string `json:"why,omitempty"`
+	// Why is set when Available is false: git's message, and Problem one of the Git* names.
+	Why     string `json:"why,omitempty"`
+	Problem string `json:"problem,omitempty"`
 }
 
 // GitChange is one file not committed yet: its path from the root of the repository and the
@@ -36,6 +37,40 @@ type GitChange struct {
 	Path   string `json:"path"`
 	Status string `json:"status"`
 }
+
+// What went wrong with the person's git, as GitError.Problem names it; the UI says each in
+// words, in its own language.
+const (
+	GitNoGit     = "no_git"     // git is not installed
+	GitNotRepo   = "not_repo"   // the project's folder is not in a working copy
+	GitAuth      = "auth"       // no access to the repository from this git
+	GitIdentity  = "identity"   // git has no name and email to sign a commit with
+	GitDiverged  = "diverged"   // the branch and the repository went apart
+	GitBehind    = "behind"     // the repository has commits this folder does not
+	GitNoMessage = "no_message" // there are changes and no commit message
+	GitNoRemote  = "no_remote"  // the working copy has no repository to push to
+	GitNoHost    = "no_host"
+	GitOffline   = "unreachable"
+	GitTimeout   = "timeout"
+	GitTLS       = "tls"
+	GitNotFound  = "not_found"
+)
+
+// GitError is a step of git that failed: what it is, and git's own message for whoever needs it.
+type GitError struct {
+	// Problem is one of the Git* names, or "" when it is none of the known things.
+	Problem string
+	Detail  string
+}
+
+func (e *GitError) Error() string {
+	if e.Detail == "" {
+		return "git: " + e.Problem
+	}
+	return "git: " + e.Detail
+}
+
+func gitErr(problem, detail string) error { return &GitError{Problem: problem, Detail: detail} }
 
 // The person's own git does the work: their name, their access to the repository (a credential
 // helper or an SSH key), nothing kept by Kamerton.
@@ -50,48 +85,77 @@ func (l *Local) git(ctx context.Context, args ...string) (string, error) {
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", cur.Path}, args...)...)
 	// No prompt for a password: there is nobody at a terminal to answer it.
-	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GIT_ASKPASS=", "SSH_ASKPASS=", "GIT_SSH_COMMAND=ssh -o BatchMode=yes")
+	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GIT_ASKPASS=", "SSH_ASKPASS=", "GIT_SSH_COMMAND=ssh -o BatchMode=yes", "LC_ALL=C")
 	var out, errOut bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errOut
 	if err := cmd.Run(); err != nil {
 		if errors.Is(err, exec.ErrNotFound) {
-			return "", userErr("git is not installed on this machine")
+			return "", gitErr(GitNoGit, "")
 		}
 		msg := strings.TrimSpace(errOut.String())
 		if msg == "" {
 			msg = strings.TrimSpace(out.String())
 		}
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return "", gitErr(GitTimeout, msg)
+		}
 		if msg == "" {
 			msg = err.Error()
 		}
-		return "", userErr(explainGit(msg))
+		return "", gitErr(gitProblem(msg), msg)
 	}
 	return out.String(), nil
 }
 
-// explainGit puts the usual reasons first, in words; git's own message follows.
-func explainGit(msg string) string {
+// gitProblem names the usual reasons git fails by its message (in English: git runs with LC_ALL=C).
+func gitProblem(msg string) string {
 	low := strings.ToLower(msg)
-	switch {
-	case strings.Contains(low, "could not read username"), strings.Contains(low, "authentication failed"),
-		strings.Contains(low, "permission denied"), strings.Contains(low, "terminal prompts disabled"):
-		return "no access to the repository: set it up in your own git (a credential helper or an SSH key) and try again. git: " + msg
-	case strings.Contains(low, "please tell me who you are"), strings.Contains(low, "author identity unknown"):
-		return "git does not know your name: run git config --global user.name and user.email. git: " + msg
-	case strings.Contains(low, "not possible to fast-forward"), strings.Contains(low, "diverged"):
-		return "the branch and the repository went apart: merge them in your git, Kamerton only pulls what follows on. git: " + msg
-	case strings.Contains(low, "rejected"), strings.Contains(low, "fetch first"):
-		return "the repository has commits this folder does not: pull first. git: " + msg
+	has := func(parts ...string) bool {
+		for _, p := range parts {
+			if strings.Contains(low, p) {
+				return true
+			}
+		}
+		return false
 	}
-	return "git: " + msg
+	switch {
+	case has("not a git repository"):
+		return GitNotRepo
+	case has("please tell me who you are", "author identity unknown"):
+		return GitIdentity
+	case has("could not resolve host", "could not resolve hostname", "no such host"):
+		return GitNoHost
+	case has("ssl certificate", "server certificate", "certificate verify"):
+		return GitTLS
+	case has("timed out"):
+		return GitTimeout
+	case has("connection refused", "network is unreachable", "couldn't connect", "failed to connect"):
+		return GitOffline
+	case has("repository not found", "does not appear to be a git repository") && !has("'origin'"):
+		return GitNotFound
+	case has("no configured push destination", "'origin' does not appear to be a git repository", "no such remote"):
+		return GitNoRemote
+	case has("could not read username", "could not read password", "authentication failed", "permission denied",
+		"terminal prompts disabled", "host key verification failed"):
+		return GitAuth
+	case has("not possible to fast-forward", "diverged", "divergent branches"):
+		return GitDiverged
+	case has("rejected", "fetch first", "non-fast-forward"):
+		return GitBehind
+	}
+	return ""
 }
 
 var branchLine = regexp.MustCompile(`^## (?:No commits yet on )?(.+?)(?:\.\.\.(\S+))?(?: \[(.+)\])?$`)
 
 // GitState reads the working copy without touching the network.
 func (l *Local) GitState(ctx context.Context) GitState {
-	out, err := l.git(ctx, "status", "--porcelain=v1", "--branch", "--untracked-files=all", "--", ".")
+	out, err := l.git(ctx, "-c", "core.quotePath=false", "status", "--porcelain=v1", "--branch", "--untracked-files=all", "--", ".")
 	if err != nil {
+		var ge *GitError
+		if errors.As(err, &ge) {
+			return GitState{Why: ge.Detail, Problem: ge.Problem}
+		}
 		return GitState{Why: err.Error()}
 	}
 	st := GitState{Available: true, Changes: []GitChange{}}
@@ -121,6 +185,15 @@ func (l *Local) GitState(ctx context.Context) GitState {
 	return st
 }
 
+// Fetch asks the repository what it has, so the state shows the commits that came there; the
+// working copy is not changed.
+func (l *Local) Fetch(ctx context.Context) (GitState, error) {
+	if _, err := l.git(ctx, "fetch", "--quiet"); err != nil {
+		return l.GitState(ctx), err
+	}
+	return l.GitState(ctx), nil
+}
+
 // Pull brings the branch up to the repository when it only follows on; a branch that went
 // apart is left for the person to merge in their git.
 func (l *Local) Pull(ctx context.Context) (GitState, error) {
@@ -135,18 +208,18 @@ func (l *Local) Pull(ctx context.Context) (GitState, error) {
 func (l *Local) Push(ctx context.Context, message string) (GitState, error) {
 	st := l.GitState(ctx)
 	if !st.Available {
-		return st, userErr(st.Why)
+		return st, gitErr(st.Problem, st.Why)
 	}
 	if len(st.Changes) > 0 {
 		message = strings.TrimSpace(message)
 		if message == "" {
-			return st, userErr("write what the change is: the commit message is empty")
+			return st, gitErr(GitNoMessage, "")
 		}
 		// Without a name of its own git makes one up from the account and the host name, and
 		// that address would go into the repository's history for good.
 		if os.Getenv("GIT_AUTHOR_EMAIL") == "" {
 			if email, _ := l.git(ctx, "config", "user.email"); strings.TrimSpace(email) == "" {
-				return st, userErr("git does not know your name and email: run git config --global user.name and user.email (a noreply address keeps your own private), then try again")
+				return st, gitErr(GitIdentity, "user.email is not set")
 			}
 		}
 		if _, err := l.git(ctx, "add", "--all", "--", "."); err != nil {
