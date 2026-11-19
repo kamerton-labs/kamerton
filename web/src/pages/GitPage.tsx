@@ -1,7 +1,7 @@
 // Copyright 2026 The Kamerton Authors
 // SPDX-License-Identifier: AGPL-3.0-only
 
-import { Link } from 'react-router'
+import { Link, useNavigate } from 'react-router'
 import { useState } from 'react'
 import { ArrowUp, ExternalLink, GitPullRequest, Loader2, Pencil, RefreshCw } from 'lucide-react'
 import { Page, StateDot } from '@/components/common'
@@ -13,7 +13,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useT } from '@/i18n'
-import { useGitChanges, useGitCommit, useGitCommits, useGitDiscard, useGitPush, useGitSettings, useGitSync, useSystems, type GitProposal, type GitSettingsView, type GitStatus } from '@/lib/api'
+import { useCloseProject, useProjectGit, useProjectPull, useProjectPush, useRenameProject, useGitChanges, useGitCommit, useGitCommits, useGitDiscard, useGitPush, useGitSettings, useGitSync, useProject, useSystems, type GitProposal, type GitSettingsView, type GitStatus, type ProjectInfo } from '@/lib/api'
 import { timeAgo } from '@/lib/format'
 import { gitProblems, projectName } from '@/lib/git'
 
@@ -44,6 +44,7 @@ function Section({ title, children, testid, actions }: { title: string; children
 export default function GitPage() {
   const systems = useSystems()
   const settings = useGitSettings()
+  const project = useProject()
   const { t } = useT()
   const git = systems.data?.git
   if (systems.isLoading)
@@ -54,21 +55,161 @@ export default function GitPage() {
     )
   if (!git)
     return (
-      <Page title={t('proj.title')} description={t('proj.off')}>
-        <section className="max-w-2xl rounded-xl border bg-card p-4" data-testid="git-off">
-          <h2 className="mb-1 text-sm font-medium">Git</h2>
-          <p className="mb-4 text-sm text-muted-foreground">{t('gitp.off.lead')}</p>
-          {!settings.data ? (
-            <Skeleton className="h-40" />
-          ) : settings.data.available && !settings.data.locked ? (
-            <GitSettingsForm view={settings.data} />
-          ) : (
-            <p className="text-sm text-muted-foreground">{t('gitp.off.unavailable')}</p>
+      <Page title={project.data?.name || t('proj.title')} description={t('proj.off')}>
+        {project.data?.where === 'local' ? (
+          <LocalProject info={project.data} />
+        ) : (
+          <>
+          {project.data?.name && (
+            <section className="max-w-2xl rounded-xl border bg-card p-4" data-testid="cluster-project">
+              <NameRow name={project.data.name} />
+              <Row label={t('setup.where')}>{t('setup.whereCluster', { ns: project.data.namespace || 'kamerton' })}</Row>
+            </section>
           )}
-        </section>
+          <section className="max-w-2xl rounded-xl border bg-card p-4" data-testid="git-off">
+            <h2 className="mb-1 text-sm font-medium">Git</h2>
+            <p className="mb-4 text-sm text-muted-foreground">{t('gitp.off.lead')}</p>
+            {!settings.data ? (
+              <Skeleton className="h-40" />
+            ) : settings.data.available && !settings.data.locked ? (
+              <GitSettingsForm view={settings.data} />
+            ) : (
+              <p className="text-sm text-muted-foreground">{t('gitp.off.unavailable')}</p>
+            )}
+          </section>
+          </>
+        )}
       </Page>
     )
   return <Connected git={git} settings={settings.data} ids={new Map((systems.data?.systems ?? []).map((s) => [s.name, s.id]))} />
+}
+
+/**
+ * The project's folder as a git working copy: what is not committed, what is not pushed, and
+ * Pull and Commit & Push done with the person's own git and its access to the repository.
+ */
+function LocalGit() {
+  const { t, tn } = useT()
+  const st = useProjectGit(true)
+  const pull = useProjectPull()
+  const push = useProjectPush()
+  const [message, setMessage] = useState('')
+  const g = st.data
+  if (!g) return <Row label="Git">{st.isLoading ? <Skeleton className="h-5 w-40" /> : t('gitp.localNoGit')}</Row>
+  if (!g.available) return <Row label="Git">{g.why}</Row>
+  const changed = g.changes.length
+  const canPush = changed > 0 || g.ahead > 0 || !g.upstream
+  const busy = pull.isPending || push.isPending
+  const failure = pull.error ?? push.error
+  const doPush = () => push.mutate(message.trim(), { onSuccess: () => setMessage('') })
+  return (
+    <>
+      <Row label={t('gitp.branch')}>
+        <span className="font-mono text-xs">{g.branch}</span>
+        {g.upstream && <span className="text-muted-foreground"> → <span className="font-mono text-xs">{g.upstream}</span></span>}
+        {g.ahead > 0 && <span className="ml-2 text-xs text-warn">{tn('gitp.local.ahead', g.ahead)}</span>}
+        {g.behind > 0 && <span className="ml-2 text-xs text-warn">{tn('gitp.local.behind', g.behind)}</span>}
+        {!g.upstream && <span className="ml-2 text-xs text-muted-foreground">{t('gitp.local.noUpstream')}</span>}
+      </Row>
+      <Row label={t('gitp.local.changes')}>
+        {changed === 0 ? (
+          <span className="text-muted-foreground">{t('gitp.local.clean')}</span>
+        ) : (
+          <ul className="space-y-0.5" data-testid="local-changes">
+            {g.changes.map((c) => (
+              <li key={c.path} className="flex gap-2 font-mono text-xs">
+                <span className="w-5 shrink-0 text-muted-foreground">{c.status}</span>
+                <span className="[overflow-wrap:anywhere]">{c.path}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </Row>
+      <form
+        className="mt-2 flex flex-wrap gap-2"
+        onSubmit={(e) => {
+          e.preventDefault()
+          if (!busy && canPush && (changed === 0 || message.trim())) doPush()
+        }}
+      >
+        {changed > 0 && (
+          <Input className="h-8 min-w-0 flex-1" value={message} onChange={(e) => (setMessage(e.target.value), push.reset())} placeholder={t('gitp.local.message')} maxLength={200} aria-label={t('gitc.message')} data-testid="local-commit-message" />
+        )}
+        <Button type="submit" size="sm" disabled={busy || !canPush || (changed > 0 && !message.trim())} data-testid="local-push">
+          {push.isPending ? <Loader2 className="animate-spin" /> : <ArrowUp />} {changed > 0 ? 'Commit & Push' : 'Push'}
+        </Button>
+        <Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => pull.mutate()} data-testid="local-pull">
+          {pull.isPending ? <Loader2 className="animate-spin" /> : <RefreshCw />} Pull
+        </Button>
+      </form>
+      {failure && <p className="mt-2 text-xs text-destructive [overflow-wrap:anywhere]">{failure.message}</p>}
+      <p className="mt-2 text-xs text-muted-foreground">{t('gitp.localGit')}</p>
+    </>
+  )
+}
+
+/** The project's name, renamed in place. */
+function NameRow({ name }: { name: string }) {
+  const { t } = useT()
+  const rename = useRenameProject()
+  const [draft, setDraft] = useState<string | null>(null)
+  if (draft === null)
+    return (
+      <Row label={t('setup.name')}>
+        <span className="mr-2">{name}</span>
+        <button type="button" className="text-xs text-muted-foreground underline underline-offset-2" onClick={() => (setDraft(name), rename.reset())} data-testid="project-rename">
+          {t('gitp.rename')}
+        </button>
+      </Row>
+    )
+  const save = () => {
+    const next = draft.trim()
+    if (!next || next === name) return setDraft(null)
+    rename.mutate(next, { onSuccess: () => setDraft(null) })
+  }
+  return (
+    <Row label={t('setup.name')}>
+      <form
+        className="flex flex-wrap items-center gap-2"
+        onSubmit={(e) => {
+          e.preventDefault()
+          save()
+        }}
+      >
+        <Input className="h-8 min-w-0 flex-1" value={draft} onChange={(e) => setDraft(e.target.value)} onKeyDown={(e) => e.key === 'Escape' && setDraft(null)} onFocus={(e) => e.currentTarget.select()} autoFocus maxLength={80} aria-label={t('setup.name')} />
+        <Button type="submit" size="sm" disabled={rename.isPending || !draft.trim()}>
+          {rename.isPending && <Loader2 className="animate-spin" />}
+          {t('system.save')}
+        </Button>
+        <Button type="button" size="sm" variant="ghost" onClick={() => setDraft(null)}>
+          {t('common.cancel')}
+        </Button>
+      </form>
+      {rename.isError && <p className="mt-1 text-xs text-destructive">{rename.error.message}</p>}
+    </Row>
+  )
+}
+
+/** A project kept in a folder on this machine: where it is, and the way back to the first screen. */
+function LocalProject({ info }: { info: ProjectInfo }) {
+  const { t } = useT()
+  const close = useCloseProject()
+  const navigate = useNavigate()
+  return (
+    <section className="max-w-2xl rounded-xl border bg-card p-4" data-testid="local-project">
+      {info.name && <NameRow name={info.name} />}
+      <Row label={t('gitp.folder')}>
+        <span className="font-mono text-xs">{info.path}</span>
+      </Row>
+      {info.git ? <LocalGit /> : <Row label="Git">{t('gitp.localNoGit')}</Row>}
+      <div className="mt-3 flex flex-wrap items-center gap-3">
+        <Button variant="outline" size="sm" disabled={close.isPending} onClick={() => close.mutate(undefined, { onSuccess: () => void navigate('/', { replace: true }) })} data-testid="project-close">
+          {t('gitp.close')}
+        </Button>
+        <span className="text-xs text-muted-foreground">{t('gitp.closeHint')}</span>
+      </div>
+    </section>
+  )
 }
 
 function Connected({ git, settings, ids }: { git: GitStatus; settings?: GitSettingsView; ids: Map<string, string> }) {

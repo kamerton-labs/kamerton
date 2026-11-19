@@ -396,7 +396,7 @@ func TestStartingFromAnEmptyRepository(t *testing.T) {
 			t.Errorf("the first commit lacks %s:\n%s", want, tree)
 		}
 	}
-	if manifest := h.git(h.bare, "show", "main:kamerton.yaml"); !strings.Contains(manifest, "kind: Project") || !strings.Contains(manifest, "name: obs") {
+	if manifest := h.git(h.bare, "show", "main:kamerton.yaml"); !strings.Contains(manifest, "kind: Project") || !strings.Contains(manifest, `name: "obs"`) {
 		t.Errorf("project file:\n%s", manifest)
 	}
 	st = s.Sync(context.Background())
@@ -621,11 +621,21 @@ func TestRepositoryIsConnectedChangedAndDisconnectedWhileRunning(t *testing.T) {
 		t.Fatal("nothing is connected at first")
 	}
 	// Trying a repository changes nothing and says what is wrong, or what is there.
-	if c := r.Try(ctx, Settings{URL: h.url(), Path: "systems"}, "wrong"); c.OK || c.Error == "" {
+	if c := r.Try(ctx, Settings{URL: h.url(), Path: "systems"}, "wrong"); c.OK || c.Error == "" || c.Problem != ProblemAuth {
 		t.Errorf("a wrong token: %+v", c)
 	}
-	if c := r.Try(ctx, Settings{URL: "ftp://x"}, ""); c.OK {
+	if c := r.Try(ctx, Settings{URL: "ftp://x"}, ""); c.OK || c.Problem != ProblemAddress {
 		t.Errorf("a bad address: %+v", c)
+	}
+	// What went wrong is named, so the UI can say it in words.
+	if c := r.Try(ctx, Settings{URL: h.url(), Branch: "nope"}, "tok"); c.OK || c.Problem != ProblemNoBranch {
+		t.Errorf("a missing branch: %+v", c)
+	}
+	if c := r.Try(ctx, Settings{URL: "http://127.0.0.1:1/obs.git"}, ""); c.OK || c.Problem != ProblemUnreachable {
+		t.Errorf("a host that does not answer: %+v", c)
+	}
+	if c := r.Try(ctx, Settings{URL: "https://git.example.invalid/obs.git"}, ""); c.OK || c.Problem != ProblemNoHost {
+		t.Errorf("a host that does not resolve: %+v", c)
 	}
 	if c := r.Try(ctx, Settings{URL: h.url(), Path: "systems"}, "tok"); !c.OK || c.Files != 1 {
 		t.Errorf("a good repository: %+v", c)
@@ -681,13 +691,13 @@ func TestCreateAProjectInARepositoryThatHasOtherThings(t *testing.T) {
 	store.Git = r
 	ctx := context.Background()
 
-	if chk := r.Try(ctx, Settings{URL: h.url(), Path: "observability"}, "tok"); !chk.OK || chk.HasProject || chk.Files != 0 {
+	if chk := r.Try(ctx, Settings{URL: h.url(), Path: "observability"}, "tok"); !chk.OK || chk.HasProject || chk.Files != 0 || !chk.CanPush {
 		t.Fatalf("before: %+v", chk)
 	}
-	if _, err := r.Create(ctx, Settings{URL: h.url(), Path: "observability"}, "tok", ""); err == nil {
+	if _, err := r.Create(ctx, Settings{URL: h.url(), Path: "observability"}, "tok", "", ""); err == nil {
 		t.Error("creating without push must be refused")
 	}
-	p, err := r.Create(ctx, Settings{URL: h.url(), Path: "observability", Write: "commit"}, "tok", "anna")
+	p, err := r.Create(ctx, Settings{URL: h.url(), Path: "observability", Write: "commit"}, "tok", "anna", "")
 	if err != nil || !p.Direct {
 		t.Fatalf("Create = %+v, %v", p, err)
 	}
@@ -719,7 +729,22 @@ func TestCreateAProjectInARepositoryThatHasOtherThings(t *testing.T) {
 		t.Errorf("first system: %+v", from)
 	}
 	// A second project in the same folder is refused.
-	if _, err := s.InitProject(ctx, ""); err == nil || !strings.Contains(err.Error(), "already holds a project") {
+	if _, err := s.InitProject(ctx, "", ""); err == nil || !strings.Contains(err.Error(), "already holds a project") {
 		t.Errorf("a second InitProject = %v", err)
+	}
+}
+
+func TestAFailedCreateLeavesNothingConnected(t *testing.T) {
+	h := newHosted(t, "tok", map[string]string{"kamerton.yaml": "apiVersion: kamerton.dev/v1alpha1\nkind: Project\nmetadata:\n  name: obs\n"})
+	store, _ := cluster(t)
+	tokens := &memToken{}
+	r := &Runner{Base: Service{Target: store}, Store: &memSettings{}, Tokens: tokens, Release: store.ReleaseGit}
+	store.Git = r
+	ctx := context.Background()
+	if _, err := r.Create(ctx, Settings{URL: h.url(), Write: "commit"}, "tok", "", ""); err == nil {
+		t.Fatal("creating over a project must fail")
+	}
+	if r.Current(ctx) != nil || r.View(ctx).Connected || tokens.v != "" {
+		t.Errorf("a failed create stays connected: %+v", r.View(ctx))
 	}
 }

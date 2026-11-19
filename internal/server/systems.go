@@ -373,8 +373,10 @@ type gitSettingsBody struct {
 	gitsync.Settings
 	// Token is write-only: it goes to the Secret and is never returned.
 	Token string `json:"token"`
-	// Create makes the folder a new project instead of opening one.
-	Create bool `json:"create"`
+	// Create makes the folder a new project instead of opening one, called Name (empty: after
+	// the repository).
+	Create bool   `json:"create"`
+	Name   string `json:"name"`
 }
 
 func (s *Server) gitSettings(w http.ResponseWriter, r *http.Request) {
@@ -421,8 +423,22 @@ func (s *Server) putGitSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// A repository that cannot be read is not connected: the mistake shows now, not a minute later.
-	if c := s.opts.GitRunner.Try(r.Context(), in.Settings, in.Token); !c.OK {
+	c := s.opts.GitRunner.Try(r.Context(), in.Settings, in.Token)
+	if !c.OK {
 		writeError(w, http.StatusUnprocessableEntity, "git_unreachable", c.Error)
+		return
+	}
+	switch {
+	case in.Create && c.HasProject:
+		writeError(w, http.StatusConflict, "git_has_project", "this folder already holds a project; open it instead")
+		return
+	case in.Create && !c.CanPush:
+		writeError(w, http.StatusUnprocessableEntity, "git_needs_token", "creating a project needs an access token with write access")
+		return
+	case !in.Create && c.Empty:
+		// An empty repository has nothing to open; following it would show nothing until someone
+		// thought of creating a project there.
+		writeError(w, http.StatusConflict, "git_empty", "the repository is empty; create a project in it")
 		return
 	}
 	if in.Create {
@@ -430,11 +446,17 @@ func (s *Server) putGitSettings(w http.ResponseWriter, r *http.Request) {
 		if a := s.opts.Auth; a != nil {
 			author, _ = a.session(r)
 		}
-		p, err := s.opts.GitRunner.Create(r.Context(), in.Settings, in.Token, author)
+		// A project named on the first screen keeps its name in the repository's project file.
+		name := in.Name
+		if name == "" && s.opts.Projects != nil {
+			name = s.opts.Projects.Info(r.Context()).Name
+		}
+		p, err := s.opts.GitRunner.Create(r.Context(), in.Settings, in.Token, author, name)
 		if err != nil {
 			writeError(w, http.StatusConflict, "git_create_failed", err.Error())
 			return
 		}
+		s.adoptProject(r.Context(), name, in.URL)
 		s.log.Info("git: project created from the UI", "branch", p.Branch)
 		writeJSON(w, http.StatusOK, map[string]any{"settings": s.opts.GitRunner.View(r.Context()), "proposal": p})
 		return
@@ -443,6 +465,7 @@ func (s *Server) putGitSettings(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "git_connect_failed", err.Error())
 		return
 	}
+	s.adoptProject(r.Context(), c.Project, in.URL)
 	s.log.Info("git: settings changed from the UI")
 	writeJSON(w, http.StatusOK, map[string]any{"settings": s.opts.GitRunner.View(r.Context())})
 }
@@ -457,6 +480,19 @@ func (s *Server) deleteGitSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, s.opts.GitRunner.View(r.Context()))
+}
+
+// adoptProject gives the installation's project the name of the one taken from a repository,
+// so it stays a project after the repository is disconnected.
+func (s *Server) adoptProject(ctx context.Context, name, repoURL string) {
+	a, ok := s.opts.Projects.(interface{ Adopt(context.Context, string) })
+	if !ok {
+		return
+	}
+	if name == "" {
+		name = gitsync.RepoName(repoURL)
+	}
+	a.Adopt(ctx, name)
 }
 
 // gitNote carries the commit message a person wrote (header X-Kamerton-Message, percent-encoded)

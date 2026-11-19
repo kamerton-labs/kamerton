@@ -3,14 +3,15 @@
 
 import { useSyncExternalStore } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { Activity, BellRing, Boxes, FolderGit2, GitBranch, LogOut, Moon, Send, Sun, UserRound } from 'lucide-react'
+import { Activity, BellRing, Boxes, Folder, FolderGit2, GitBranch, LogOut, Moon, Send, Sun, UserRound } from 'lucide-react'
 import { Navigate, NavLink, Outlet, useLocation, useNavigate } from 'react-router'
 import { cn } from 'cn'
 import { StateDot } from '@/components/common'
 import LangSwitch from '@/components/LangSwitch'
+import ProjectSetup from '@/components/ProjectSetup'
 import { shortVersion } from '@/lib/format'
 import { Button } from '@/components/ui/button'
-import { useAlerts, useSession, useStacks, useSystems, useVersion } from '@/lib/api'
+import { useAlerts, useProject, useSession, useStacks, useSystems, useVersion } from '@/lib/api'
 import { gitProblems, projectName } from '@/lib/git'
 import { loginPath, logout, LOGIN_PATH } from '@/lib/auth'
 import { coreHealth } from '@/lib/stacks'
@@ -42,7 +43,8 @@ const subscribeDesktop = (cb: () => void) => {
   return () => mq.removeEventListener('change', cb)
 }
 /** Matches Tailwind's md breakpoint, so that the user box is rendered once (sidebar or mobile header). */
-const useIsDesktop = () => useSyncExternalStore(subscribeDesktop, () => window.matchMedia(desktopQuery).matches)
+const useIsDesktop = () =>
+  useSyncExternalStore(subscribeDesktop, () => window.matchMedia(desktopQuery).matches, () => true)
 
 /** Signed-in user and logout; shown only when login is enabled. */
 function UserBox({ user, compact }: { user: string; compact?: boolean }) {
@@ -106,8 +108,25 @@ function GitCount() {
 /** The project at the top of the sidebar: its name, and the branch and folder it is read from. */
 function ProjectBox() {
   const git = useSystems().data?.git
+  const project = useProject().data
   const { t } = useT()
-  if (!git) return null
+  if (!git) {
+    if (!project?.name) return null
+    return (
+      <NavLink
+        to="/project"
+        data-testid="project-box"
+        title={project.path || project.namespace}
+        className={({ isActive }) => cn('mb-3 block rounded-md border px-2 py-1.5 hover:bg-sidebar-accent', isActive && 'bg-sidebar-accent')}
+      >
+        <div className="flex items-center gap-1.5">
+          <Folder className="size-3.5 shrink-0 text-muted-foreground" />
+          <span className="truncate text-sm font-medium">{project.name}</span>
+        </div>
+        <div className="mt-0.5 truncate pl-5 text-xs text-muted-foreground">{project.where === 'local' ? project.path : t('shell.inCluster')}</div>
+      </NavLink>
+    )
+  }
   const bad = !!git.error || gitProblems(git) > 0
   return (
     <NavLink
@@ -154,14 +173,33 @@ function StackLink({ compact }: { compact?: boolean }) {
 }
 
 export default function AppShell() {
-  const version = useVersion()
   const session = useSession()
-  const isDesktop = useIsDesktop()
-  const { t } = useT()
   const { pathname, search, hash } = useLocation()
   // Login enabled and no session: go to the login page and come back here afterwards.
   if (session.data?.enabled && !session.data.authenticated) return <Navigate to={loginPath(pathname + search + hash)} replace />
-  const user = session.data?.enabled ? session.data.user : ''
+  return <Shell user={session.data?.enabled ? session.data.user : ''} />
+}
+
+/**
+ * Kamerton starts with its project: until one is open (created, opened or cloned) the first
+ * screen is all there is. The core decides; an installation with systems from before projects
+ * is a project already and is never locked out of them.
+ */
+function useNeedsProject() {
+  const project = useProject()
+  const info = project.data
+  return { loading: project.isLoading, info: info && !info.exists ? info : undefined }
+}
+
+function Shell({ user }: { user: string }) {
+  const version = useVersion()
+  const isDesktop = useIsDesktop()
+  const { t } = useT()
+  const { pathname } = useLocation()
+  const setup = useNeedsProject()
+  // Nothing until it is known which screen this is: no sidebar flashing before the project screen.
+  if (setup.loading) return <div className="min-h-svh" />
+  if (setup.info) return <ProjectSetup info={setup.info} userBox={user ? <UserBox user={user} compact /> : undefined} />
   return (
     <div className="flex min-h-svh">
       <aside className="sticky top-0 hidden h-svh w-52 shrink-0 flex-col border-r bg-sidebar p-3 text-sidebar-foreground md:flex">

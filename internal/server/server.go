@@ -31,6 +31,7 @@ import (
 	"github.com/kamerton-labs/kamerton/internal/gitsync"
 	"github.com/kamerton-labs/kamerton/internal/history"
 	"github.com/kamerton-labs/kamerton/internal/noise"
+	"github.com/kamerton-labs/kamerton/internal/project"
 	"github.com/kamerton-labs/kamerton/internal/rules"
 	"github.com/kamerton-labs/kamerton/internal/schema"
 	"github.com/kamerton-labs/kamerton/internal/stack"
@@ -62,6 +63,9 @@ type Options struct {
 	// repository instead and lets the UI connect, change and disconnect it.
 	Git       *gitsync.Service
 	GitRunner *gitsync.Runner
+	// Projects is where the project lives: a folder on this machine or the cluster. nil: no first
+	// screen, the installation is its own project.
+	Projects project.Projects
 	// TailMute silences the consequences of an incident for a while after its cause is gone;
 	// the server tells it which Alertmanager a system uses. Nil: off.
 	TailMute *tailmute.Service
@@ -223,6 +227,16 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/v1/git/push", s.gitPush)
 	mux.HandleFunc("GET /api/v1/git/commits", s.gitCommits)
 	mux.HandleFunc("GET /api/v1/git/commits/{hash}", s.gitCommit)
+	mux.HandleFunc("GET /api/v1/project", s.projectInfo)
+	mux.HandleFunc("POST /api/v1/project", s.newProject)
+	mux.HandleFunc("PATCH /api/v1/project", s.renameProject)
+	mux.HandleFunc("POST /api/v1/project/open", s.openProject)
+	mux.HandleFunc("POST /api/v1/project/close", s.closeProject)
+	mux.HandleFunc("POST /api/v1/project/check", s.checkProjectRepo)
+	mux.HandleFunc("POST /api/v1/project/clone", s.cloneProject)
+	mux.HandleFunc("GET /api/v1/project/git", s.projectGit)
+	mux.HandleFunc("POST /api/v1/project/git/pull", s.projectPull)
+	mux.HandleFunc("POST /api/v1/project/git/push", s.projectPush)
 	mux.HandleFunc("GET /api/v1/git/settings", s.gitSettings)
 	mux.HandleFunc("PUT /api/v1/git/settings", s.putGitSettings)
 	mux.HandleFunc("POST /api/v1/git/settings/test", s.testGitSettings)
