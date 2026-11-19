@@ -6,6 +6,13 @@ All notable changes to Kamerton are listed here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- A channel left out for a missing Secret (an email channel without the SMTP password) was
+  logged every 30 seconds, as long as the Secret stayed missing. It is now logged when the list
+  of channels left out changes, and once more when every channel has its Secret again. The
+  `ChannelsConnected` condition of the system still says which channels are off.
+
 ## [0.3.1] - 2026-11-19
 
 ### Changed
