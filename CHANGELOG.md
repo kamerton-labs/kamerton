@@ -17,7 +17,12 @@ All notable changes to Kamerton are listed here. The format follows
   of the day before). A click on a chart lists the failed or the slowest requests
   of those minutes; a request opens with its steps (the failed one picked, small
   steps folded away, one request cut out of a long session) and the log lines of
-  its trace_id. API: `GET /api/v1/systems/{id}/now`,
+  its trace_id. An arrow of the map turns red with its share of failed calls (from
+  Tempo's map of calls) and opens the calls from one service to the other: how many,
+  how many fail, p95, the failed ones. The service page says what changed in the pods
+  in the last 30 minutes (rollouts, restarts, scalings), read in a cluster or with
+  the kubeconfig next to one. API: `GET /api/v1/systems/{id}/now`, `…/calls`,
+  `…/services/{service}/changes`,
   `…/services/{service}/series?range=`, `…/services/{service}/requests`,
   `…/traces/{trace}`; Tempo and Loki are read with the URLs of the system's set.
 - Five Grafana dashboards per system instead of one, built from the description like

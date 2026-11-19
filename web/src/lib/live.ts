@@ -47,6 +47,13 @@ export interface SLO {
   budgetLeft: number | null
 }
 
+export interface NowEdge {
+  from: string
+  to: string
+  requests: number | null
+  errorRatio: number | null
+}
+
 export interface SystemNow {
   alerting: boolean
   metrics: boolean
@@ -55,8 +62,26 @@ export interface SystemNow {
   message?: string
   services: NowService[]
   incidents: NowIncident[]
+  /** Calls Tempo saw between the services; empty without its metrics generator. */
+  edges: NowEdge[]
   slo: SLO[]
   at: string
+}
+
+export interface CallSeries {
+  timestamps: number[]
+  step: number
+  start: string
+  end: string
+  requests?: Chart
+  errors?: Chart
+  latency?: Chart
+}
+
+export interface CallsResponse {
+  calls: CallSeries
+  failed: RequestHit[]
+  failedError?: string
 }
 
 export interface Line {
@@ -183,6 +208,41 @@ export const useServiceRequests = (id: string, service: string, q: RequestQuery 
       return apiGet<{ requests: RequestHit[] }>(`${sys(id)}/services/${encodeURIComponent(service)}/requests?${p}`)
     },
     placeholderData: keepPreviousData,
+  })
+
+export const useCalls = (id: string, from: string, to: string, enabled = true) =>
+  useQuery({
+    queryKey: ['system', id, 'calls', from, to],
+    enabled,
+    queryFn: () => apiGet<CallsResponse>(`${sys(id)}/calls?${new URLSearchParams({ from, to, range: '1h' })}`),
+    refetchInterval: 30_000,
+  })
+
+export interface Change {
+  kind: 'rollout' | 'scaling' | 'restart' | 'warning'
+  at?: string
+  subject: string
+  from?: string
+  to?: string
+  count?: number
+  reason?: string
+  text?: string
+}
+
+export interface ChangesResponse {
+  available: boolean
+  error?: string
+  changes: Change[]
+  pods?: number
+  notReady?: number
+  noPods?: boolean
+}
+
+export const useChanges = (id: string, service: string) =>
+  useQuery({
+    queryKey: ['system', id, 'changes', service],
+    queryFn: () => apiGet<ChangesResponse>(`${sys(id)}/services/${encodeURIComponent(service)}/changes`),
+    refetchInterval: 60_000,
   })
 
 export const useTrace = (id: string, trace: string) =>

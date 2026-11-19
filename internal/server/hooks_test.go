@@ -360,4 +360,13 @@ func TestSystemNowSaysWhichServiceIsTheCause(t *testing.T) {
 	if resp.StatusCode != http.StatusNotFound {
 		t.Errorf("an unknown service: %d", resp.StatusCode)
 	}
+	resp, _ = call(t, "GET", srv.URL+"/api/v1/systems/shop/calls?from=api&to=nope", "", withCookie(cookie))
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("calls to an unknown service: %d", resp.StatusCode)
+	}
+	// Without access to the cluster the page has nothing to say about pods, and says so.
+	resp, body = call(t, "GET", srv.URL+"/api/v1/systems/shop/services/db/changes", "", withCookie(cookie))
+	if resp.StatusCode != http.StatusOK || !strings.Contains(body, `"available":false`) {
+		t.Errorf("changes without a cluster: %d %s", resp.StatusCode, body)
+	}
 }

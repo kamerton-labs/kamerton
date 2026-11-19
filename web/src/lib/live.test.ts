@@ -19,7 +19,7 @@ const svc = (name: string, dependsOn: string[], state: NowService['state'] = 'ok
   p95: null,
 })
 
-const now = (services: NowService[]): SystemNow => ({ alerting: true, metrics: true, traces: true, logs: true, services, incidents: [], slo: [], at: '' })
+const now = (services: NowService[]): SystemNow => ({ alerting: true, metrics: true, traces: true, logs: true, services, incidents: [], edges: [], slo: [], at: '' })
 
 describe('the map', () => {
   it('marks the way from an affected service to the source', () => {

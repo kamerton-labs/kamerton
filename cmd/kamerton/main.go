@@ -163,6 +163,10 @@ func serve(args []string) error {
 		mgr = m
 		opts.Namespace = ns
 		sets.Namespace = ns
+		if cfg.WorkloadEvidence {
+			// "What changed" on a service page: rollouts, restarts, scalings of its pods.
+			opts.Workload = &evidence.Collector{Kube: uncached, Logger: log.With("component", "evidence")}
+		}
 		sets.Store = &stack.ConfigMapStateStore{Client: uncached, Namespace: ns, Name: cfg.StacksConfigMap}
 		if cfg.StackDiscovery {
 			opts.Discoverer = &stack.Discoverer{Client: uncached}
@@ -281,6 +285,14 @@ func serve(args []string) error {
 	} else {
 		opts.TelegramUnavailable = "Telegram setup from the UI is available only in a cluster: the core runs without the Kubernetes controller, so there is no safe place to keep the bot token."
 		opts.EmailUnavailable = "Email setup from the UI is available only in a cluster: the core runs without the Kubernetes controller, so there is no safe place to keep the SMTP password."
+		if cfg.WorkloadEvidence {
+			if kube := readOnlyKube(); kube != nil {
+				// Run on a machine next to a cluster, the service page still says what changed in
+				// its pods, read with the person's kubeconfig; nothing is written.
+				opts.Workload = &evidence.Collector{Kube: kube, Logger: log.With("component", "evidence")}
+				log.Info("service pages read pods with the kubeconfig to say what changed")
+			}
+		}
 		// Locally the project is a folder: given at start, or created, opened or cloned on the
 		// first screen, and switched while Kamerton runs.
 		descriptions, stacks := &descstore.Switch{}, &stack.SwitchStateStore{}
@@ -438,6 +450,23 @@ func setupWebhook(cfg config.Config, log *slog.Logger, c client.Client, ns strin
 		Secret:    v1alpha1.SecretKeyRef{Name: cfg.WebhookSecretName, Key: followup.TokenKey},
 		Namespace: ns,
 	}, store, ""
+}
+
+// readOnlyKube is a client from the kubeconfig, or nil without one. Only reads go through it.
+func readOnlyKube() client.Reader {
+	rc, err := ctrl.GetConfig()
+	if err != nil {
+		return nil
+	}
+	scheme := runtime.NewScheme()
+	if err := clientgoscheme.AddToScheme(scheme); err != nil {
+		return nil
+	}
+	c, err := client.New(rc, client.Options{Scheme: scheme})
+	if err != nil {
+		return nil
+	}
+	return c
 }
 
 // newManager also returns an uncached client: a cached one would start

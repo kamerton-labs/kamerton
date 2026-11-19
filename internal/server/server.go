@@ -43,7 +43,14 @@ import (
 
 const maxBody = 1 << 20
 
+// Workload says what changed in the pods of a service: rollouts, restarts, scalings.
+type Workload interface {
+	Workload(ctx context.Context, sd *v1alpha1.SystemDescription, svc *v1alpha1.Service, prom prometheus.Querier, now time.Time) (generator.WorkloadChanges, error)
+}
+
 type Options struct {
+	// Workload reads the pods of a service for its page; nil without access to the cluster.
+	Workload Workload
 	// UIBuilt is false when only the placeholder UI exists.
 	UI      fs.FS
 	UIBuilt bool
@@ -254,6 +261,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/systems/{id}/services/{service}/series", s.serviceSeries)
 	mux.HandleFunc("GET /api/v1/systems/{id}/services/{service}/requests", s.serviceRequests)
 	mux.HandleFunc("GET /api/v1/systems/{id}/traces/{trace}", s.systemTrace)
+	mux.HandleFunc("GET /api/v1/systems/{id}/calls", s.systemCalls)
+	mux.HandleFunc("GET /api/v1/systems/{id}/services/{service}/changes", s.serviceChanges)
 	mux.HandleFunc("GET /api/v1/systems/{id}/noise", s.noiseSystem)
 	mux.HandleFunc("POST /api/v1/systems/{id}/noise/feedback", s.noiseFeedback)
 	mux.HandleFunc("GET /api/v1/systems/{id}/telegram", s.telegramStatusSystem)

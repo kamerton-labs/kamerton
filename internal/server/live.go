@@ -55,6 +55,14 @@ type nowIncident struct {
 	StartsAt time.Time `json:"startsAt"`
 }
 
+// nowEdge is the calls between two services of the system now (names of the system).
+type nowEdge struct {
+	From       string   `json:"from"`
+	To         string   `json:"to"`
+	Requests   *float64 `json:"requests"`
+	ErrorRatio *float64 `json:"errorRatio"`
+}
+
 type nowResponse struct {
 	// Alerting: Alertmanager is set and answered; Metrics: Prometheus is set.
 	Alerting  bool          `json:"alerting"`
@@ -64,8 +72,10 @@ type nowResponse struct {
 	Message   string        `json:"message,omitempty"`
 	Services  []nowService  `json:"services"`
 	Incidents []nowIncident `json:"incidents"`
-	SLO       []live.SLO    `json:"slo"`
-	At        time.Time     `json:"at"`
+	// Edges are the calls Tempo saw between the services; empty without its metrics generator.
+	Edges []nowEdge  `json:"edges"`
+	SLO   []live.SLO `json:"slo"`
+	At    time.Time  `json:"at"`
 }
 
 func (s *Server) systemNow(w http.ResponseWriter, r *http.Request) {
@@ -81,16 +91,18 @@ func (s *Server) systemNow(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	c := s.clientsFor(ctx, stackOf(snap))
 	now := time.Now()
-	resp := nowResponse{Services: []nowService{}, Incidents: []nowIncident{}, SLO: []live.SLO{}, At: now.UTC(),
+	resp := nowResponse{Services: []nowService{}, Incidents: []nowIncident{}, Edges: []nowEdge{}, SLO: []live.SLO{}, At: now.UTC(),
 		Metrics: c.Prom != nil, Traces: c.Set.URL(stack.KindTempo) != "", Logs: c.Set.URL(stack.KindLoki) != ""}
 
 	numbers := map[string]live.Numbers{}
+	var edges []live.Edge
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
 		if c.Prom != nil {
 			numbers = live.NumbersNow(ctx, c.Prom, snap.SD, now)
 			resp.SLO = live.SLOs(ctx, c.Prom, snap.SD, now)
+			edges = live.EdgesNow(ctx, c.Prom, now)
 		}
 	}()
 	st, configured, err := s.alertState(ctx, snap)
@@ -131,6 +143,16 @@ func (s *Server) systemNow(w http.ResponseWriter, r *http.Request) {
 				because[aff] = inc.Roots
 				since[aff] = inc.StartsAt
 			}
+		}
+	}
+	byTelemetry := map[string]string{}
+	for i := range snap.SD.Spec.Services {
+		byTelemetry[description.TelemetryName(&snap.SD.Spec.Services[i])] = snap.SD.Spec.Services[i].Name
+	}
+	for _, e := range edges {
+		from, to := byTelemetry[e.From], byTelemetry[e.To]
+		if from != "" && to != "" && from != to {
+			resp.Edges = append(resp.Edges, nowEdge{From: from, To: to, Requests: e.Requests, ErrorRatio: e.ErrorRatio})
 		}
 	}
 	for i := range snap.SD.Spec.Services {
@@ -255,6 +277,56 @@ func (s *Server) serviceRequests(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"requests": hits})
 }
 
+// systemCalls are the calls from one service to another over a range, and the ones that failed.
+func (s *Server) systemCalls(w http.ResponseWriter, r *http.Request) {
+	snap := s.system(w, r, false)
+	if snap == nil {
+		return
+	}
+	if snap.SD == nil {
+		writeError(w, http.StatusUnprocessableEntity, "invalid_description", "the description has errors; fix it to see the system")
+		return
+	}
+	q := r.URL.Query()
+	var from, to *v1alpha1.Service
+	for i := range snap.SD.Spec.Services {
+		svc := &snap.SD.Spec.Services[i]
+		switch svc.Name {
+		case q.Get("from"):
+			from = svc
+		case q.Get("to"):
+			to = svc
+		}
+	}
+	if from == nil || to == nil {
+		writeError(w, http.StatusNotFound, "not_found", "no such services in the system")
+		return
+	}
+	c := s.clientsFor(r.Context(), stackOf(snap))
+	if c.Prom == nil {
+		writeError(w, http.StatusConflict, "no_prometheus", "the system has no Prometheus")
+		return
+	}
+	rng, ok := liveRanges[q.Get("range")]
+	if !ok {
+		rng = time.Hour
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 25*time.Second)
+	defer cancel()
+	client, server := description.TelemetryName(from), description.TelemetryName(to)
+	end := time.Now()
+	resp := map[string]any{"calls": live.Calls(ctx, c.Prom, client, server, end, rng), "failed": []live.Hit{}}
+	if base := c.Set.URL(stack.KindTempo); base != "" {
+		hits, err := live.Search(ctx, base, live.FailedCallsQuery(client, server)+" | select(name)", end.Add(-rng), end, 20)
+		if err != nil {
+			resp["failedError"] = err.Error()
+		} else {
+			resp["failed"] = hits
+		}
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
 // traceView is one request: its spans, the lines written while it ran, and which service of
 // the system each name of the telemetry is.
 type traceView struct {
@@ -314,3 +386,50 @@ func (s *Server) systemTrace(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, v)
 }
 
+// Changes of a service's pods, as the page shows them.
+type changeView struct {
+	Kind    string    `json:"kind"` // rollout, scaling, restart, warning
+	At      time.Time `json:"at,omitzero"`
+	Subject string    `json:"subject"`
+	From    string    `json:"from,omitempty"`
+	To      string    `json:"to,omitempty"`
+	Count   int       `json:"count,omitempty"`
+	Reason  string    `json:"reason,omitempty"`
+	Text    string    `json:"text,omitempty"`
+}
+
+func (s *Server) serviceChanges(w http.ResponseWriter, r *http.Request) {
+	sd, svc, c, ok := s.liveService(w, r)
+	if !ok {
+		return
+	}
+	if s.opts.Workload == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"available": false, "changes": []any{}})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+	ch, err := s.opts.Workload.Workload(ctx, sd, svc, c.Prom, time.Now())
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{"available": true, "error": err.Error(), "changes": []any{}})
+		return
+	}
+	out := []changeView{}
+	for _, x := range ch.Rollouts {
+		out = append(out, changeView{Kind: "rollout", At: x.At, Subject: x.Workload, From: x.OldImage, To: x.NewImage})
+	}
+	for _, x := range ch.Scalings {
+		out = append(out, changeView{Kind: "scaling", At: x.At, Subject: x.Workload, From: strconv.Itoa(x.From), To: strconv.Itoa(x.To)})
+	}
+	for _, x := range ch.Restarts {
+		reason := x.Reason
+		if x.CrashLoop {
+			reason = "CrashLoopBackOff"
+		}
+		out = append(out, changeView{Kind: "restart", Subject: x.Pod + "/" + x.Container, Count: x.Count, Reason: reason})
+	}
+	for _, x := range ch.Warnings {
+		out = append(out, changeView{Kind: "warning", Subject: x.Reason, Count: int(x.Count), Text: x.Message})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"available": true, "changes": out, "pods": ch.Pods, "notReady": ch.NotReady, "noPods": ch.NoPods})
+}

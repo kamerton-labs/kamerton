@@ -26,6 +26,7 @@ import {
   number,
   percent,
   rate,
+  useChanges,
   useServiceRequests,
   useServiceSeries,
   useSystemNow,
@@ -65,6 +66,21 @@ function Card({ title, value, usual, extra, children, testid }: { title: string;
       </div>
       {children}
     </section>
+  )
+}
+
+/** Which line is which, when a chart has several: pods, consumer groups. */
+function Legend({ chart }: { chart?: Chart }) {
+  if (!chart || chart.lines.length < 2) return null
+  return (
+    <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
+      {chart.lines.slice(0, 8).map((l, i) => (
+        <span key={l.label} className="inline-flex items-center gap-1">
+          <span className="inline-block h-0.5 w-3 rounded" style={{ background: PALETTE[i % PALETTE.length] }} />
+          {l.label}
+        </span>
+      ))}
+    </div>
   )
 }
 
@@ -122,8 +138,9 @@ function Charts({ s, onPick, marked }: { s: ServiceSeries; onPick: (ts: number) 
     )
   if (s.queue)
     items.push(
-      <Card key="queue" testid="chart-queue" title={t('svc.queueLag')} value={number(s.queue.now, 0)} extra={s.queue.lines.map((l) => l.label).join(', ')}>
+      <Card key="queue" testid="chart-queue" title={t('svc.queueLag')} value={number(s.queue.now, 0)}>
         <LiveChart {...common} lines={many(s.queue)} format={(v) => number(v, 0)} />
+        <Legend chart={s.queue} />
       </Card>,
     )
   if (s.memory)
@@ -137,12 +154,14 @@ function Charts({ s, onPick, marked }: { s: ServiceSeries; onPick: (ts: number) 
         extra={s.restarts ? <span className="text-warn">{tn('svc.restarts', Math.round(s.restarts))}</span> : tn('svc.pods', s.memory.lines.length)}
       >
         <LiveChart {...common} lines={many(s.memory)} limit={s.memory.limit} format={bytes} />
+        <Legend chart={s.memory} />
       </Card>,
     )
   if (s.cpu)
     items.push(
       <Card key="cpu" testid="chart-cpu" title={t('svc.cpu')} value={cores(Math.max(...s.cpu.lines.map((l) => lastOf(l.values) ?? 0)))}>
         <LiveChart {...common} lines={many(s.cpu)} format={cores} />
+        <Legend chart={s.cpu} />
       </Card>,
     )
   if (items.length === 0) return <p className="text-sm text-muted-foreground">{t('svc.noSignals')}</p>
@@ -181,6 +200,47 @@ function Status({ svc, id }: { svc?: NowService; id: string }) {
         </li>
       ))}
     </ul>
+  )
+}
+
+/** What changed in the pods lately: a rollout or a restart next to a failure is the first suspect. */
+function Changes({ id, service }: { id: string; service: string }) {
+  const { t, tn } = useT()
+  const q = useChanges(id, service)
+  const d = q.data
+  if (!d?.available) return null
+  if (d.error) return <p className="text-xs text-muted-foreground">{t('svc.changes.error', { error: d.error })}</p>
+  if (d.changes.length === 0)
+    return (
+      <p className="text-xs text-muted-foreground" data-testid="svc-changes">
+        {d.noPods ? t('svc.changes.noPods') : t('svc.changes.none')}
+        {!!d.notReady && <span className="text-warn"> · {tn('svc.changes.notReady', d.notReady)}</span>}
+      </p>
+    )
+  const line = (c: (typeof d.changes)[number]) => {
+    switch (c.kind) {
+      case 'rollout':
+        return t(c.from ? 'svc.changes.rollout' : 'svc.changes.rolloutFirst', { name: c.subject, from: c.from ?? '', to: c.to ?? '' })
+      case 'scaling':
+        return t('svc.changes.scaling', { name: c.subject, from: c.from ?? '', to: c.to ?? '' })
+      case 'restart':
+        return tn('svc.changes.restart', c.count ?? 1, { name: c.subject }) + (c.reason ? ` (${c.reason})` : '')
+      default:
+        return `${c.subject}: ${c.text ?? ''}`
+    }
+  }
+  return (
+    <section className="rounded-lg border bg-card px-3 py-2 text-sm" data-testid="svc-changes">
+      <h3 className="mb-1 text-xs text-muted-foreground">{t('svc.changes.title')}</h3>
+      <ul className="space-y-0.5">
+        {d.changes.map((c, i) => (
+          <li key={i} className={cn(c.kind === 'restart' || c.kind === 'warning' ? 'text-warn' : undefined)}>
+            {c.at && <span className="mr-2 text-xs text-muted-foreground tabular-nums">{clock(c.at)}</span>}
+            {line(c)}
+          </li>
+        ))}
+      </ul>
+    </section>
   )
 }
 
@@ -370,6 +430,7 @@ export default function ServicePage() {
         </div>
       </div>
       <Status svc={svc} id={id} />
+      <Changes id={id} service={service} />
       {series.isError ? (
         <p className="text-sm text-destructive">{series.error.message}</p>
       ) : !s ? (
@@ -380,9 +441,11 @@ export default function ServicePage() {
       ) : (
         <>
           <Charts s={s} onPick={pickMoment} marked={picked?.at ?? null} />
-          <p className="-mt-1 text-xs text-muted-foreground">{t('svc.pickHint')}</p>
+          {s.requests && <p className="-mt-1 text-xs text-muted-foreground">{t('svc.pickHint')}</p>}
           <div className="grid items-start gap-3 lg:grid-cols-[3fr_2fr]">
-            {now.data?.traces !== false && q ? (
+            {!s.requests ? (
+              <div />
+            ) : now.data?.traces !== false && q ? (
               <Requests id={id} service={service} q={q} setQ={(nq) => setPicked({ q: nq, at: picked?.at ?? null })} s={s} median={median} />
             ) : (
               <p className="text-sm text-muted-foreground">{t('svc.noTraces')}</p>

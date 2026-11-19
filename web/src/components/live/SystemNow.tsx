@@ -4,16 +4,16 @@
 // The first screen of a system: is everything all right, and if not, which service is the cause
 // and which only suffer from it. One sentence on top, the map under it; a service opens its page.
 
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { Background, Handle, MarkerType, Position, ReactFlow, ReactFlowProvider, type Edge, type Node, type NodeProps } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
-import { ArrowRight } from 'lucide-react'
+import { ArrowRight, ChevronRight, X } from 'lucide-react'
 import { Link, useNavigate } from 'react-router'
 import { cn } from 'cn'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useT } from '@/i18n'
 import { timeAgo } from '@/lib/format'
-import { availability, bareTitle, failurePath, percent, problems, rate, duration, useSystemNow, windowText, type NowService, type SLO, type SystemNow as Now } from '@/lib/live'
+import { availability, bareTitle, clock, failurePath, percent, problems, rate, duration, useCalls, useSystemNow, windowText, type NowService, type SLO, type SystemNow as Now } from '@/lib/live'
 import type { Positions } from '@/lib/model/canvas'
 
 type LiveNodeData = { s: NowService; because: string[] }
@@ -65,8 +65,13 @@ function LiveNode({ data }: NodeProps<LiveNodeType>) {
 
 const nodeTypes = { live: LiveNode }
 
-function Map({ now, positions, onOpen }: { now: Now; positions: Positions; onOpen: (name: string) => void }) {
+/** Calls between two services fail when more than this share does: the arrow turns red. */
+const EDGE_FAILING = 0.01
+
+function Map({ now, positions, onOpen, onEdge, edge }: { now: Now; positions: Positions; onOpen: (name: string) => void; onEdge: (from: string, to: string) => void; edge: string | null }) {
+  const { t } = useT()
   const path = useMemo(() => failurePath(now), [now])
+  const calls = useMemo(() => new globalThis.Map(now.edges.map((e) => [`${e.from}->${e.to}`, e])), [now])
   const nodes: LiveNodeType[] = useMemo(
     () =>
       now.services.map((s, i) => ({
@@ -84,14 +89,23 @@ function Map({ now, positions, onOpen }: { now: Now; positions: Positions; onOpe
     s.dependsOn
       .filter((d) => names.has(d))
       .map((d) => {
-        const hot = path.has(`${s.name}->${d}`)
+        const id = `${s.name}->${d}`
+        const hot = path.has(id)
+        const c = calls.get(id)
+        const failing = (c?.errorRatio ?? 0) > EDGE_FAILING
+        const color = failing ? 'var(--firing)' : hot ? 'var(--warn)' : 'var(--muted-foreground)'
+        const picked = edge === id
         return {
-          id: `${s.name}->${d}`,
+          id,
           source: s.name,
           target: d,
           animated: hot,
-          markerEnd: { type: MarkerType.ArrowClosed, width: 14, height: 14, color: hot ? 'var(--warn)' : 'var(--muted-foreground)' },
-          style: hot ? { stroke: 'var(--warn)', strokeWidth: 2 } : { stroke: 'var(--muted-foreground)', strokeOpacity: 0.35, strokeWidth: 1.25 },
+          interactionWidth: 18,
+          label: failing ? t('now.edge.failing', { share: percent(c?.errorRatio) }) : undefined,
+          labelStyle: { fill: 'var(--firing)', fontSize: 11, fontWeight: 600 },
+          labelBgStyle: { fill: 'var(--background)' },
+          markerEnd: { type: MarkerType.ArrowClosed, width: 14, height: 14, color },
+          style: failing || hot || picked ? { stroke: color, strokeWidth: picked ? 3 : 2 } : { stroke: color, strokeOpacity: 0.35, strokeWidth: 1.25 },
         }
       }),
   )
@@ -101,6 +115,7 @@ function Map({ now, positions, onOpen }: { now: Now; positions: Positions; onOpe
       edges={edges}
       nodeTypes={nodeTypes}
       onNodeClick={(_, n) => onOpen(n.id)}
+      onEdgeClick={(_, e) => onEdge(e.source, e.target)}
       nodesDraggable={false}
       nodesConnectable={false}
       elementsSelectable={false}
@@ -111,6 +126,80 @@ function Map({ now, positions, onOpen }: { now: Now; positions: Positions; onOpe
     >
       <Background gap={24} size={1} />
     </ReactFlow>
+  )
+}
+
+/** The calls from one service to another: how many, how many fail, how long, and the failed ones. */
+function CallsPanel({ id, from, to, queue, onClose }: { id: string; from: string; to: string; queue: boolean; onClose: () => void }) {
+  const { t } = useT()
+  const q = useCalls(id, from, to, !queue)
+  const c = q.data?.calls
+  const ms = (v: number | null | undefined) => duration(v, t('unit.ms'), t('unit.s'))
+  const svcLink = (n: string) => `/systems/${encodeURIComponent(id)}/services/${encodeURIComponent(n)}`
+  return (
+    <div className="absolute top-3 right-3 z-10 w-[min(360px,calc(100%-1.5rem))] rounded-lg border bg-card p-3 text-sm shadow-lg" data-testid="calls-panel">
+      <div className="mb-2 flex items-center gap-1.5">
+        <Link to={svcLink(from)} className="font-medium hover:underline">
+          {from}
+        </Link>
+        <ArrowRight className="size-4 text-muted-foreground" />
+        <Link to={svcLink(to)} className="font-medium hover:underline">
+          {to}
+        </Link>
+        <button type="button" className="ml-auto rounded p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground" onClick={onClose} aria-label={t('common.close')}>
+          <X className="size-4" />
+        </button>
+      </div>
+      {queue ? (
+        <p className="text-muted-foreground">
+          {t('now.edge.queue')}{' '}
+          <Link to={svcLink(to)} className="text-foreground underline">
+            {t('now.edge.queueOpen', { name: to })}
+          </Link>
+        </p>
+      ) : q.isError ? (
+        <p className="text-destructive">{q.error.message}</p>
+      ) : !c ? (
+        <Skeleton className="h-16" />
+      ) : !c.requests ? (
+        <p className="text-muted-foreground">{t('now.edge.noCalls')}</p>
+      ) : (
+        <>
+          <dl className="grid grid-cols-3 gap-2">
+            <div>
+              <dt className="text-xs text-muted-foreground">{t('now.edge.calls')}</dt>
+              <dd className="font-semibold tabular-nums">{rate(c.requests.now, t('unit.perSec'), t('unit.perMin'))}</dd>
+            </div>
+            <div>
+              <dt className="text-xs text-muted-foreground">{t('svc.errors')}</dt>
+              <dd className={cn('font-semibold tabular-nums', (c.errors?.now ?? 0) > EDGE_FAILING && 'text-firing')}>{percent(c.errors?.now)}</dd>
+            </div>
+            <div>
+              <dt className="text-xs text-muted-foreground">p95</dt>
+              <dd className="font-semibold tabular-nums">{ms(c.latency?.now)}</dd>
+            </div>
+          </dl>
+          <p className="mt-1 text-xs text-muted-foreground">{t('now.edge.hint', { to })}</p>
+        </>
+      )}
+      {q.data && q.data.failed.length > 0 && (
+        <div className="mt-3">
+          <h4 className="mb-1 text-xs font-medium text-muted-foreground">{t('now.edge.failed')}</h4>
+          <ul className="max-h-48 divide-y overflow-auto">
+            {q.data.failed.slice(0, 8).map((h) => (
+              <li key={h.traceId}>
+                <Link to={`/systems/${encodeURIComponent(id)}/requests/${h.traceId}?from=${encodeURIComponent(to)}${h.spanId ? `&span=${h.spanId}` : ''}`} className="flex items-baseline gap-2 py-1 hover:bg-muted/50">
+                  <span className="w-11 shrink-0 text-xs text-muted-foreground tabular-nums">{clock(h.start)}</span>
+                  <span className="min-w-0 flex-1 truncate font-mono text-xs">{h.span}</span>
+                  <span className="text-xs text-firing tabular-nums">{ms(h.spanMs)}</span>
+                  <ChevronRight className="size-3.5 self-center text-muted-foreground" />
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -200,6 +289,7 @@ export default function SystemNow({ id, positions }: { id: string; positions: Po
   const { t } = useT()
   const now = useSystemNow(id)
   const navigate = useNavigate()
+  const [edge, setEdge] = useState<{ from: string; to: string } | null>(null)
   if (now.isLoading) return <Skeleton className="m-4 h-[60svh]" />
   if (now.isError || !now.data) return <p className="p-6 text-sm text-destructive">{now.error?.message ?? t('now.error')}</p>
   const d = now.data
@@ -218,9 +308,16 @@ export default function SystemNow({ id, positions }: { id: string; positions: Po
       </div>
       <div className="relative min-h-[320px] flex-1" data-testid="now-map">
         <ReactFlowProvider>
-          <Map now={d} positions={positions} onOpen={(name) => void navigate(`/systems/${encodeURIComponent(id)}/services/${encodeURIComponent(name)}`)} />
+          <Map
+            now={d}
+            positions={positions}
+            edge={edge ? `${edge.from}->${edge.to}` : null}
+            onOpen={(name) => void navigate(`/systems/${encodeURIComponent(id)}/services/${encodeURIComponent(name)}`)}
+            onEdge={(from, to) => setEdge({ from, to })}
+          />
         </ReactFlowProvider>
-        <p className="pointer-events-none absolute bottom-2 left-3 text-xs text-muted-foreground">{t('now.mapHint')}</p>
+        {edge && <CallsPanel id={id} from={edge.from} to={edge.to} queue={d.services.find((s) => s.name === edge.to)?.type === 'queue'} onClose={() => setEdge(null)} />}
+        <p className="pointer-events-none absolute bottom-2 left-3 text-xs text-muted-foreground">{d.edges.length > 0 ? t('now.mapHintEdges') : t('now.mapHint')}</p>
       </div>
     </div>
   )
