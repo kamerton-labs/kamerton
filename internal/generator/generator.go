@@ -122,11 +122,11 @@ func Generate(sd *v1alpha1.SystemDescription, opts Options) (*Bundle, error) {
 	b.RulesYAML = out
 	b.RuleCount = rules.Count(b.RuleGroups)
 
-	dash, err := g.dashboard()
+	dash, err := g.dashboards()
 	if err != nil {
 		return nil, err
 	}
-	b.Dashboards[fmt.Sprintf("kamerton-%s.json", sd.Name)] = dash
+	b.Dashboards = dash
 	b.AlertmanagerConfig = g.alertmanagerConfig()
 	b.MissingSecrets = g.missing
 	for _, rg := range b.RuleGroups.Groups {
@@ -192,6 +192,27 @@ func SpanTarget(sd *v1alpha1.SystemDescription, svc *v1alpha1.Service) rules.Spa
 
 func PodTarget(sd *v1alpha1.SystemDescription, svc *v1alpha1.Service) rules.PodTarget {
 	return newGen(sd, Options{}).podTarget(svc)
+}
+
+// QueueTarget is what the queue rules of svc look at; false when svc is not a queue or queue
+// metrics are off.
+func QueueTarget(sd *v1alpha1.SystemDescription, svc *v1alpha1.Service) (rules.QueueTarget, bool) {
+	g := newGen(sd, Options{})
+	qt := g.tel.Queues
+	if svc.Queue == nil || qt.LagMetric == description.DisabledMetric {
+		return rules.QueueTarget{}, false
+	}
+	return rules.QueueTarget{
+		LagMetric: qt.LagMetric, MembersMetric: qt.MembersMetric, OffsetMetric: qt.OffsetMetric,
+		GroupLabel: qt.GroupLabel, TopicLabel: qt.TopicLabel,
+		Topic: svc.Queue.Topic, Groups: svc.Queue.ConsumerGroups,
+	}, true
+}
+
+// HasRequests says whether svc is looked at by its requests: span metrics are on and the
+// request rules apply to it.
+func HasRequests(sd *v1alpha1.SystemDescription, svc *v1alpha1.Service) bool {
+	return hasRequestRules(svc) && newGen(sd, Options{}).tel.Spans.CallsMetric != description.DisabledMetric
 }
 
 func (g *gen) defaults() *v1alpha1.Defaults {

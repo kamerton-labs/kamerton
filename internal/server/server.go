@@ -43,7 +43,14 @@ import (
 
 const maxBody = 1 << 20
 
+// Workload says what changed in the pods of a service: rollouts, restarts, scalings.
+type Workload interface {
+	Workload(ctx context.Context, sd *v1alpha1.SystemDescription, svc *v1alpha1.Service, prom prometheus.Querier, now time.Time) (generator.WorkloadChanges, error)
+}
+
 type Options struct {
+	// Workload reads the pods of a service for its page; nil without access to the cluster.
+	Workload Workload
 	// UIBuilt is false when only the placeholder UI exists.
 	UI      fs.FS
 	UIBuilt bool
@@ -250,6 +257,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/v1/systems/{id}/backtest", s.backtestSystem)
 	mux.HandleFunc("GET /api/v1/systems/{id}/runbooks/{service}", s.runbookSystem)
 	mux.HandleFunc("GET /api/v1/systems/{id}/alerts", s.alertsSystem)
+	mux.HandleFunc("GET /api/v1/systems/{id}/now", s.systemNow)
+	mux.HandleFunc("GET /api/v1/systems/{id}/services/{service}/series", s.serviceSeries)
+	mux.HandleFunc("GET /api/v1/systems/{id}/services/{service}/requests", s.serviceRequests)
+	mux.HandleFunc("GET /api/v1/systems/{id}/traces/{trace}", s.systemTrace)
+	mux.HandleFunc("GET /api/v1/systems/{id}/calls", s.systemCalls)
+	mux.HandleFunc("GET /api/v1/systems/{id}/services/{service}/changes", s.serviceChanges)
 	mux.HandleFunc("GET /api/v1/systems/{id}/noise", s.noiseSystem)
 	mux.HandleFunc("POST /api/v1/systems/{id}/noise/feedback", s.noiseFeedback)
 	mux.HandleFunc("GET /api/v1/systems/{id}/telegram", s.telegramStatusSystem)
@@ -571,8 +584,7 @@ func (s *Server) activeAlerts(ctx context.Context, snap *descstore.Snapshot, lis
 func (s *Server) alertsFor(w http.ResponseWriter, r *http.Request, snap *descstore.Snapshot) {
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
-	list, _ := s.opts.Descriptions.List(ctx)
-	raw, configured, partial, err := s.activeAlerts(ctx, snap, list)
+	st, configured, err := s.alertState(ctx, snap)
 	if !configured {
 		writeJSON(w, http.StatusOK, map[string]any{"configured": false, "alerts": []any{}, "muted": []any{}, "incidents": []any{}, "message": "Alertmanager URL is not configured"})
 		return
@@ -580,6 +592,27 @@ func (s *Server) alertsFor(w http.ResponseWriter, r *http.Request, snap *descsto
 	if err != nil {
 		writeError(w, http.StatusBadGateway, "alertmanager_error", err.Error())
 		return
+	}
+	resp := map[string]any{"configured": true, "alerts": st.alerts, "muted": st.muted, "incidents": st.incidents}
+	if len(st.partial) > 0 {
+		resp["unreachable"] = st.partial
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// alertState is what Alertmanager holds now, sorted into incidents: the alerts heard, the
+// alerts muted by their cause, and the incidents with their roots and affected services.
+type alertState struct {
+	alerts, muted []alertView
+	incidents     []incidentView
+	partial       []string
+}
+
+func (s *Server) alertState(ctx context.Context, snap *descstore.Snapshot) (alertState, bool, error) {
+	list, _ := s.opts.Descriptions.List(ctx)
+	raw, configured, partial, err := s.activeAlerts(ctx, snap, list)
+	if !configured || err != nil {
+		return alertState{}, configured, err
 	}
 	graphs := map[string]*triage.Graph{}
 	for _, snap := range list {
@@ -652,11 +685,7 @@ func (s *Server) alertsFor(w http.ResponseWriter, r *http.Request, snap *descsto
 		}
 		out = append(out, v)
 	}
-	resp := map[string]any{"configured": true, "alerts": out, "muted": muted, "incidents": incidents}
-	if len(partial) > 0 {
-		resp["unreachable"] = partial
-	}
-	writeJSON(w, http.StatusOK, resp)
+	return alertState{alerts: out, muted: muted, incidents: incidents, partial: partial}, true, nil
 }
 
 // incidentView adds the evidence the follow-up collected for the incident (in

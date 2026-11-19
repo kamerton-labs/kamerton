@@ -354,6 +354,18 @@ kube-prometheus-stack:
       # Rules are evaluated often so that an alert fires soon after the condition holds.
       evaluationInterval: 15s
       retention: 15d
+      # Metrics live on a disk of their own and outlast a restart of the pod; without it the
+      # retention above holds only until the pod is moved. The demo shop (100k series) takes
+      # about 0.7 GB a day, so 15 days fit in 20Gi. retentionSize drops the oldest days first
+      # when a busier system would fill the disk, instead of Prometheus stopping on a full one.
+      retentionSize: 18GB
+      storageSpec:
+        volumeClaimTemplate:
+          spec:
+            accessModes: [ReadWriteOnce]
+            resources:
+              requests:
+                storage: 20Gi
   alertmanager:
     alertmanagerSpec:
       alertmanagerConfigSelector:
@@ -389,10 +401,32 @@ grafana:
           uid: loki
           type: loki
           url: http://kamerton-loki:3100
+          jsonData:
+            # A log line with a trace_id opens its trace. "$$" keeps "$" from Grafana's
+            # environment expansion.
+            derivedFields:
+              - name: trace_id
+                matcherType: label
+                matcherRegex: trace_id
+                datasourceUid: tempo
+                url: "$${__value.raw}"
+                urlDisplayLabel: Trace
         - name: Tempo
           uid: tempo
           type: tempo
           url: http://kamerton-tempo:3200
+          jsonData:
+            # A trace opens the log lines of all its services, by trace_id.
+            tracesToLogsV2:
+              datasourceUid: loki
+              spanStartTimeShift: "-5m"
+              spanEndTimeShift: "5m"
+              customQuery: true
+              query: '{service_name=~".+"} | trace_id="$${__trace.traceId}"'
+            serviceMap:
+              datasourceUid: prometheus
+            nodeGraph:
+              enabled: true
 
 loki:
   enabled: true
@@ -434,6 +468,32 @@ loki:
 tempo:
   enabled: true
   fullnameOverride: kamerton-tempo
+  # Traces live on a disk of their own and outlast a restart of the pod. On the demo shop a day
+  # of traces takes about 0.7 GB, so a week fits in 10Gi; a busier system needs a bigger disk
+  # (or an object store, tempo.tempo.storage.trace.backend).
+  persistence:
+    enabled: true
+    size: 10Gi
+  tempo:
+    # How long a trace can be opened: a week, to look back at last week's failure.
+    retention: 168h
+    # The map of calls: Tempo counts the calls between services from the traces it receives
+    # (traces_service_graph_* metrics) and writes them to Prometheus. Grafana draws the map from
+    # them (the overview dashboard, the service map of a trace).
+    metricsGenerator:
+      enabled: true
+      remoteWriteUrl: http://kamerton-kps-prometheus:9090/api/v1/write
+      processor:
+        service_graphs:
+          wait: 10s
+          max_items: 10000
+      registry:
+        external_labels:
+          source: tempo
+    overrides:
+      defaults:
+        metrics_generator:
+          processors: [service-graphs]
 
 # Starter pipeline: OTLP in; traces to Tempo; span metrics (spanmetrics
 # connector) to Prometheus via remote write; logs to Loki over OTLP.

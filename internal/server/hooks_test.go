@@ -308,3 +308,65 @@ func TestAlertsIncidentEvidence(t *testing.T) {
 		t.Errorf("evidence without follow-up: %s", body)
 	}
 }
+
+func TestSystemNowSaysWhichServiceIsTheCause(t *testing.T) {
+	srv, _, _, _, _ := hookServer(t, false)
+	cookie := sessionCookie(func() *http.Response { r, _ := login(t, srv, "admin", "pw"); return r }())
+	resp, body := call(t, "GET", srv.URL+"/api/v1/systems/shop/now", "", withCookie(cookie))
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("%d %s", resp.StatusCode, body)
+	}
+	var out struct {
+		Alerting bool `json:"alerting"`
+		Services []struct {
+			Name    string   `json:"name"`
+			State   string   `json:"state"`
+			Because []string `json:"because"`
+			Alerts  []struct {
+				Title string `json:"title"`
+			} `json:"alerts"`
+		} `json:"services"`
+		Incidents []struct {
+			Roots []string `json:"roots"`
+		} `json:"incidents"`
+	}
+	decode(t, body, &out)
+	if !out.Alerting || len(out.Incidents) != 1 {
+		t.Fatalf("now = %s", body)
+	}
+	states := map[string]string{}
+	for _, s := range out.Services {
+		states[s.Name] = s.State
+		switch s.Name {
+		case "db":
+			if (s.State != "source" && s.State != "warning") || len(s.Alerts) != 1 || s.Alerts[0].Title != "Requests stopped arriving" {
+				t.Errorf("db = %+v", s)
+			}
+		case "api":
+			// Its own alert is muted by the cause, and the map says so.
+			if s.State != "affected" || strings.Join(s.Because, ",") != "db" || len(s.Alerts) != 1 {
+				t.Errorf("api = %+v", s)
+			}
+		}
+	}
+	if len(states) == 0 {
+		t.Errorf("no services: %s", body)
+	}
+	resp, _ = call(t, "GET", srv.URL+"/api/v1/systems/shop/traces/not-an-id", "", withCookie(cookie))
+	if resp.StatusCode != http.StatusConflict && resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("a bad trace ID: %d", resp.StatusCode)
+	}
+	resp, _ = call(t, "GET", srv.URL+"/api/v1/systems/shop/services/nope/series", "", withCookie(cookie))
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("an unknown service: %d", resp.StatusCode)
+	}
+	resp, _ = call(t, "GET", srv.URL+"/api/v1/systems/shop/calls?from=api&to=nope", "", withCookie(cookie))
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("calls to an unknown service: %d", resp.StatusCode)
+	}
+	// Without access to the cluster the page has nothing to say about pods, and says so.
+	resp, body = call(t, "GET", srv.URL+"/api/v1/systems/shop/services/db/changes", "", withCookie(cookie))
+	if resp.StatusCode != http.StatusOK || !strings.Contains(body, `"available":false`) {
+		t.Errorf("changes without a cluster: %d %s", resp.StatusCode, body)
+	}
+}

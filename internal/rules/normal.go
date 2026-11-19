@@ -108,6 +108,10 @@ func (t PodTarget) limit(resource string) string {
 	return out
 }
 
+// Limit is the PromQL of the pods' limit of resource ("memory" or "cpu"), by namespace and pod;
+// a pod with a container without a limit has none.
+func (t PodTarget) Limit(resource string) string { return t.limit(resource) }
+
 // MemoryNearLimit also requires memory to be still growing: runtimes that size
 // their heap to the limit (JVM, .NET) sit at 90-95% for days without harm.
 func MemoryNearLimit(p NearLimitParams) rulefmt.Rule {

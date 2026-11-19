@@ -22,6 +22,8 @@ export const router = createBrowserRouter([
     children: [
       { index: true, element: <SystemsPage /> },
       { path: 'systems/:id', lazy: lazyPage(() => import('@/pages/SystemPage')) },
+      { path: 'systems/:id/services/:service', lazy: lazyPage(() => import('@/pages/ServicePage')) },
+      { path: 'systems/:id/requests/:trace', lazy: lazyPage(() => import('@/pages/RequestPage')) },
       { path: 'systems/:id/runbooks/:service/:alert?', lazy: runbook },
       { path: 'alerts', lazy: lazyPage(() => import('@/pages/AlertsPage')) },
       { path: 'channels', lazy: lazyPage(() => import('@/pages/ChannelsPage')) },

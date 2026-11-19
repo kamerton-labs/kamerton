@@ -8,6 +8,35 @@ All notable changes to Kamerton are listed here. The format follows
 
 ### Added
 
+- Looking into a failure, in three steps. A system opens on Now: one sentence on
+  what is broken (the cause, since when, which services suffer from it), the error
+  budget of each SLO, and the map, where the cause is marked as the source and the
+  way to the services it drags along is lit. A service opens its page: what is
+  wrong in words, then errors, latency p50/p95/p99, requests, queue lag, memory
+  against the limit and CPU over a range, each against its usual level (the median
+  of the day before). A click on a chart lists the failed or the slowest requests
+  of those minutes; a request opens with its steps (the failed one picked, small
+  steps folded away, one request cut out of a long session) and the log lines of
+  its trace_id. An arrow of the map turns red with its share of failed calls (from
+  Tempo's map of calls) and opens the calls from one service to the other: how many,
+  how many fail, p95, the failed ones. The service page says what changed in the pods
+  in the last 30 minutes (rollouts, restarts, scalings), read in a cluster or with
+  the kubeconfig next to one. API: `GET /api/v1/systems/{id}/now`, `…/calls`,
+  `…/services/{service}/changes`,
+  `…/services/{service}/series?range=`, `…/services/{service}/requests`,
+  `…/traces/{trace}`; Tempo and Loki are read with the URLs of the system's set.
+- Five Grafana dashboards per system instead of one, built from the description like
+  the rules: Overview (alerts firing now, each service's numbers, Tempo's map of
+  calls), Services (requests, errors, latency p50/p95/p99, memory against the limit,
+  CPU, restarts), Queues (messages written and read, consumer lag against its
+  limit), Infrastructure (nodes, the system's pods, restarts, readiness) and SLO
+  (availability over the window, error budget left, burn rate over 1h and 6h).
+  Every service panel links to the failed requests of its range in Tempo and to the
+  service in Kamerton; the dashboards link to each other.
+- The chart turns on Tempo's metrics generator for the map of calls
+  (`traces_service_graph_*`, written to Prometheus), and links the signals in
+  Grafana: a trace opens the log lines of its trace_id, a log line with a trace_id
+  opens its trace, a trace shows its service map.
 - System descriptions from a git repository. With the chart value `git.url`
   set (also `git.branch`, `git.path`, `git.secretName`, `git.interval`),
   Kamerton reads the description files of one branch, applies them and keeps
@@ -133,6 +162,21 @@ All notable changes to Kamerton are listed here. The format follows
   of a description changes: threshold, duration and severity in words, rules
   added and removed. `--exit-code` exits with 2 when the rules differ. For
   a check in CI.
+
+### Changed
+
+- Tempo keeps traces for a week on a disk of its own (10Gi, `tempo.persistence`)
+  instead of a day in the pod, so a trace from last week's failure still opens and
+  a restart loses nothing. Kubernetes does not let a StatefulSet get a disk in
+  place: before `helm upgrade`, run
+  `kubectl -n <namespace> delete statefulset kamerton-tempo`. Tempo is down
+  until the upgrade starts it again, and the traces it held are not carried over.
+  (With `--cascade=orphan` the old pod is kept, and it goes on without the disk.)
+- Prometheus keeps metrics on a disk of its own too (20Gi, `prometheusSpec.storageSpec`),
+  so the 15 days of `retention` survive a restart of the pod, and `retentionSize: 18GB`
+  drops the oldest days before the disk fills. The operator recreates its StatefulSet by
+  itself; the metrics gathered before the upgrade are not carried over, so the usual
+  levels (the day before) come back a day later.
 
 ## [0.2.4] - 2026-11-18
 
