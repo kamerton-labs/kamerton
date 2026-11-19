@@ -456,7 +456,15 @@ loki:
 tempo:
   enabled: true
   fullnameOverride: kamerton-tempo
+  # Traces live on a disk of their own and outlast a restart of the pod. On the demo shop a day
+  # of traces takes about 0.7 GB, so a week fits in 10Gi; a busier system needs a bigger disk
+  # (or an object store, tempo.tempo.storage.trace.backend).
+  persistence:
+    enabled: true
+    size: 10Gi
   tempo:
+    # How long a trace can be opened: a week, to look back at last week's failure.
+    retention: 168h
     # The map of calls: Tempo counts the calls between services from the traces it receives
     # (traces_service_graph_* metrics) and writes them to Prometheus. Grafana draws the map from
     # them (the overview dashboard, the service map of a trace).

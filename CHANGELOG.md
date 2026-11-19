@@ -163,6 +163,16 @@ All notable changes to Kamerton are listed here. The format follows
   added and removed. `--exit-code` exits with 2 when the rules differ. For
   a check in CI.
 
+### Changed
+
+- Tempo keeps traces for a week on a disk of its own (10Gi, `tempo.persistence`)
+  instead of a day in the pod, so a trace from last week's failure still opens and
+  a restart loses nothing. Kubernetes does not let a StatefulSet get a disk in
+  place: before `helm upgrade`, run
+  `kubectl -n <namespace> delete statefulset kamerton-tempo`. Tempo is down
+  until the upgrade starts it again, and the traces it held are not carried over.
+  (With `--cascade=orphan` the old pod is kept, and it goes on without the disk.)
+
 ## [0.2.4] - 2026-11-18
 
 ### Fixed
