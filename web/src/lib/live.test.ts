@@ -63,7 +63,7 @@ describe('numbers', () => {
 const span = (id: string, parent: string | undefined, startMs: number, durationMs: number, error = false, service = 's'): Span => ({ id, parent, service, name: id, kind: 'server', startMs, durationMs, error, attrs: [], events: [] })
 
 describe('one request', () => {
-  const spans = [span('root', undefined, 0, 100), span('a', 'root', 1, 50), span('tiny', 'root', 2, 0.2), span('b', 'a', 2, 40, true), span('tinyErr', 'b', 3, 0.1, true)]
+  const spans = [span('root', undefined, 0, 100), span('a', 'root', 1, 50), span('tiny', 'root', 2, 3), span('b', 'a', 2, 40, true), span('tinyErr', 'b', 3, 0.1, true)]
 
   it('folds small steps that lead nowhere, never a failure or its way', () => {
     expect(rows(spans, true).map((r) => r.span.id)).toEqual(['root', 'a', 'b', 'tinyErr'])
@@ -73,6 +73,12 @@ describe('one request', () => {
 
   it('names the deepest failed step as where it broke', () => {
     expect(firstFailure(spans)?.id).toBe('tinyErr')
+  })
+
+  it('looks past a step that did not fail to the failure under it', () => {
+    // proxy fails because pay failed two levels down, through a frontend step that did not.
+    const chain = [span('proxy', undefined, 0, 40, true), span('front', 'proxy', 1, 38), span('checkout', 'front', 2, 30, true), span('pay', 'checkout', 3, 5, true), span('other', 'checkout', 9, 2)]
+    expect(firstFailure(chain)?.id).toBe('pay')
   })
 
   it('cuts one request out of a long session', () => {

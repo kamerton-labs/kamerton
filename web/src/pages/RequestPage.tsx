@@ -4,7 +4,7 @@
 // One request: where it went, where it broke, and what the services wrote while it ran. The
 // failed step is picked from the start; small steps that lead nowhere are folded away.
 
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { ChevronRight } from 'lucide-react'
 import { Link, useParams, useSearchParams } from 'react-router'
 import { cn } from 'cn'
@@ -22,6 +22,13 @@ function Waterfall({ spans, selected, onSelect, quiet }: { spans: Span[]; select
   const { t } = useT()
   const list = useMemo(() => rows(spans, quiet), [spans, quiet])
   const total = Math.max(...spans.map((s) => s.startMs + s.durationMs), 0.001)
+  // The step picked on arrival may be far down a long request: bring it into view once.
+  const shown = useRef(false)
+  useEffect(() => {
+    if (shown.current || !selected) return
+    shown.current = true
+    document.querySelector(`[data-span="${selected}"]`)?.scrollIntoView({ block: 'center' })
+  }, [selected])
   const ms = (v: number) => duration(v, t('unit.ms'), t('unit.s'))
   return (
     <div className="text-sm" data-testid="waterfall">
@@ -43,6 +50,7 @@ function Waterfall({ spans, selected, onSelect, quiet }: { spans: Span[]; select
           onClick={() => onSelect(s.id)}
           className={cn('grid w-full grid-cols-[minmax(0,45%)_1fr] items-center gap-0 border-b border-border/50 py-1 text-left hover:bg-muted/50', selected === s.id && 'bg-muted')}
           data-testid="span-row"
+          data-span={s.id}
           data-error={s.error || undefined}
         >
           <span className="flex min-w-0 items-baseline gap-1.5 pr-2" style={{ paddingLeft: Math.min(depth, 12) * 12 }}>
@@ -188,7 +196,8 @@ export default function RequestPage() {
   const total = Math.max(...spans.map((s) => s.startMs + s.durationMs), 0)
   const origin = tr ? Date.parse(tr.start) + (scoped ? (tr.spans.find((s) => s.id === scoped[0]?.id)?.startMs ?? 0) : 0) : 0
   const failure = firstFailure(spans)
-  const selectedId = picked ?? failure?.id ?? focus ?? spans[0]?.id
+  // Come from a service's list, its step is the one to look at; otherwise where it broke.
+  const selectedId = picked ?? (focus && spans.some((x) => x.id === focus) ? focus : undefined) ?? failure?.id ?? spans[0]?.id
   const selected = spans.find((s) => s.id === selectedId)
   const services = new Set(spans.map((s) => s.service)).size
   const shown = rows(spans, quiet).length

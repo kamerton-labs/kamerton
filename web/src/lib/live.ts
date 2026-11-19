@@ -393,7 +393,7 @@ export interface Row {
 
 /**
  * The spans of a trace as a tree in time order. With `quiet`, the noise is left out: steps
- * shorter than 1% of the request that neither failed nor lead to a failure.
+ * shorter than 5% of the request that neither failed nor lead to a failure.
  */
 export function rows(spans: Span[], quiet: boolean): Row[] {
   const ids = new Set(spans.map((s) => s.id))
@@ -418,7 +418,7 @@ export function rows(spans: Span[], quiet: boolean): Row[] {
   const total = Math.max(...spans.map((s) => s.startMs + s.durationMs), 1)
   const out: Row[] = []
   const walk = (s: Span, depth: number) => {
-    const keep = !quiet || depth === 0 || errPath.has(s.id) || s.durationMs >= total * 0.01
+    const keep = !quiet || depth === 0 || errPath.has(s.id) || s.durationMs >= total * 0.05
     if (!keep) return
     out.push({ span: s, depth, onErrorPath: errPath.has(s.id) })
     for (const c of children.get(s.id) ?? []) walk(c, depth + 1)
@@ -452,11 +452,18 @@ export function requestOf(spans: Span[], focus: string | undefined): Span[] | nu
   return out
 }
 
-/** The deepest failed step: where the request actually broke. */
+/**
+ * Where the request broke: a failed step with no failed step anywhere under it. Its callers
+ * fail only because it did; the earliest such step is the one to read first.
+ */
 export function firstFailure(spans: Span[]): Span | undefined {
-  const failed = spans.filter((s) => s.error)
-  const parents = new Set(failed.map((s) => s.parent))
-  return failed.find((s) => !parents.has(s.id)) ?? failed[0]
+  const byId = new Map(spans.map((s) => [s.id, s]))
+  const above = new Set<string>()
+  for (const s of spans) {
+    if (!s.error) continue
+    for (let p = s.parent ? byId.get(s.parent) : undefined; p && !above.has(p.id); p = p.parent ? byId.get(p.parent) : undefined) above.add(p.id)
+  }
+  return spans.filter((s) => s.error && !above.has(s.id)).sort((a, b) => a.startMs - b.startMs)[0]
 }
 
 /** Attributes worth reading first, in this order; the rest follow. */
