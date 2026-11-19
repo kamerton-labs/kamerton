@@ -6,6 +6,13 @@ All notable changes to Kamerton are listed here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- Every generated alert keeps firing for 5 minutes after its condition stops holding
+  (`keep_firing_for`). A condition that drops out for a minute used to resolve the alert and
+  fire it again, a message and a "resolved" each time: on the demo shop one latency rule
+  flapped 22 times in 3 hours. A real recovery now reads as resolved 5 minutes later.
+
 ### Fixed
 
 - A request longer than a minute was taken for a load generator's session, and its page showed

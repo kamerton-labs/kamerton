@@ -76,12 +76,19 @@ func (m Meta) rule(alert string, signal Signal, expr string, extra map[string]st
 		delete(lbls, LabelService)
 	}
 	return rulefmt.Rule{
-		Alert:  alert,
-		Expr:   expr,
-		For:    model.Duration(m.For),
-		Labels: lbls,
+		Alert:         alert,
+		Expr:          expr,
+		For:           model.Duration(m.For),
+		KeepFiringFor: model.Duration(KeepFiringFor),
+		Labels:        lbls,
 	}
 }
+
+// KeepFiringFor holds an alert for a while after its condition stops holding. A condition
+// that drops out for a minute (one quiet window of a slow service, a scrape missed) would
+// otherwise resolve the alert and fire it again: two messages and a "resolved" for one
+// problem. Seen on the demo shop: a rule that flapped 22 times in 3 hours.
+const KeepFiringFor = 5 * time.Minute
 
 func (m Meta) annotate(r *rulefmt.Rule, summary, description string) {
 	r.Annotations = map[string]string{
