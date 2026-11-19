@@ -20,6 +20,18 @@ All notable changes to Kamerton are listed here. The format follows
   its trace_id. API: `GET /api/v1/systems/{id}/now`,
   `…/services/{service}/series?range=`, `…/services/{service}/requests`,
   `…/traces/{trace}`; Tempo and Loki are read with the URLs of the system's set.
+- Five Grafana dashboards per system instead of one, built from the description like
+  the rules: Overview (alerts firing now, each service's numbers, Tempo's map of
+  calls), Services (requests, errors, latency p50/p95/p99, memory against the limit,
+  CPU, restarts), Queues (messages written and read, consumer lag against its
+  limit), Infrastructure (nodes, the system's pods, restarts, readiness) and SLO
+  (availability over the window, error budget left, burn rate over 1h and 6h).
+  Every service panel links to the failed requests of its range in Tempo and to the
+  service in Kamerton; the dashboards link to each other.
+- The chart turns on Tempo's metrics generator for the map of calls
+  (`traces_service_graph_*`, written to Prometheus), and links the signals in
+  Grafana: a trace opens the log lines of its trace_id, a log line with a trace_id
+  opens its trace, a trace shows its service map.
 - System descriptions from a git repository. With the chart value `git.url`
   set (also `git.branch`, `git.path`, `git.secretName`, `git.interval`),
   Kamerton reads the description files of one branch, applies them and keeps

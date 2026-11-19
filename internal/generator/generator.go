@@ -122,11 +122,11 @@ func Generate(sd *v1alpha1.SystemDescription, opts Options) (*Bundle, error) {
 	b.RulesYAML = out
 	b.RuleCount = rules.Count(b.RuleGroups)
 
-	dash, err := g.dashboard()
+	dash, err := g.dashboards()
 	if err != nil {
 		return nil, err
 	}
-	b.Dashboards[fmt.Sprintf("kamerton-%s.json", sd.Name)] = dash
+	b.Dashboards = dash
 	b.AlertmanagerConfig = g.alertmanagerConfig()
 	b.MissingSecrets = g.missing
 	for _, rg := range b.RuleGroups.Groups {

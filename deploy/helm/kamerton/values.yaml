@@ -389,10 +389,32 @@ grafana:
           uid: loki
           type: loki
           url: http://kamerton-loki:3100
+          jsonData:
+            # A log line with a trace_id opens its trace. "$$" keeps "$" from Grafana's
+            # environment expansion.
+            derivedFields:
+              - name: trace_id
+                matcherType: label
+                matcherRegex: trace_id
+                datasourceUid: tempo
+                url: "$${__value.raw}"
+                urlDisplayLabel: Trace
         - name: Tempo
           uid: tempo
           type: tempo
           url: http://kamerton-tempo:3200
+          jsonData:
+            # A trace opens the log lines of all its services, by trace_id.
+            tracesToLogsV2:
+              datasourceUid: loki
+              spanStartTimeShift: "-5m"
+              spanEndTimeShift: "5m"
+              customQuery: true
+              query: '{service_name=~".+"} | trace_id="$${__trace.traceId}"'
+            serviceMap:
+              datasourceUid: prometheus
+            nodeGraph:
+              enabled: true
 
 loki:
   enabled: true
@@ -434,6 +456,24 @@ loki:
 tempo:
   enabled: true
   fullnameOverride: kamerton-tempo
+  tempo:
+    # The map of calls: Tempo counts the calls between services from the traces it receives
+    # (traces_service_graph_* metrics) and writes them to Prometheus. Grafana draws the map from
+    # them (the overview dashboard, the service map of a trace).
+    metricsGenerator:
+      enabled: true
+      remoteWriteUrl: http://kamerton-kps-prometheus:9090/api/v1/write
+      processor:
+        service_graphs:
+          wait: 10s
+          max_items: 10000
+      registry:
+        external_labels:
+          source: tempo
+    overrides:
+      defaults:
+        metrics_generator:
+          processors: [service-graphs]
 
 # Starter pipeline: OTLP in; traces to Tempo; span metrics (spanmetrics
 # connector) to Prometheus via remote write; logs to Loki over OTLP.
