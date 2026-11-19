@@ -8,6 +8,18 @@ All notable changes to Kamerton are listed here. The format follows
 
 ### Added
 
+- Looking into a failure, in three steps. A system opens on Now: one sentence on
+  what is broken (the cause, since when, which services suffer from it), the error
+  budget of each SLO, and the map, where the cause is marked as the source and the
+  way to the services it drags along is lit. A service opens its page: what is
+  wrong in words, then errors, latency p50/p95/p99, requests, queue lag, memory
+  against the limit and CPU over a range, each against its usual level (the median
+  of the day before). A click on a chart lists the failed or the slowest requests
+  of those minutes; a request opens with its steps (the failed one picked, small
+  steps folded away, one request cut out of a long session) and the log lines of
+  its trace_id. API: `GET /api/v1/systems/{id}/now`,
+  `…/services/{service}/series?range=`, `…/services/{service}/requests`,
+  `…/traces/{trace}`; Tempo and Loki are read with the URLs of the system's set.
 - System descriptions from a git repository. With the chart value `git.url`
   set (also `git.branch`, `git.path`, `git.secretName`, `git.interval`),
   Kamerton reads the description files of one branch, applies them and keeps

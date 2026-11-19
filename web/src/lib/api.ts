@@ -41,6 +41,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return body as T
 }
 
+/** A GET of the core's API, for modules of their own (lib/live). */
+export const apiGet = <T>(path: string) => request<T>(path)
+
 const postYAML = <T>(path: string, yaml: string) =>
   request<T>(path, { method: 'POST', headers: { 'Content-Type': 'application/yaml' }, body: yaml })
 

@@ -6,11 +6,12 @@
 
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { ArrowLeft, Check, FileCode2, GitBranch, ListChecks, Loader2, MoreHorizontal, Trash2, Workflow } from 'lucide-react'
+import { Activity, ArrowLeft, Check, FileCode2, GitBranch, ListChecks, Loader2, MoreHorizontal, Trash2, Workflow } from 'lucide-react'
 import { Link, useBlocker, useNavigate, useParams, useSearchParams } from 'react-router'
 import { cn } from 'cn'
 import SystemCanvas from '@/components/canvas/SystemCanvas'
 import { StatePill } from '@/components/common'
+import SystemNow from '@/components/live/SystemNow'
 import { useConfirm } from '@/components/ConfirmDialog'
 import RulesView from '@/components/rules/RulesView'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
@@ -24,13 +25,15 @@ import { systemStateText } from '@/lib/format'
 import { systemIncidents } from '@/lib/incidents'
 import { edit as editDraft, initDraft, isDirty, markSaved, setText, type Draft } from '@/lib/model/draft'
 import { deriveDestinations } from '@/lib/model/routing'
+import { positionsOf } from '@/lib/model/canvas'
 import { getStack } from '@/lib/model/stack'
 import type { Description } from '@/lib/model/types'
 
 const YamlView = lazy(() => import('@/components/editor/YamlView'))
 
-type View = 'schema' | 'rules' | 'yaml'
+type View = 'now' | 'schema' | 'rules' | 'yaml'
 const VIEWS = [
+  { v: 'now', label: 'system.view.now', icon: Activity },
   { v: 'schema', label: 'system.view.schema', icon: Workflow },
   { v: 'rules', label: 'system.view.rules', icon: ListChecks },
   { v: 'yaml', label: 'system.view.yaml', icon: FileCode2 },
@@ -73,7 +76,7 @@ function Editor({ data }: { data: SystemResponse }) {
   const { t, rich } = useT()
   const navigate = useNavigate()
   const [params, setParams] = useSearchParams()
-  const view = (params.get('view') as View) || 'schema'
+  const view = (params.get('view') as View) || 'now'
   const selected = params.get('service')
   const setView = (v: View) => setParams((p) => (p.set('view', v), p), { replace: true })
   const select = useCallback((s: string | null) => setParams((p) => (s ? p.set('service', s) : p.delete('service'), p), { replace: true }), [setParams])
@@ -207,7 +210,7 @@ function Editor({ data }: { data: SystemResponse }) {
               {t('system.discard')}
             </Button>
           )}
-          <Button size="sm" onClick={doSave} disabled={!canSave} data-testid="save-button">
+          <Button size="sm" onClick={doSave} disabled={!canSave} data-testid="save-button" className={cn(view === 'now' && !dirty && 'hidden')}>
             {save.isPending ? <Loader2 className="animate-spin" /> : !dirty ? <Check /> : null} {dirty ? t('system.save') : t('system.saved')}
           </Button>
           <DropdownMenu>
@@ -334,6 +337,7 @@ function Editor({ data }: { data: SystemResponse }) {
           )
         ) : (
           <EditorContext value={ctx}>
+            {view === 'now' && <SystemNow id={id} positions={desc ? positionsOf(desc) : {}} />}
             {view === 'schema' && <SystemCanvas selected={selected && desc?.spec.services.some((s) => s.name === selected) ? selected : null} onSelect={select} />}
             {view === 'rules' && (
               <div className="h-full overflow-y-auto">
