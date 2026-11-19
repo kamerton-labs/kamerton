@@ -66,6 +66,10 @@ func TestCustomRule(t *testing.T) {
 	if built.Alert != "KamertonCustomOrdersStuck" || built.Expr != "max (orders_pending) > 100" {
 		t.Errorf("built: %s %s", built.Alert, built.Expr)
 	}
+	// A condition that drops out for a minute must not resolve the alert and fire it again.
+	if time.Duration(built.KeepFiringFor) != KeepFiringFor || time.Duration(raw.KeepFiringFor) != KeepFiringFor {
+		t.Errorf("keep_firing_for: %v %v", built.KeepFiringFor, raw.KeepFiringFor)
+	}
 	for k, v := range map[string]string{LabelService: "checkout", LabelSeverity: "critical", LabelSignal: "custom", LabelManaged: "true", LabelRule: "orders-stuck", "kamerton_system": "shop"} {
 		if built.Labels[k] != v {
 			t.Errorf("label %s = %q, want %q", k, built.Labels[k], v)
