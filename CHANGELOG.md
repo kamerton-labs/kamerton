@@ -6,6 +6,16 @@ All notable changes to Kamerton are listed here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- A request longer than a minute was taken for a load generator's session, and its page showed
+  one step of it ("went through without errors, 1 step") instead of all 126. A session is now
+  told by its shape: several requests at the root of the trace, or one long root whose children
+  run one after another. Seen on a checkout that waited 62 s to write to Kafka.
+- p95 and p99 stopped at 15 s: the spanmetrics connector's buckets ended there, so a request of
+  a minute read as 15 s on the charts and in the alerts. The chart now sets buckets up to 5
+  minutes.
+
 ## [0.3.0] - 2026-11-19
 
 ### Added

@@ -525,6 +525,11 @@ opentelemetry-collector:
         # from broken by the traffic of the same hours a week ago. A source that
         # comes back restarts its counters from zero, which rate() reads as a reset.
         metrics_expiration: 2m
+        # The connector's own buckets end at 15s, so a request of a minute reads as 15 s in
+        # every p95. Up to 5 minutes, for writes to a queue that hang and calls that time out.
+        histogram:
+          explicit:
+            buckets: [2ms, 4ms, 6ms, 8ms, 10ms, 50ms, 100ms, 200ms, 400ms, 800ms, 1s, 1400ms, 2s, 5s, 10s, 15s, 30s, 1m, 2m, 5m]
     exporters:
       otlp/tempo:
         endpoint: kamerton-tempo:4317
