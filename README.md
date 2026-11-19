@@ -13,7 +13,7 @@ where alerts go (Telegram, email). Kamerton turns it into Prometheus alert
 rules, Grafana dashboards, Alertmanager routes and runbook stubs, applies them,
 and keeps reconciling the description against what is actually configured.
 
-> **Status: 0.2.4, early.** The chart runs on a single-node k3s cluster next
+> **Status: 0.3.0, early.** The chart runs on a single-node k3s cluster next
 > to the OpenTelemetry Demo, and the rule library catches the demo's fault
 > scenarios there. See [status and limitations](#status-and-limitations)
 > before you rely on it. The web UI and notifications are in English, with
