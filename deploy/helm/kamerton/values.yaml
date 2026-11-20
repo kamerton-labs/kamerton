@@ -469,11 +469,13 @@ tempo:
   enabled: true
   fullnameOverride: kamerton-tempo
   # Traces live on a disk of their own and outlast a restart of the pod. On the demo shop a day
-  # of traces takes about 0.7 GB, so a week fits in 10Gi; a busier system needs a bigger disk
-  # (or an object store, tempo.tempo.storage.trace.backend).
+  # of traces takes about 1.3 GB, a week about 9 GB, so the disk is twice that; a busier system
+  # needs a bigger one (or an object store, tempo.tempo.storage.trace.backend). The size is part
+  # of the StatefulSet's volumeClaimTemplates, which Kubernetes does not let an upgrade change:
+  # the CHANGELOG says how to move an install to a new size.
   persistence:
     enabled: true
-    size: 10Gi
+    size: 20Gi
   tempo:
     # How long a trace can be opened: a week, to look back at last week's failure.
     retention: 168h

@@ -6,6 +6,35 @@ All notable changes to Kamerton are listed here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- Tempo's disk is 20Gi instead of 10Gi. On a server install next to the demo shop traces took
+  about 1.3 GB a day, not the 0.7 GB measured before, so a week of them (about 9 GB) left little
+  room on 10Gi.
+
+  The size is part of the Tempo StatefulSet, which Kubernetes does not let `helm upgrade` change:
+  an upgrade with the new default stops with "updates to statefulset spec for fields other than
+  ... are forbidden". Either keep the disk you have:
+
+  ```sh
+  helm upgrade kamerton ./deploy/helm/kamerton -n kamerton --reset-then-reuse-values \
+    --set tempo.persistence.size=10Gi
+  ```
+
+  or move to 20Gi. If the storage class allows resizing (`allowVolumeExpansion: true`), grow the
+  disk, then let the chart create the StatefulSet again; `--cascade=orphan` keeps the pod and
+  its traces running meanwhile:
+
+  ```sh
+  kubectl -n kamerton patch pvc storage-kamerton-tempo-0 \
+    -p '{"spec":{"resources":{"requests":{"storage":"20Gi"}}}}'
+  kubectl -n kamerton delete statefulset kamerton-tempo --cascade=orphan
+  helm upgrade kamerton ./deploy/helm/kamerton -n kamerton --reset-then-reuse-values
+  ```
+
+  If it does not (k3s and k3d's local-path does not), the traces have to go: delete the
+  StatefulSet without `--cascade=orphan` and the claim `storage-kamerton-tempo-0`, then upgrade.
+
 ### Fixed
 
 - A channel left out for a missing Secret (an email channel without the SMTP password) was
